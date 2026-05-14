@@ -1,0 +1,19 @@
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Build output
+out/
+build/
+target/
+*.class
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+*.swp
+*.swo
+*~
