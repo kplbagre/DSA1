@@ -4,22 +4,6 @@
 
 ---
 
-## 📌 Notion Paste Guide (Read This First)
-
-This file uses many code blocks and ASCII diagrams. To paste cleanly:
-
-1. In Notion, type `/code` and press **Enter** to create a code block first
-2. Choose `Java` for code and `Plain Text` for ASCII diagrams
-3. **Paste inside the code block** — never at the document level
-4. For headings (`##`, `###`), use Notion's **H2 / H3** buttons in the toolbar — Markdown headings won't auto-convert when pasting plain text
-5. Tables: select the markdown table, paste, then in Notion press **Convert to Table** if it offers (or recreate manually — Notion's table behavior is finicky)
-
-**Paste section by section** rather than the whole file at once. Each `---` divider is a natural break point.
-
-A fuller Notion guide is at the bottom of this file.
-
----
-
 ## 🎯 Why You're Reading This (The Goal)
 
 You will see ~3–6 tree problems in any interview loop. They look intimidating because:
@@ -1829,60 +1813,6 @@ These either combine multiple patterns or require concepts beyond this doc. Trea
 - **The honest victory criterion:** if you can solve **Tiers 1–3 from memory in under 15 minutes each**, you're ready for any easy/medium tree question in interviews. Tier 4–5 are bonus.
 
 > **Lesson learned the hard way (May 2026):** I tried to do "Stretch" problems before completing Tier 5 ladder. LC 124 cost me an hour and 3 wrong submissions. **The tiers exist for a reason — climb them in order.**
-
----
-
-## 📋 Notion Paste Guide (Full Version)
-
-Pasting a long markdown file into Notion can be frustrating. Here's the workflow that actually works:
-
-### Method 1 — Paste section by section (recommended)
-
-1. **Open this file in your editor** (the `.md` file, raw)
-2. In Notion, create a new page titled `Trees — Fundamentals (Deep Dive)`
-3. **For each section between `---` dividers in this file:**
-   - Copy the heading text (e.g., `What Is a Tree?`)
-   - In Notion, click `+`, choose **Heading 2** (or `H3` for sub-sections), type the heading
-   - Copy the body text (paragraphs only — not the code blocks)
-   - Paste below the heading
-   - For each code block: in Notion type `/code` → Enter → choose `Java` (or `Plain Text` for ASCII diagrams) → paste the code inside
-   - For each table: paste it; if Notion offers "Convert to Table," accept; otherwise recreate using `/table`
-4. Repeat per section
-
-This is slower but produces a clean, navigable Notion page.
-
-### Method 2 — Bulk paste then fix
-
-1. Copy the whole file
-2. Paste into Notion at document level
-3. Notion will preserve **most** Markdown headings, lists, and inline code, but:
-   - Code blocks may lose their language highlighting → click each block, set to Java
-   - Tables often need to be recreated
-   - Triple-backtick fences sometimes appear as plain text → wrap in `/code` blocks
-4. Spend 5–10 minutes cleaning up
-
-### Tips
-
-- **Always use `/code` blocks for ASCII diagrams** — otherwise Notion collapses spaces and ruins the alignment
-- **Triple backticks (\`\`\`) inside Notion code blocks paste as literal characters** — that's expected
-- **Avoid "Markdown import"** in Notion — it strips formatting and is worse than plain paste
-
-### Folder structure on Notion side (optional)
-
-If you want to mirror this file system in Notion:
-
-```
-DSA Hub
-├── Reference Notes (existing)
-│   ├── String Operations
-│   ├── HashMap
-│   ├── HashSet / TreeSet
-│   ├── Lambdas
-│   └── Trees — Reference (coming next)
-│
-└── Deep Dive Notes (new sub-page)
-    └── Trees — Fundamentals (paste this file here)
-```
 
 ---
 

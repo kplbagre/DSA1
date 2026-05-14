@@ -6,18 +6,6 @@
 
 ---
 
-## 📌 Notion Paste Guide (Read This First)
-
-Notion-paste-friendly conventions used throughout:
-
-- **One statement per line** — never `if (cond) return val;` on one line
-- **Always braced blocks** — even single-statement bodies
-- **Spaces around operators** — `int x = a + b;`
-- **Working Java** — no pseudo-code, no `...` placeholders; pastes cleanly into a class with `java.util.*` imported
-- Paste this doc into Notion **section-by-section** for cleanest formatting (full Notion paste guide at the bottom)
-
----
-
 ## 🎯 Why You're Reading This (The Goal)
 
 By the end of this doc, you should:
@@ -2263,43 +2251,6 @@ In a matrix, `r` is row (y-axis, top-to-bottom) and `c` is column (x-axis, left-
 15. **No `static` fields** for problem state on LeetCode — use instance fields + reset
 
 > **Graphs are mostly traversal problems wearing different hats.** Master BFS, DFS, topo sort, and DSU — the rest is variations on these four.
-
----
-
-## 📌 Notion Paste Guide (Full Version)
-
-### Method 1 — Paste section by section (recommended)
-
-1. Copy this entire doc
-2. In Notion, create a new page titled "Graphs — Fundamentals"
-3. Paste the H1 + intro section first
-4. For each H2 section (📖 Terminology, 🗂️ Representations, etc.), paste separately so Notion renders the code blocks cleanly
-5. Verify code blocks render as `Code` (not `Plain Text`); adjust language to `Java` if needed
-
-### Method 2 — Bulk paste then fix
-
-1. Paste the entire doc at once
-2. Walk through and convert any mis-rendered code blocks to `Java`
-3. Re-flow any tables that didn't render
-
-### Tips
-
-- Notion **strips** trailing whitespace and tabs but **preserves** line breaks — our one-statement-per-line code pastes cleanly
-- ASCII diagrams render as plain text (not Mermaid) — preserve them as code blocks
-- Tables paste reliably if the header row is clean and there are no missing pipes
-
-### Folder structure on Notion side
-
-```
-DSA Hub
-├── Recursion (deep dive + reference)
-├── Trees (deep dive + reference + LC 124 problem)
-├── Graphs                  ← this doc
-│   ├── Fundamentals        ← here
-│   └── Reference           ← TBD
-├── HashMap (reference)
-└── Code Style (reference)
-```
 
 ---
 

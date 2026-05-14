@@ -4,18 +4,6 @@
 
 ---
 
-## 📌 Notion Paste Tip (Read This First)
-
-If pasting into Notion strips your code formatting:
-
-1. In Notion, type `/code` and press Enter to create a **code block** first
-2. Choose `Java` as the language
-3. **Paste inside that code block** (not at the document level)
-
-Notion preserves all whitespace and newlines inside code blocks. At the document level, Notion may strip spaces and merge lines — that's the source of your pain.
-
----
-
 ## 🤔 Why Lambdas Exist — The Long Story (with Code)
 
 Before Java 8, if you wanted to pass **behavior** (a chunk of logic) into a method, you had to wrap it in a class. Sorting a list with custom logic looked like this:

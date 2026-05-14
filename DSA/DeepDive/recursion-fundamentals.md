@@ -4,20 +4,6 @@
 
 ---
 
-## 📌 Notion Paste Guide (Read This First)
-
-This file uses many code blocks, ASCII call-stack diagrams, and traces. To paste cleanly:
-
-1. In Notion, type `/code` and press **Enter** to create a code block first
-2. Choose `Java` for code and `Plain Text` for ASCII diagrams
-3. **Paste inside the code block** — never at the document level
-4. For headings (`##`, `###`), use Notion's **H2 / H3** buttons in the toolbar
-5. **Paste section by section** — each `---` divider is a natural break point
-
-A fuller Notion guide is at the bottom of this file.
-
----
-
 ## 🎯 Why You're Reading This (The Goal)
 
 Recursion is the **single most important mental model** in DSA after array indexing. Most interviewees I've watched fail tree, graph, or backtracking problems failed at one specific spot:
@@ -2691,61 +2677,6 @@ return hasPath(node.left, target) || hasPath(node.right, target);
 ---
 
 **Stack overflow on adversarial input.** A "stick tree" (linked-list shaped) of 10,000 nodes will overflow recursion. The fix is iteration with an explicit stack, or constraint awareness (interview problems usually bound `n ≤ 10^4`).
-
----
-
-## 📋 Notion Paste Guide (Full Version)
-
-Pasting a long markdown file into Notion can be frustrating. Here's the workflow that actually works:
-
-### Method 1 — Paste section by section (recommended)
-
-1. **Open this file in your editor** (the `.md` file, raw)
-2. In Notion, create a new page titled `Recursion — Fundamentals (Deep Dive)`
-3. **For each section between `---` dividers in this file:**
-   - Copy the heading text (e.g., `What Is Recursion?`)
-   - In Notion, click `+`, choose **Heading 2** (or `H3` for sub-sections), type the heading
-   - Copy the body text (paragraphs only — not the code blocks)
-   - Paste below the heading
-   - For each code block: in Notion type `/code` → Enter → choose `Java` (or `Plain Text` for ASCII diagrams) → paste the code inside
-   - For each table: paste it; if Notion offers "Convert to Table," accept; otherwise recreate using `/table`
-4. Repeat per section
-
-This is slower but produces a clean, navigable Notion page.
-
-### Method 2 — Bulk paste then fix
-
-1. Copy the whole file
-2. Paste into Notion at document level
-3. Notion will preserve **most** Markdown headings, lists, and inline code, but:
-   - Code blocks may lose their language highlighting → click each block, set to Java
-   - Tables often need to be recreated
-   - Triple-backtick fences sometimes appear as plain text → wrap in `/code` blocks
-4. Spend 5–10 minutes cleaning up
-
-### Tips
-
-- **Always use `/code` blocks for ASCII diagrams** — otherwise Notion collapses spaces and ruins alignment
-- **Triple backticks (\`\`\`) inside Notion code blocks paste as literal characters** — that's expected
-- **Avoid "Markdown import"** in Notion — it strips formatting and is worse than plain paste
-
-### Folder structure on Notion side
-
-```
-DSA Hub
-├── Reference Notes (existing)
-│   ├── String Operations
-│   ├── HashMap
-│   ├── HashSet / TreeSet
-│   ├── Lambdas
-│   ├── Trees — Reference (coming)
-│   └── Recursion — Reference (coming)
-│
-└── Deep Dive Notes
-    ├── Trees — Fundamentals
-    ├── Integer Overflow & Limits
-    └── Recursion — Fundamentals (paste this file here)
-```
 
 ---
 

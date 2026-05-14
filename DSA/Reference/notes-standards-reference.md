@@ -11,7 +11,7 @@ A Reference note is the file Kapil **lives in during practice and revision** —
 - **Compact** — scannable in under 5 minutes
 - **Method-first** — syntax tables, not prose
 - **Pattern-organized** — grouped by reusable code shape
-- **Notion-paste-friendly** — clean code blocks, no fancy formatting
+- **Render-friendly** — clean code blocks, no fancy formatting
 
 Kapil typically reads the corresponding `DeepDive/<topic>-fundamentals.md` once, then migrates to `Reference/<topic>-reference.md` for daily revision.
 
@@ -101,7 +101,7 @@ Example pattern (HashMap Pattern #6 — Sliding Window):
 
 ---
 
-## 💻 Code Formatting Rules (CRITICAL — Notion paste-friendly)
+## 💻 Code Formatting Rules (CRITICAL)
 
 These mirror the universal rules in `AGENTS.md`. Repeated here for convenience because Kapil opens this file most often.
 

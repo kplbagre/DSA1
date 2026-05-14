@@ -22,26 +22,24 @@ After reading a deep-dive once, Kapil migrates to a `Reference/<topic>-reference
 
 ## 📐 Document Structure (Section Order)
 
-Every DeepDive note follows this 13-section template. Sections marked **[REQUIRED]** must appear; others are conditional.
+Every DeepDive note follows this section template. Sections marked **[REQUIRED]** must appear; others are conditional.
 
 ```
 1.  H1 Title                                     [REQUIRED]
 2.  Tagline blockquote (one sentence on what + audience)  [REQUIRED]
-3.  📌 Notion Paste Guide (short version)        [REQUIRED]
-4.  🎯 Why You're Reading This (the Goal)        [REQUIRED]
-5.  🚦 Difficulty Tagging Legend                 [REQUIRED]
-6.  🌲 What Is X? (definition + simplest example) [REQUIRED]
-7.  📖 Terminology Table                         [REQUIRED]
-8.  🛠️ Class / Skeleton (if applicable, e.g., TreeNode)
-9.  🧠 Mental Model (the "most important section") [REQUIRED]
-10. 🎨 Style Habits — Universal vs Context-Specific [REQUIRED]
-11. 🚶 / 🌊 / 🧭 Patterns — each with English-steps + template + example
-12. 🌳 Special Topics (e.g., BST, two-purpose recursion ladder)
-13. 🔬 Worked Walkthroughs (3-4 problems, fully traced)  [REQUIRED]
-14. ⚠️ Gotchas (Silent Bug Hall of Fame)          [REQUIRED]
-15. 🗺️ Practice Plan (in tiers)                   [REQUIRED]
-16. 📋 Notion Paste Guide (full version)          [REQUIRED]
-17. 🧾 TL;DR — One-Page Summary                   [REQUIRED]
+3.  🎯 Why You're Reading This (the Goal)        [REQUIRED]
+4.  🚦 Difficulty Tagging Legend                 [REQUIRED]
+5.  🌲 What Is X? (definition + simplest example) [REQUIRED]
+6.  📖 Terminology Table                         [REQUIRED]
+7.  🛠️ Class / Skeleton (if applicable, e.g., TreeNode)
+8.  🧠 Mental Model (the "most important section") [REQUIRED]
+9.  🎨 Style Habits — Universal vs Context-Specific [REQUIRED]
+10. 🚶 / 🌊 / 🧭 Patterns — each with English-steps + template + example
+11. 🌳 Special Topics (e.g., BST, two-purpose recursion ladder)
+12. 🔬 Worked Walkthroughs (3-4 problems, fully traced)  [REQUIRED]
+13. ⚠️ Gotchas (Silent Bug Hall of Fame)          [REQUIRED]
+14. 🗺️ Practice Plan (in tiers)                   [REQUIRED]
+15. 🧾 TL;DR — One-Page Summary                   [REQUIRED]
 ```
 
 ---
@@ -377,37 +375,6 @@ This is the format we used pre-May-2026 and it caused the LC 124 incident. Alway
 
 ---
 
-## 📌 Notion Paste Guides
-
-Two are required: a short one near the top, a full one near the bottom.
-
-### Short version (top, after H1)
-
-```markdown
-## 📌 Notion Paste Guide (Read This First)
-
-This file uses many code blocks and ASCII diagrams. To paste cleanly:
-
-1. In Notion, type `/code` and press **Enter** to create a code block first
-2. Choose `Java` for code and `Plain Text` for ASCII diagrams
-3. **Paste inside the code block** — never at the document level
-4. For headings (`##`, `###`), use Notion's **H2 / H3** buttons in the toolbar
-5. **Paste section by section** — each `---` divider is a natural break point
-
-A fuller Notion guide is at the bottom of this file.
-```
-
-### Full version (bottom)
-
-Provide three subsections:
-
-1. **Method 1 — Paste section by section** (recommended) — numbered steps
-2. **Method 2 — Bulk paste then fix** — for short docs
-3. **Tips** — ASCII diagrams in `/code`, no markdown import, etc.
-4. **Folder structure on Notion side** (optional ASCII tree)
-
----
-
 ## 🧾 TL;DR Section — Mandatory
 
 End every DeepDive with a one-page TL;DR. This is what Kapil scans before an interview to refresh.
@@ -450,7 +417,6 @@ Universal (from `AGENTS.md`):
 - [ ] No emojis outside the approved set
 
 DeepDive-specific:
-- [ ] Notion paste guide present at top (short) and bottom (full)
 - [ ] 🎯 Goal section explains why Kapil is reading this
 - [ ] 🚦 Difficulty tagging legend present
 - [ ] 📖 Terminology table present

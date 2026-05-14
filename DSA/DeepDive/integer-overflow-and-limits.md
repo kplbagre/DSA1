@@ -4,20 +4,6 @@
 
 ---
 
-## 📌 Notion Paste Guide (Read This First)
-
-Same as the other deep dives:
-
-1. In Notion, type `/code` and press **Enter** to create a code block first
-2. Choose `Java` for code, `Plain Text` for ASCII / numbers / tables
-3. **Paste inside the code block** — never at document level
-4. For headings, use Notion's H2/H3 buttons after pasting plain text
-5. Paste **section by section** (each `---` is a natural break)
-
-Full Notion guide is at the bottom.
-
----
-
 ## 🎯 Why This Matters
 
 Almost every "wrong answer" you'll get on a hard LeetCode problem isn't a logic bug — it's a **silent overflow** or a **boxing surprise**. Symptoms:
@@ -657,55 +643,6 @@ int truncated = (int) -1.5;              // -1
 ---
 
 **Char arithmetic can produce ints, not chars.** `'a' + 1` is `98` (int), not `'b'` (char). If you need a char back, cast: `(char) ('a' + 1)`. (See String reference for full coverage.)
-
----
-
-## 📋 Notion Paste Guide (Full Version)
-
-Pasting a long markdown file into Notion can be frustrating. Here's the workflow that works:
-
-### Method 1 — Section-by-section (recommended)
-
-1. **Open this file in your editor** (`.md` view, not rendered)
-2. In Notion, create a new page titled `Integer Overflow & Limits in Java DSA`
-3. **For each `---`-divided section in this file:**
-   - Copy the heading text → in Notion, click `+`, choose **Heading 2** or **Heading 3**, type/paste the heading
-   - Copy the body paragraphs → paste at document level
-   - For each code block: in Notion type `/code` → Enter → choose `Java` (or `Plain Text` for tables/diagrams) → paste **inside** the code block
-   - For each table: paste it; if Notion offers "Convert to Table," accept; otherwise recreate via `/table`
-4. Repeat per section
-
-Slower but produces a clean, navigable Notion page.
-
-### Method 2 — Bulk paste then fix
-
-1. Copy the whole file
-2. Paste into Notion at document level
-3. Notion preserves most Markdown headings, lists, inline code; manually fix:
-   - Code block languages
-   - Tables (recreate if needed)
-   - Triple-backtick fences appearing as plain text → wrap in `/code` blocks
-
-### Tips
-
-- Always use `/code` blocks for ASCII / numeric tables — keeps spacing intact
-- **Avoid Notion's "Markdown import"** — it strips formatting
-
-### Folder structure on Notion side
-
-```
-DSA Hub
-├── Reference Notes (existing)
-│   ├── String Operations
-│   ├── HashMap
-│   ├── HashSet / TreeSet
-│   ├── Lambdas
-│   └── Trees — Reference (later)
-│
-└── Deep Dive Notes (new sub-page)
-    ├── Trees — Fundamentals
-    └── Integer Overflow & Limits   ← paste this file here
-```
 
 ---
 

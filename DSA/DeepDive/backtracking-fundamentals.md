@@ -4,20 +4,6 @@
 
 ---
 
-## 📌 Notion Paste Guide (Read This First)
-
-This file uses many code blocks, ASCII recursion-tree diagrams, and traces. To paste cleanly:
-
-1. In Notion, type `/code` and press **Enter** to create a code block first
-2. Choose `Java` for code and `Plain Text` for ASCII diagrams
-3. **Paste inside the code block** — never at the document level
-4. For headings (`##`, `###`), use Notion's **H2 / H3** buttons in the toolbar
-5. **Paste section by section** — each `---` divider is a natural break point
-
-A fuller Notion guide is at the bottom of this file.
-
----
-
 ## 🎯 Why You're Reading This (The Goal)
 
 Backtracking is the pattern that confuses people the most because of the "undo." Most interviewees get the structural shape but freeze when they see a problem like *"all permutations"* or *"N-Queens"* because the **choice space changes** between sub-patterns and the templates look different.
@@ -1530,57 +1516,6 @@ return false;
 ```
 
 For "find ONE" problems, propagate `true` the moment you have it.
-
----
-
-## 📋 Notion Paste Guide (Full Version)
-
-### Method 1 — Paste section by section (recommended)
-
-1. **Open this file in your editor** (the `.md` file, raw)
-2. In Notion, create a new page titled `Backtracking — Fundamentals (Deep Dive)`
-3. **For each section between `---` dividers in this file:**
-   - Copy the heading text (e.g., `Sub-Pattern 3: Permutations`)
-   - In Notion, click `+`, choose **Heading 2** (or `H3` for sub-sections), type the heading
-   - Copy the body text (paragraphs only — not the code blocks)
-   - Paste below the heading
-   - For each code block: in Notion type `/code` → Enter → choose `Java` (or `Plain Text` for ASCII diagrams) → paste the code inside
-   - For each table: paste it; if Notion offers "Convert to Table," accept; otherwise recreate using `/table`
-4. Repeat per section
-
-This is slower but produces a clean, navigable Notion page.
-
-### Method 2 — Bulk paste then fix
-
-1. Copy the whole file
-2. Paste into Notion at document level
-3. Notion will preserve **most** Markdown headings, lists, and inline code, but:
-   - Code blocks may lose their language highlighting → click each block, set to Java
-   - Tables often need to be recreated
-   - Triple-backtick fences sometimes appear as plain text → wrap in `/code` blocks
-4. Spend 5–10 minutes cleaning up
-
-### Tips
-
-- **Always use `/code` blocks for ASCII recursion trees** — otherwise Notion collapses spaces and ruins alignment
-- **Avoid "Markdown import"** in Notion — it strips formatting and is worse than plain paste
-
-### Folder structure on Notion side
-
-```
-DSA Hub
-├── Reference Notes (existing)
-│   ├── String Operations
-│   ├── HashMap, Sets
-│   ├── Lambdas
-│   └── ...
-│
-└── Deep Dive Notes
-    ├── Trees — Fundamentals
-    ├── Recursion — Fundamentals
-    ├── Integer Overflow & Limits
-    └── Backtracking — Fundamentals (paste this file here)
-```
 
 ---
 

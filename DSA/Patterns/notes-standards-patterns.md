@@ -183,7 +183,7 @@ You can have 2 or 3 approaches. Two is fine for problems where there's no meanin
 
 - Use the same example from the Problem section so Kapil can connect input → trace → output
 - Show state evolution line by line (HashMap contents, pointers, etc.)
-- Wrap in a plain code block (` ``` ` no language) so Notion preserves spacing
+- Wrap in a plain code block (` ``` ` no language) so spacing is preserved
 
 ---
 
@@ -275,7 +275,7 @@ Two subsections: cross-references to other notes, and similar-problems lists.
 - ...
 ```
 
-Use this section to wire the Pattern note into the wider note system. After Notion-paste, these become clickable navigation in Kapil's hub.
+Use this section to wire the Pattern note into the wider note system — these form clickable navigation between docs.
 
 ---
 
