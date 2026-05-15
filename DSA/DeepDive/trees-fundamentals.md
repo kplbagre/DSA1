@@ -79,6 +79,35 @@ Most DSA problems use a **binary tree** — every node has **at most 2 children*
 
 > **Common confusion:** "Depth" measures from the **top down**, "height" measures from the **bottom up**. In LeetCode, "depth" usually means depth of the whole tree (= height of root).
 
+### 🎨 Visual — Depth vs Height on the Same Tree
+
+```
+Same tree, two different measurements:
+
+         (A)                      (A) depth=0,  height=2
+        /   \
+      (B)   (C)                   (B) depth=1,  height=1     (C) depth=1, height=0
+      / \
+    (D) (E)                       (D) depth=2,  height=0     (E) depth=2, height=0
+
+
+DEPTH (measure from root DOWN):       HEIGHT (measure from leaves UP):
+
+   (A) ━━━━━ 0 ━━━━━                     (A) ━━━━━ 2 ━━━━━
+   (B) (C) ━ 1 ━                         (B)       1
+   (D)(E) ━━ 2 ━                         (C)(D)(E) 0  ← all leaves height 0
+
+
+   • Depth of A = 0 (A IS the root)         • Height of A = 2 (longest path
+   • Depth of D = 2 (A → B → D)                                down to a leaf)
+   • Height of tree = height of root        • Height of leaf = 0
+     = max depth of any leaf                • Height of empty = -1 (some texts)
+
+
+   Mnemonic: depth grows DOWN like roots into soil.
+             height grows UP like a tree toward the sky.
+```
+
 ---
 
 ## 🛠️ The `TreeNode` Class
@@ -187,6 +216,76 @@ maxDepth(1)
 ```
 
 Each call returns its subtree's answer. The **caller** combines them. **You only need to write the logic for one node** — Java's call stack handles the rest.
+
+### 🎨 Visual — Call Stack Growing and Unwinding
+
+```
+The same trace, but drawn as the JVM's call stack — how frames are
+PUSHED on the way down and POPPED on the way up.
+
+Tree:               Step-by-step stack snapshots:
+
+      (1)           t=1  PUSH maxDepth(1)         ┌────────────────┐
+     /   \                                        │ maxDepth(1)    │
+   (2)   (3)                                      └────────────────┘
+   /
+  (4)             t=2  PUSH maxDepth(2)           ┌────────────────┐
+                                                  │ maxDepth(2)    │  ← top
+                                                  │ maxDepth(1)    │
+                                                  └────────────────┘
+
+                  t=3  PUSH maxDepth(4)           ┌────────────────┐
+                                                  │ maxDepth(4)    │  ← top
+                                                  │ maxDepth(2)    │
+                                                  │ maxDepth(1)    │
+                                                  └────────────────┘
+
+                  t=4  PUSH maxDepth(null)        ┌────────────────┐
+                                                  │ maxDepth(null) │  returns 0
+                                                  │ maxDepth(4)    │
+                                                  │ maxDepth(2)    │
+                                                  │ maxDepth(1)    │
+                                                  └────────────────┘
+                       ── POP, returns 0 ──
+
+                  ...both nulls return 0, then maxDepth(4) returns 1...
+
+                  t=8  POP maxDepth(4) → 1        ┌────────────────┐
+                                                  │ maxDepth(2)    │  ← top
+                                                  │ maxDepth(1)    │      (knows left=1)
+                                                  └────────────────┘
+
+                  ...right child null returns 0, maxDepth(2) returns 2...
+
+                  t=N  POP maxDepth(2) → 2        ┌────────────────┐
+                                                  │ maxDepth(1)    │  ← top
+                                                  └────────────────┘      (knows left=2)
+
+                  ...right side runs, maxDepth(3) returns 1...
+
+                  t=last  POP maxDepth(1) → 3     ┌────────────────┐
+                                                  │      (empty)   │
+                                                  └────────────────┘
+                                                       Done. Result = 3.
+
+
+KEY INVARIANTS:
+
+  1. Stack DEPTH at any time  =  current path-length from root.
+     This is why an N-shaped (stick) tree blows the recursion stack
+     for N ≈ 10,000 in Java — but a balanced tree of 1M nodes is fine
+     (depth ≈ 20).
+
+  2. Each frame REMEMBERS its local variables (leftDepth, etc.) until
+     its child returns. The "trust the recursion" mental model maps
+     directly onto this: when control returns to your frame, the
+     subtree's answer is sitting in a local variable. You don't have
+     to recompute or look anything up.
+
+  3. The work happens DURING the POP, not during the PUSH (for
+     POSTorder logic like maxDepth). For PREorder logic, the work
+     happens BEFORE the recursive calls — i.e., during the PUSH.
+```
 
 ### Base case + recursive case — the universal pattern
 
@@ -397,6 +496,66 @@ A **traversal** is a complete walk over every node in some order. The three DFS 
 
 The names tell you when the **current node** is visited: **pre** (before children), **in** (between children), **post** (after children).
 
+### 🎨 Visual — Same Tree, Three Traversals Side-by-Side
+
+```
+Sample tree:                  Each node gets numbered with the ORDER
+                              in which it's visited:
+         (A)
+        /   \                 ┌─────────────────────────────────────────┐
+      (B)   (C)                │ PREORDER (Node → L → R):                │
+      / \                      │                                         │
+    (D) (E)                    │       (1)A     visit 1: A               │
+                               │       / \      visit 2: B               │
+                               │     (2)B (5)C  visit 3: D               │
+                               │     / \        visit 4: E               │
+                               │  (3)D (4)E     visit 5: C               │
+                               │                                         │
+                               │  Order:  A → B → D → E → C              │
+                               └─────────────────────────────────────────┘
+
+                               ┌─────────────────────────────────────────┐
+                               │ INORDER (L → Node → R):                 │
+                               │                                         │
+                               │       (4)A     visit 1: D               │
+                               │       / \      visit 2: B               │
+                               │     (2)B (5)C  visit 3: E               │
+                               │     / \        visit 4: A               │
+                               │  (1)D (3)E     visit 5: C               │
+                               │                                         │
+                               │  Order:  D → B → E → A → C              │
+                               │                                         │
+                               │  ⚠️  Inorder on a BST gives SORTED output│
+                               └─────────────────────────────────────────┘
+
+                               ┌─────────────────────────────────────────┐
+                               │ POSTORDER (L → R → Node):               │
+                               │                                         │
+                               │       (5)A     visit 1: D               │
+                               │       / \      visit 2: E               │
+                               │     (3)B (4)C  visit 3: B               │
+                               │     / \        visit 4: C               │
+                               │  (1)D (2)E     visit 5: A               │
+                               │                                         │
+                               │  Order:  D → E → B → C → A              │
+                               │                                         │
+                               │  Leaves first, root LAST. Used when     │
+                               │  parent needs info FROM children.       │
+                               └─────────────────────────────────────────┘
+
+
+WHEN TO USE WHICH:
+
+  Preorder  — clone / serialize / "build the tree top-down"
+              (you process parent BEFORE children — natural for copying)
+
+  Inorder   — anything BST-related, sorted output, "Kth smallest"
+              (only inorder visits values in left-to-right reading order)
+
+  Postorder — heights, diameters, path sums, deletions
+              (parent uses what children computed)
+```
+
 ### Preorder — node first, then children
 
 **Steps in plain English:**
@@ -589,6 +748,60 @@ public List<List<Integer>> levelOrder(TreeNode root) {
     // Step 9 — return when queue is fully drained
     return result;
 }
+```
+
+### 🎨 Visual — BFS Queue Animation (the `size` snapshot in action)
+
+```
+Sample tree:                Queue state at each iteration of the OUTER loop.
+                            We snapshot `size` BEFORE the inner loop pops,
+        (1)                 so we know exactly how many nodes belong to the
+       /   \                current level — even as the queue grows from
+     (2)   (3)              their children being pushed in.
+     / \     \
+   (4) (5)   (6)
+
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ START                                                                   │
+│   Queue:  [ 1 ]                                                         │
+│   size = 1   ◀── snapshot                                               │
+│   Pop 1, push 2, push 3                                                 │
+│   Queue:  [ 2 , 3 ]                                                     │
+│   level recorded:  [1]                                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│ ITERATION 2                                                             │
+│   Queue:  [ 2 , 3 ]                                                     │
+│   size = 2   ◀── snapshot (DO NOT re-read queue.size() inside loop!)    │
+│                                                                         │
+│   Pop 2, push 4, push 5                                                 │
+│   Queue:  [ 3 , 4 , 5 ]   ◀── grew, but `size` still = 2                │
+│   Pop 3,         push 6                                                 │
+│   Queue:  [ 4 , 5 , 6 ]                                                 │
+│   level recorded:  [2, 3]                                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│ ITERATION 3                                                             │
+│   Queue:  [ 4 , 5 , 6 ]                                                 │
+│   size = 3   ◀── snapshot                                               │
+│   Pop 4 (no children)                                                   │
+│   Pop 5 (no children)                                                   │
+│   Pop 6 (no children)                                                   │
+│   Queue:  [ ]                                                           │
+│   level recorded:  [4, 5, 6]                                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│ DONE — queue empty, exit outer loop                                     │
+│   Result:  [[1], [2, 3], [4, 5, 6]]                                     │
+└─────────────────────────────────────────────────────────────────────────┘
+
+
+KEY INVARIANT (memorize):
+
+   At ANY moment inside the algorithm, the queue contains at most
+   TWO adjacent levels — the current level being drained, and the
+   next level being filled by their children.
+
+   That's why BFS gives shortest path in unweighted graphs: nodes
+   are discovered strictly in order of distance from root.
 ```
 
 ### The level-snapshot trick (very important)
@@ -1208,6 +1421,54 @@ This **fails** on:
 
 The wrong solution only compares each node to its immediate children. It doesn't enforce that **everything** in the right subtree is greater than `5`.
 
+### 🎨 Visual — BST Bounds Propagation (the LC 98 fix)
+
+```
+The CORRECT algorithm passes a (min, max) range DOWN to every recursive
+call. Each node must satisfy   min < node.val < max.   When we recurse:
+   - going LEFT,  the max  TIGHTENS to node.val
+   - going RIGHT, the min  TIGHTENS to node.val
+
+
+The buggy tree from above with bounds annotated at each node:
+
+                  (-∞,  +∞)
+                     │
+                    (5)            5 in (-∞,  +∞)        ✅
+                   /   \
+            (-∞, 5)     (5, +∞)
+                │           │
+               (1)         (8)     1 in (-∞, 5),  8 in (5, +∞)   ✅
+                          /   \
+                     (5, 8)    (8, +∞)
+                       │         │
+                      (3)       (9)
+                       ▲
+                       │
+                       └── 3 must be in (5, 8) — but 3 ≤ 5  ❌  CAUGHT!
+
+
+Compare to the WRONG algorithm (only checks parent vs child):
+
+    5 vs 8: 8 > 5  ✅   ── looks fine locally
+    8 vs 3: 3 < 8  ✅   ── also looks fine locally
+                            but 3 is in 5's RIGHT subtree, so 3 > 5 fails
+
+  The bounds version catches this because the `min = 5` constraint
+  is carried DOWN past node 8 into node 3.
+
+
+HOW BOUNDS TIGHTEN AS WE WALK DOWN:
+
+   Starting bounds:                    ( -∞ ,  +∞ )
+   Go left  through node X:            ( -∞ ,    X )
+   Go left  through Y (Y < X):         ( -∞ ,    Y )
+   Go right through Z (Z < X, Z > Y):  (  Y ,    X )
+
+   Bounds only get TIGHTER — never looser. That monotonic shrinking
+   is what proves the BST invariant globally.
+```
+
 **Correct solution — pass valid bounds down:**
 
 **Steps in plain English:**
@@ -1400,6 +1661,78 @@ public TreeNode lowestCommonAncestor(TreeNode root, TreeNode p, TreeNode q) {
     // Step 4 — propagate whichever side has a finding (or null if neither)
     return left != null ? left : right;
 }
+```
+
+### 🎨 Visual — LCA Three Cases (what bubbles up from each subtree)
+
+```
+The recursive return value carries one of FOUR meanings depending on
+what was found in the subtree below:
+
+      null    →  nothing found here
+      p       →  this subtree contains p (or this IS p)
+      q       →  this subtree contains q (or this IS q)
+     <node>   →  this subtree's LCA is <node>; just bubble it up
+
+
+────────────────────────────────────────────────────────────────────
+CASE A — p and q on DIFFERENT sides of a node ⇒ that node IS the LCA
+────────────────────────────────────────────────────────────────────
+
+                       (3) ◀── LCA is here
+                      /   \
+              left = (5)   (1) = right
+                    / \    / \
+                  (p) ... ... (q)
+
+   At node 3:   left  recursion returns  p   (non-null)
+                right recursion returns  q   (non-null)
+                BOTH non-null  ⇒  return root  (= 3, the LCA)
+
+   Above node 3, every ancestor sees:
+       left =  3   (the LCA we just found, NOT p or q)
+       right = null
+   So the LCA  3  is propagated upward unchanged.
+
+
+────────────────────────────────────────────────────────────────────
+CASE B — p and q on the SAME side ⇒ deeper node is the LCA
+────────────────────────────────────────────────────────────────────
+
+                       (3)
+                      /   \
+              left = (5)   (1) = right
+                    / \
+                  (p) (q)        ◀── both under 5
+
+   At node 5:   left  returns  p
+                right returns  q
+                BOTH non-null  ⇒  node 5 becomes the LCA  ✅
+
+   At node 3:   left  returns  5  (the LCA)
+                right returns  null
+                One side non-null ⇒ propagate  5  upward.
+
+
+────────────────────────────────────────────────────────────────────
+CASE C — one of p, q IS the ancestor of the other
+────────────────────────────────────────────────────────────────────
+
+                       (3)
+                      /   \
+                    (p)    ...   ◀── p is itself the ancestor
+                    / \
+                  ... (q)
+
+   At node p:   the BASE CASE fires (root == p) ⇒ return p immediately.
+                We do NOT descend further looking for q.
+   At node 3:   left  returns  p
+                right returns  null
+                One side non-null ⇒ propagate  p  upward.
+                p IS the LCA — and the algorithm returns it correctly.
+
+   This works because the contract is: "return either p, q, or the LCA."
+   When p is an ancestor of q, p satisfies BOTH meanings — and that's fine.
 ```
 
 **Why this is elegant:** the function returns either `null`, `p`, `q`, or the LCA — and the meaning depends on context. This is a classic "two-purpose recursion."

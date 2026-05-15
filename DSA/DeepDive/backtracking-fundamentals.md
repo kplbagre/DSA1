@@ -105,6 +105,57 @@ void backtrack(state, partial, results) {
 
 > **Mental hook:** *"Backtracking = recursion + an undo step. The undo restores the world before the next sibling explores."*
 
+### 🎨 Visual — Backtracking Is DFS on a Decision Tree
+
+```
+EVERY backtracking problem is a DFS on an implicit DECISION TREE.
+The path from the root to a leaf represents one full sequence of choices.
+The "undo" step is what lets the algorithm RE-USE the partial after a
+sibling branch is explored.
+
+
+For nums = [1, 2, 3], the take/not-take subsets tree looks like:
+
+                              path = [ ]              ◀── start
+                              ├── TAKE 1 ─────┐
+                              └── SKIP 1 ─────────┐
+                  path = [1]                  path = [ ]
+                  ├── TAKE 2 ──┐               ├── TAKE 2 ──┐
+                  └── SKIP 2 ──────┐           └── SKIP 2 ──────┐
+            path=[1,2]      path=[1]      path=[2]        path=[ ]
+            ├── T 3         ├── T 3        ├── T 3         ├── T 3
+            └── S 3         └── S 3        └── S 3         └── S 3
+              ⋮               ⋮              ⋮               ⋮
+         (8 LEAVES = 2³ subsets:
+          [1,2,3], [1,2], [1,3], [1], [2,3], [2], [3], [ ])
+
+
+WHAT EACH ARROW MEANS:
+   ── DOWNWARD edge  =  apply(choice)        ← Step 4 in template (TRY)
+   ── UPWARD return  =  undo(choice)         ← Step 6 in template (UNDO)
+
+
+THE UNDO STEP — VISUAL ANIMATION (on path list):
+
+   Before TAKE 1:    path = [ ]
+   apply TAKE 1:     path = [1]            ← TRY
+   ... recurse, leaf reached, snapshot saved
+   undo TAKE 1:      path = [ ]            ← UNDO  ◀── crucial
+   apply SKIP 1:     path = [ ]            ← (no mutation for SKIP)
+   ... continues exploring with clean slate
+
+
+WHY THE UNDO IS NON-NEGOTIABLE:
+
+   When the recursion returns from the TAKE branch, the path list
+   is SHARED with the SKIP branch about to fire next.  If we don't
+   undo, the SKIP branch starts with [1] in path — polluting every
+   subset it generates.
+
+   Mental model: "path is a single, mutable highlight pen.  After
+   coloring the left branch, lift the pen before coloring the right."
+```
+
 ---
 
 ## 🔑 The Decision Framework — Which Sub-Pattern Is This?
@@ -466,6 +517,60 @@ The board is `n×n`. Place one queen per row. For row `r`, try every column `c`.
 
 This generates `n^n` attempts — most of which are invalid. We need pruning.
 
+### 🎨 Visual — N-Queens Attack Zones and Pruning Power
+
+```
+A queen at (row, col) attacks THREE lines on the board:
+   1. The whole column      (col is constant)
+   2. The   \   diagonal    (row + col is constant)
+   3. The   /   diagonal    (row - col is constant)
+
+For n = 4, placing a queen at (1, 1) carves out these forbidden cells:
+
+         col: 0   1   2   3
+        ┌────┬───┬───┬───┐
+   r=0  │  X │ X │   │   │      X = attacked
+        ├────┼───┼───┼───┤      Q = placed queen
+   r=1  │  X │ Q │ X │ X │      . = still available
+        ├────┼───┼───┼───┤
+   r=2  │  X │ X │ X │   │
+        ├────┼───┼───┼───┤
+   r=3  │    │ X │   │ X │      ← (3,2) safe   (3,0)(3,3) BLOCKED by diags
+        └────┴───┴───┴───┘
+                              Only ONE safe cell in row 3 → massive pruning
+
+
+THE FULL DECISION TREE FOR N=4 (pruned vs unpruned):
+
+   Without pruning: 4 × 4 × 4 × 4 = 256 leaves explored
+
+   With pruning:    < 20 nodes actually visited (most branches die early)
+
+
+WHY THE TWO DIAGONAL FORMULAS WORK:
+
+   ╲  diagonal (top-left to bottom-right):
+                (0,0)  (1,1)  (2,2)  (3,3)
+                 0+0    1+1    2+2    3+3       ← row + col is constant
+                  0      2      4      6
+
+   ╱  diagonal (top-right to bottom-left):
+                (0,3)  (1,2)  (2,1)  (3,0)
+                 0-3    1-2    2-1    3-0       ← row - col is constant
+                  -3     -1      1      3
+
+   So a boolean[2n-1] indexed by (row + col) tracks all ╲ diagonals,
+   and a boolean[2n-1] indexed by (row - col + n - 1) tracks all ╱
+   diagonals (the + n - 1 shifts negative values to a valid array index).
+
+
+PRUNING INVARIANT (the "win" of constraint-driven backtracking):
+
+   Each placed queen kills at most  3n - 2  cells in unexplored rows.
+   That's why N-Queens runs in milliseconds for n ≤ 12 even though
+   the raw search space is n!  ≈ 479 million for n = 12.
+```
+
 #### Iteration 2 — Add `isValid()` pruning
 
 Before placing at `(row, c)`, check: any queen already in column `c`? Any in the diagonals? If yes → skip.
@@ -724,6 +829,56 @@ private boolean dfs(char[][] board, String word, int r, int c, int ind) {
 ```
 
 > **The sentinel trick** (overwriting `board[r][c] = '#'`) avoids allocating a separate `boolean[][] visited`. Just remember to restore it on the way back — that's the undo.
+
+### 🎨 Visual — Word Search Path on the Grid
+
+```
+Searching for word = "ABCCED" in:
+
+      0   1   2   3                Path that succeeds:
+    ┌───┬───┬───┬───┐
+0   │ A │ B │ C │ E │             A(0,0) → B(0,1) → C(0,2)
+    ├───┼───┼───┼───┤                                  ↓
+1   │ S │ F │ C │ S │             D(1,3) ← E(2,3) ← C(1,2)
+    ├───┼───┼───┼───┤
+2   │ A │ D │ E │ E │             (CCED takes the right column down)
+    └───┴───┴───┴───┘
+
+
+STEP-BY-STEP WITH SENTINEL '#' AND UNDO:
+
+   Visit (0,0) 'A'  matches word[0]      grid: [#][B][C][E]
+   Visit (0,1) 'B'  matches word[1]            [S][F][C][S]
+   Visit (0,2) 'C'  matches word[2]            [A][D][E][E]
+                                        (cells visited get '#')
+
+   Try (1,2) 'C' — but word[3] is 'C' — match!
+   Try (2,3) 'E' — match word[4]
+   Try (1,3) 'D'? — board has 'S'. MISMATCH.
+   Try (2,2) 'E'? — visited (# now). Skip.
+   Try (1,3) is the only path... actually:
+
+   At (1,2) we tried 4 dirs, found (2,2) 'E' matches word[4]
+   At (2,2) we try (2,1) 'D' — match word[5] = 'D'      ✅ DONE!
+
+
+WHAT THE UNDO PREVENTS — BACKTRACK WHEN A BRANCH FAILS:
+
+   Suppose searching for "ABCE" instead — different word.
+   At step 'C' (0,2), we branch into (1,2) 'C'.  word[3]='E'? Misses.
+   Without UNDO: (1,2) stays '#' forever — future paths can't use it.
+   With UNDO:    on return, (1,2) → 'C'. Now we can try (0,3) 'E'
+                 from (0,2), and the original 'C' at (1,2) is still
+                 available for OTHER starting cells.
+
+
+GRID-PATH BACKTRACKING INVARIANT:
+
+   After every recursive call returns, the grid MUST look exactly
+   like it did before the call.  Sentinel '#' is the only mutation,
+   and restoring it on the way out is what makes the algorithm safe
+   to call from any starting cell in the outer double-loop.
+```
 
 ### Directions array idiom (cleaner for "4 directions")
 

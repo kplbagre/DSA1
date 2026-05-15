@@ -533,6 +533,44 @@ public int[] twoSumSorted(int[] nums, int target) {
 
 🏷️ **Example problems:** LC 167 Two Sum II (Sorted) · LC 11 Container With Most Water · LC 15 3 Sum · LC 18 4 Sum · LC 75 Sort Colors (variant)
 
+#### 🎨 Visual — Converging Two Pointers
+
+```
+Sorted array,  target = 9:
+
+  index:     0   1   2   3   4   5
+           ┌───┬───┬───┬───┬───┬───┐
+  nums:    │ 1 │ 2 │ 4 │ 7 │ 11│ 15│
+           └───┴───┴───┴───┴───┴───┘
+             L                   R
+            1 + 15 = 16 > 9  →  R--
+
+           ┌───┬───┬───┬───┬───┬───┐
+           │ 1 │ 2 │ 4 │ 7 │ 11│ 15│
+           └───┴───┴───┴───┴───┴───┘
+             L              R
+            1 + 11 = 12 > 9  →  R--
+
+           ┌───┬───┬───┬───┬───┬───┐
+           │ 1 │ 2 │ 4 │ 7 │ 11│ 15│
+           └───┴───┴───┴───┴───┴───┘
+             L          R
+            1 + 7 = 8 < 9  →  L++
+
+           ┌───┬───┬───┬───┬───┬───┐
+           │ 1 │ 2 │ 4 │ 7 │ 11│ 15│
+           └───┴───┴───┴───┴───┴───┘
+                 L      R
+            2 + 7 = 9 ✅ FOUND
+
+
+WHY CONVERGING POINTERS ARE O(n):
+
+  Each step moves AT LEAST one pointer inward. They can only cross
+  once → at most n steps total. The sortedness is what lets us pick
+  the right pointer to move (we never have to "go back").
+```
+
 > 🧩 **Try these:**
 > - ✅ **LC 167** Two Sum II — direct application
 > - ✅ **LC 11** Container With Most Water — same shape, different decision (move the **shorter** wall)
@@ -659,6 +697,64 @@ public int longestSubarrayAtMostK(int[] nums, int k) {
 ```
 
 > **Critical warning:** this pattern only works when the property is **monotonic in the window**. "Longest subarray with sum K" where values can be **negative** is NOT monotonic — adding a negative value can fix an overshooting window. For negatives, you need **Pattern 6 (Prefix Sum + HashMap)** instead.
+
+#### 🎨 Visual — Variable Sliding Window (expand-right, shrink-left)
+
+```
+Longest subarray with sum ≤ 8,   nums = [3, 1, 2, 5, 1, 4]:
+
+  r = 0:   [3]                    sum=3       window=[3]            len=1
+           L↑R↑
+
+  r = 1:   [3, 1]                 sum=4       window=[3, 1]         len=2
+           L↑ R↑
+
+  r = 2:   [3, 1, 2]              sum=6       window=[3, 1, 2]      len=3
+           L↑    R↑
+
+  r = 3:   [3, 1, 2, 5]           sum=11 > 8  →  SHRINK
+           L↑       R↑
+           shrink: remove 3, L→1, sum=8       window=[1, 2, 5]      len=3
+              L↑    R↑
+
+  r = 4:   [1, 2, 5, 1]           sum=9 > 8  →  SHRINK
+              L↑       R↑
+           shrink: remove 1, L→2, sum=8       window=[2, 5, 1]      len=3
+                 L↑    R↑
+
+  r = 5:   [2, 5, 1, 4]           sum=12 > 8  →  SHRINK
+                 L↑       R↑
+           shrink: remove 2, L→3, sum=10 > 8  →  SHRINK
+                    L↑    R↑
+           shrink: remove 5, L→4, sum=5       window=[1, 4]         len=2
+                       L↑ R↑
+
+  RESULT: longest valid window length = 3
+
+
+THE MONOTONICITY INVARIANT (why this is O(n)):
+
+   Each pointer moves only FORWARD. Total work = O(n + n) = O(n).
+
+   The window is valid at the moment we update `best`.  When the
+   "expand" step pushes us into invalid territory, "shrink" steps
+   walk L forward until we're valid again.  Both pointers
+   monotonically increase — no work is repeated.
+
+
+WHEN THIS PATTERN BREAKS (must switch to prefix-sum + hashmap):
+
+   nums = [1, -1, 5, -2, 3],  target sum = 3
+
+   r=0: [1]          sum=1
+   r=1: [1, -1]      sum=0    ← "below target" — but window is GROWING
+   r=2: [1, -1, 5]   sum=5    ← "above target"
+                                shrinking won't help: removing 1
+                                gives [-1, 5] sum=4, still > 3.
+   The monotonic shrink-to-valid loop doesn't converge with
+   negative numbers because adding/removing can move sum in EITHER
+   direction.  That's why the pattern only works for positive values.
+```
 
 🏷️ **Example problems:** LC 3 Longest Substring Without Repeating · LC 209 Minimum Size Subarray Sum · LC 76 Minimum Window Substring · LC 904 Fruit Into Baskets · LC 1004 Max Consecutive Ones III
 
@@ -823,6 +919,60 @@ public int maxSubArray(int[] nums) {
 
 > **Why `nums[0]` as the seed and not `0`?** Because the subarray must be **non-empty**. Seeding with `0` would let an all-negative array return 0 (wrong — should return the largest single element).
 
+#### 🎨 Visual — Kadane's "Extend or Restart" Decision
+
+```
+nums = [-2, 1, -3, 4, -1, 2, 1, -5, 4]
+
+
+At each index, ask: would extending the previous best HELP or HURT?
+
+  i:  0    1     2    3    4    5    6    7    8
+  v: -2    1    -3    4   -1    2    1   -5    4
+
+  current:  -2 → 1 → -2 → 4 → 3 → 5 → 6 → 1 → 5
+  decision:  -    R    E    R    E    E    E    E    E
+                  ↑    ↑    ↑
+              RESTART (1 > -2 + 1 = -1)
+                       EXTEND (-3 + 1 = -2 vs -3 alone; -2 wins)
+                            RESTART (4 > -2 + 4 = 2)
+
+  R = RESTART:   current = nums[i]         (previous best was dragging us down)
+  E = EXTEND:    current = current + nums[i]
+
+  best:    -2 →  1 →  1 →  4 →  4 →  5 →  6 →  6 →  6   ←── tracked separately
+
+  ANSWER:  6   (subarray [4, -1, 2, 1] from index 3 to 6)
+
+
+THE TWO-CHOICES PICTURE:
+
+   current      ───►   "best sum of a subarray that ENDS at index i"
+
+   At each i, current asks ONE question:
+
+         ┌──────────────────────────────────────────────┐
+         │  Was the previous current ≥ 0?               │
+         │     YES → extend:   current = current + v    │
+         │      NO → restart:  current = v              │
+         └──────────────────────────────────────────────┘
+
+   That's literally  current = max(v, current + v).
+
+   The "global" answer `best` is tracked SEPARATELY because the
+   maximum subarray might have ended at any index, not necessarily
+   the last one.
+
+
+WHY KADANE'S IS O(n) AND STILL FINDS THE OPTIMAL:
+
+   Every subarray ends at SOME index i.  By computing the best
+   sum ending at every i and taking the max across all i, we
+   cover every subarray exactly once.  O(n²) brute force tries
+   every (l, r) pair; Kadane's collapses the inner loop because
+   "best ending at i" can be built from "best ending at i-1" in O(1).
+```
+
 🏷️ **Example problems:** LC 53 Maximum Subarray · LC 152 Maximum Product Subarray (variant) · LC 121 Best Time to Buy and Sell Stock (variant)
 
 > 🧩 **Try these:**
@@ -885,6 +1035,49 @@ private void swap(int[] nums, int i, int j) {
 ```
 
 > **The classic bug:** advancing `mid` after the `nums[mid] == 2` swap. The value swapped in from the back hasn't been examined yet — if you skip it, you'll miss a 0.
+
+#### 🎨 Visual — Dutch National Flag Three Regions
+
+```
+The invariant maintained throughout the scan:
+
+    ┌──────────┬──────────┬───────────────┬──────────┐
+    │   0 0 0  │  1 1 1   │   ??? ??? ??? │  2 2 2   │
+    └──────────┴──────────┴───────────────┴──────────┘
+     0       low-1  low  mid-1  mid     high  high+1   n-1
+       sorted    sorted   unprocessed    sorted
+        0s        1s       (the gap)      2s
+
+
+CASES (mid is the scanner):
+
+  nums[mid] == 0:                    nums[mid] == 1:           nums[mid] == 2:
+    swap nums[low] ↔ nums[mid]         keep in place              swap nums[mid] ↔ nums[high]
+    low++, mid++                       mid++                      high--, mid STAYS
+    (the swapped-out value at low      (1 belongs in the           (the value just swapped in
+     was always 1 — already in         middle region — already     came from the unprocessed
+     1-region, so it's safe)           sorted)                     region — re-examine it)
+
+
+EXAMPLE walk on  [2, 0, 1, 2, 1, 0]:
+
+  Start:   [2, 0, 1, 2, 1, 0]     low=0 mid=0 high=5
+            ↑M               ↑H
+  nums[mid]=2 → swap(0,5), high=4         [0, 0, 1, 2, 1, 2]
+            ↑M           ↑H
+  nums[mid]=0 → swap(0,0), low=1 mid=1    [0, 0, 1, 2, 1, 2]
+               ↑M         ↑H
+  nums[mid]=0 → swap(1,1), low=2 mid=2    [0, 0, 1, 2, 1, 2]
+                  ↑M      ↑H
+  nums[mid]=1 → mid=3                     [0, 0, 1, 2, 1, 2]
+                     ↑M   ↑H
+  nums[mid]=2 → swap(3,4), high=3         [0, 0, 1, 1, 2, 2]
+                     ↑MH
+  nums[mid]=1 → mid=4                     [0, 0, 1, 1, 2, 2]
+                        ↑H  ↑M  → loop exits (mid > high)
+
+  FINAL: [0, 0, 1, 1, 2, 2]   ✅ sorted in ONE pass, in place
+```
 
 🏷️ **Example problems:** LC 75 Sort Colors
 
@@ -981,6 +1174,62 @@ public int firstMissingPositive(int[] nums) {
 > **Why is the swap inside a `while` loop?** Because after one swap, the new `nums[i]` may also belong elsewhere. Keep swapping until the slot stabilizes.
 
 > **Why the `nums[nums[i] - 1] != nums[i]` guard?** It prevents an infinite loop when duplicates are present (the target slot already holds the same value).
+
+#### 🎨 Visual — Cyclic Sort "Value v Belongs at Index v-1"
+
+```
+nums = [3, 1, 5, 4, 2]      (1..n distinct values)
+
+Every value v should sit at index v-1.
+
+   value:  1   2   3   4   5
+   home:   0   1   2   3   4   ← target index
+
+
+STEP-BY-STEP "send each value home":
+
+  i=0:  [3, 1, 5, 4, 2]      nums[0]=3, home is index 2
+                              swap(0, 2):  [5, 1, 3, 4, 2]
+                              nums[0]=5, home is index 4
+                              swap(0, 4):  [2, 1, 3, 4, 5]
+                              nums[0]=2, home is index 1
+                              swap(0, 1):  [1, 2, 3, 4, 5]
+                              nums[0]=1, AT HOME ✅ — exit while, advance i
+
+  i=1:  [1, 2, 3, 4, 5]      nums[1]=2, AT HOME ✅  → i++
+
+  i=2:  ... already in place        → i++
+
+  ...  every subsequent i finds its slot already correct.
+
+
+WHY THE WHILE LOOP IS REQUIRED:
+
+  Each swap places ONE value at home — but the value that came
+  in from the home slot may itself be misplaced.  The while keeps
+  swapping until nums[i] is at home OR is out of range.
+
+
+CYCLE INTERPRETATION (where the name comes from):
+
+  Treat each (index, value) as a directed edge: i → nums[i] - 1.
+  An array of distinct values in [1..n] is a permutation, which
+  is a union of CYCLES.  The while loop traverses one cycle,
+  placing every member at home in O(cycle length) operations.
+
+  Total work across all cycles = O(n).  Each swap moves at least
+  one value to its permanent home; there are at most n swaps.
+
+
+THE WIN — O(n) TIME, O(1) SPACE:
+
+  After cyclic sort, mismatches reveal:
+    nums[i] != i + 1  ⇒  index i+1 is "missing"
+                          and nums[i] is "extra/duplicate"
+
+  This is the secret behind LC 41 (First Missing Positive),
+  LC 287, LC 442, LC 448 — all the "use index as a bucket" problems.
+```
 
 🏷️ **Example problems:** LC 41 First Missing Positive · LC 268 Missing Number · LC 287 Find the Duplicate · LC 442 Find All Duplicates · LC 448 Find All Numbers Disappeared
 

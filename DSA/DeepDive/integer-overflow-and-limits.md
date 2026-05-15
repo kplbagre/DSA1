@@ -60,6 +60,79 @@ The arithmetic silently produces the **wrong answer**. Your variable is now nega
 
 This is called **two's complement representation**. You don't need to understand the bit-level details for DSA — you just need to **know it can happen and where**.
 
+### 🎨 Visual — The 32-Bit `int` Number Line and Wrap-Around
+
+```
+Java's int is just a 32-bit register.  Add 1 to the maximum bit
+pattern (0111...1 = 2,147,483,647) and you get 1000...0 — which is
+Java's encoding for the MIN_VALUE (-2,147,483,648).  The hardware
+doesn't "fault" — it just rolls over like an odometer.
+
+
+THE LINEAR PICTURE:
+
+      Integer.MIN_VALUE       0       Integer.MAX_VALUE
+            │                 │             │
+            ▼                 ▼             ▼
+   ◄──────●─────────────────●─────────────●──────►
+        -2,147,483,648                +2,147,483,647
+
+   ◄── neg overflow                    pos overflow ──►
+      (MIN - 1 wraps to MAX)          (MAX + 1 wraps to MIN)
+
+
+THE CIRCULAR PICTURE (why "wrap" is the right word):
+
+                       +2,147,483,647
+                        ┌─────────────┐
+                        │             │
+              +1 ───────►             ◄──────── (wraps)
+                        │  ┌──────┐   │
+                        │  │  0   │   │
+                        │  └──────┘   │
+              -1 ───────►             ◄──────── (wraps)
+                        │             │
+                        └─────────────┘
+                       -2,147,483,648
+
+
+CONCRETE OVERFLOW EXAMPLES:
+
+   Integer.MAX_VALUE + 1            = -2,147,483,648   ← wraps to MIN
+   Integer.MIN_VALUE - 1            =  2,147,483,647   ← wraps to MAX
+   Integer.MAX_VALUE +  100_000     =  -2,147,383,649  ← well past zero
+   1_000_000 * 3_000                =  -1,294,967_296  ← multiplication
+                                                          overflows silently
+   -Integer.MIN_VALUE               = -2,147,483,648   ← negation is a NO-OP
+                                                          (the famous trap)
+
+
+WHY  `-Integer.MIN_VALUE == Integer.MIN_VALUE` :
+
+   |Integer.MIN_VALUE| = 2,147,483,648  — one MORE than MAX_VALUE.
+   So the positive representation simply doesn't exist in 32 bits.
+   The two's-complement negation algorithm just gives MIN back.
+
+   Mental anchor: positive ints have range 0..2^31 - 1 (one short of
+   2^31), but negative ints have range 0..-2^31 (a full 2^31 of them).
+   The asymmetry is what allows MIN to have no positive twin.
+
+
+HOW LONG SAVES YOU:
+
+   long can represent ±9.2 × 10^18.  Multiplying two ints up to 2 × 10^9
+   gives at most 4 × 10^18 — still well within long range.
+
+      long sum = (long) a + b;      ← CAST ONE operand to long FIRST
+      long product = (long) a * b;  ← same: cast triggers long arithmetic
+
+   ❌  long sum = a + b;          ← WRONG — addition happens as int FIRST,
+                                    then the int result (already overflowed!)
+                                    is widened to long.
+
+   ✅  long sum = (long) a + b;   ← cast forces long arithmetic from the start.
+```
+
 ---
 
 ## 📏 Java Primitive Ranges (Memorize the Two That Matter)
@@ -241,6 +314,56 @@ int mid = low + (high - low) / 2;
 ```
 
 **Why does this work?** `high - low` is non-negative (since `low <= high` in binary search) and small relative to either `low` or `high`. Halving a small number and adding to `low` stays within int range.
+
+#### 🎨 Visual — Why `(low + high)/2` Overflows and `low + (high-low)/2` Doesn't
+
+```
+Scenario: huge array, low = 1,500,000,000   high = 1,800,000,000
+                              (both well under MAX, but their SUM is not)
+
+
+THE BUGGY VERSION:                       THE SAFE VERSION:
+   (low + high) / 2                         low + (high - low) / 2
+
+   low  + high                              high - low
+   = 1,500,000,000                          =   300,000,000     ← always small
+   + 1,800,000,000
+   = 3,300,000,000                          / 2
+                                            =   150,000,000
+   But int caps at 2,147,483,647
+   → 3,300,000,000 WRAPS to                 + low
+     -994,967,296                           = 1,650,000,000     ✅ correct mid
+
+   / 2  =  -497,483,648                     The intermediate `high - low` is
+                                            bounded by the array size — always
+   nums[mid]  →  ArrayIndexOutOfBoundsException!     a safe positive int.
+
+
+THE INVARIANT THAT SAVES THE SAFE VERSION:
+
+   In any binary search,  low <= high  ⇒  (high - low) >= 0  AND  small.
+   Specifically, `high - low <= n - 1`, where n is the array length.
+   For any realistic array (n ≤ 2 × 10^9), `high - low` fits in int.
+
+   Adding `low + small_positive` cannot overflow either — `low` is at most
+   `high`, and `low + (high-low)/2 = (low+high)/2` (mathematically), so
+   the FINAL value is fine.  Only the INTERMEDIATE `low + high` was
+   poisoned.
+
+
+WHEN DOES THIS REALLY MATTER?
+
+   Pure index binary search on arrays sized < 1 billion: not in practice
+   (no LeetCode test case is that big).  But in:
+
+     - "Binary search on the ANSWER" problems (LC 410, LC 1011, LC 875)
+       where `low` and `high` are VALUES not indices — these can be near
+       Integer.MAX_VALUE and the buggy formula WILL overflow.
+
+     - Java's own java.util.Arrays.binarySearch fixed this bug in 2006.
+       The fix is now hardwired into every Java standard-library binary
+       search.  Make it a reflex.
+```
 
 **This is the canonical fix in every Java standard-library binary search implementation.** Even if interview test cases don't hit it, write the safe form by reflex.
 

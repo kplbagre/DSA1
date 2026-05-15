@@ -184,6 +184,58 @@ Two pointers `L` and `R` start at index 0. They define a **window** `[L..R]`.
 
 Because each pointer traverses the array at most once, total work = **at most 2n operations** = O(n).
 
+### 🎨 Visual — The Worm Animation (longest substring without repeats)
+
+```
+Find LONGEST substring without repeating chars in:   a b c a b c b b
+
+  t=0:   [ a ] b c a b c b b           window: {a}            len=1
+          L=R
+
+  t=1:   [ a b ] c a b c b b           window: {a, b}         len=2
+          L   R
+
+  t=2:   [ a b c ] a b c b b           window: {a, b, c}      len=3   ← new best
+          L     R
+
+  t=3:    a [ b c a ] b c b b          window: {a, b, c}      len=3
+              ↑       ↑                shrink: 'a' dupe — drop a from left
+              L       R                (worm pulls tail forward)
+
+  t=4:    a b [ c a b ] c b b          window: {a, b, c}      len=3
+                ↑     ↑                shrink: 'b' dupe — drop b
+                L     R
+
+  t=5:    a b c [ a b c ] b b          window: {a, b, c}      len=3
+                  L     R              shrink: 'c' dupe — drop c
+
+  t=6:    a b c a b [ c b ] b          window: {b, c}         len=2
+                      L  R             shrink: 'b' dupe again
+        → a b c a b c [ b ]            window: {b}            len=1
+                        LR
+
+  t=7:    a b c a b c b [ b ]          window: {b}            len=1
+                          LR           shrink yet again
+
+  ANSWER: best length = 3
+
+
+THE WORM RULE IN ACTION:
+
+   ─►  R moves forward EVERY tick.
+   ─►  L moves forward ONLY when the window is invalid.
+
+   Both pointers cross every index AT MOST ONCE → O(n).
+
+
+WHAT THE "MONOTONICITY" CLAIM MEANS:
+
+   While R is fixed, moving L FORWARD can only DECREASE the set of
+   elements in the window — never re-introduce a dropped element.
+   So once the window becomes valid, we can stop shrinking and trust
+   it stays valid until the next expand.  That's the whole trick.
+```
+
 ### The Three Questions Template
 
 Every sliding-window problem reduces to answering three questions:
@@ -342,6 +394,78 @@ private int atMost(int[] nums, int k) {
 > **The "+ right − left + 1" insight is the most important single idea in this playlist.** It says: *"once I've shrunk to the largest valid window ending at right, all subarrays `[left..right], [left+1..right], …, [right..right]` are also valid because they're suffixes of an at-most-K window."*
 
 > **Edge case:** `atMost(K − 1)` when K = 0 means "at most −1" which is impossible → returns 0. The formula `atMost(K) − atMost(K-1)` still works.
+
+#### 🎨 Visual — Why `count += (right − left + 1)` Works
+
+```
+Suppose `right` is fixed and `[left..right]` is the LARGEST valid
+window ending at `right`.
+
+Every SUFFIX of this window is ALSO a valid window ending at `right`:
+
+    [left, ..., right]            ← length (right - left + 1)
+       [left+1, ..., right]        ← length (right - left)
+          [left+2, ..., right]      ← length (right - left - 1)
+             ⋮
+                  [right, right]   ← length 1
+
+That's exactly (right - left + 1) valid subarrays ending at right.
+
+
+CONCRETE EXAMPLE — atMost(K=2) on  nums = [1, 2, 1, 2, 3]:
+
+  right=0:  window [1]            len=1   count += 1   (total=1)
+                                            valid sub-suffixes: [1]
+
+  right=1:  window [1, 2]         len=2   count += 2   (total=3)
+                                            sub-suffixes ending at r:
+                                            [1,2], [2]
+
+  right=2:  window [1, 2, 1]      len=3   count += 3   (total=6)
+                                            [1,2,1], [2,1], [1]
+
+  right=3:  window [1, 2, 1, 2]   len=4   count += 4   (total=10)
+                                            [1,2,1,2], [2,1,2], [1,2], [2]
+
+  right=4:  add 3 → 3 distinct → SHRINK
+            shrink: drop 1, drop 2, drop 1 → window [2, 3]   len=2
+                                            count += 2   (total=12)
+                                            [2,3], [3]
+
+  ─►  atMost(2) = 12.
+
+
+THEN THE MAGIC SUBTRACTION:
+
+  atMost(2)  =  12
+  atMost(1)  =   5     ← subarrays with at most 1 distinct
+                          ([1], [2], [1], [2], [3] = 5)
+
+  exactly(2) = atMost(2) - atMost(1) = 12 - 5 = 7   ✅
+
+
+WHY THIS WORKS — INCLUSION/EXCLUSION:
+
+  Let f(k) = #subarrays with at most k distinct.
+
+      f(k)   = (count with 0 distinct) + (1) + (2) + ... + (k)
+      f(k-1) = (count with 0 distinct) + (1) + ... + (k-1)
+   ─────────────────────────────────────────────────────────
+      f(k) - f(k-1) = (count with EXACTLY k distinct)
+
+
+WHY "EXACTLY" IS HARD DIRECTLY — but "AT MOST" IS EASY:
+
+  "Exactly K distinct" is NOT monotonic.  Expanding the window
+  can turn "exactly K-1" into "exactly K" — but also into "exactly
+  K+1" — so we can't maintain a single window that stays valid
+  while just moving right.
+
+  "At most K distinct" IS monotonic.  Once the window has too many
+  distinct, ANY left-shrink can only remove or preserve distinct
+  count.  So the standard `while invalid: shrink` loop converges.
+  That's the entire reason for the subtraction trick.
+```
 
 ### How to Pick the Right Template — 10-Second Decision Tree
 

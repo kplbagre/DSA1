@@ -880,6 +880,59 @@ fib(5)
     └── fib(1) = 1
 ```
 
+### 🎨 Visual — Why Binary Recursion Explodes (and What Memoization Fixes)
+
+```
+The naive fib(5) call tree drawn as a TRUE BRANCHING TREE:
+
+                          fib(5)
+                       /          \
+                   fib(4)         fib(3)        ◀── fib(3) appears twice
+                  /     \         /     \
+              fib(3)   fib(2)  fib(2)  fib(1)   ◀── fib(2) appears THREE times
+              /   \    /  \    /  \
+           fib(2) f(1) f(1)f(0) f(1)f(0)
+           /  \
+         f(1) f(0)
+
+   TOTAL NODES (= work units):
+       fib(5) = 1
+       fib(4) = 1   fib(3) = 2   fib(2) = 3   fib(1) = 5   fib(0) = 3
+       → 15 calls for an answer  fib(5) = 5
+
+   For fib(50):  ~1.5 BILLION calls  → seconds.
+   For fib(80):  ~108 QUADRILLION calls → millennia.   (≈ 1.6 × φ^n)
+
+
+WITH MEMOIZATION — the same tree with PRUNED branches:
+
+                          fib(5)
+                       /          \
+                   fib(4)         fib(3)  ← CACHE HIT — return stored value
+                  /     \           ✂
+              fib(3)   fib(2) ← CACHE HIT — pruned
+              /   \      ✂
+           fib(2) f(1) ← CACHE HIT
+           /  \
+         f(1) f(0)
+
+   Every distinct subproblem fib(k) is computed ONCE.
+   The tree collapses from O(2^n) nodes → O(n) nodes.
+   The crossed-out branches (✂) never execute — the cache returns
+   the stored answer in O(1) and the recursion stops there.
+
+
+THE INVARIANT BEHIND MEMOIZATION:
+
+   If f(x) is a pure function of x (same input → same output, no
+   side effects), then computing f(x) once and caching the result
+   is mathematically identical to computing it every time — just
+   exponentially faster.
+
+   The flip from O(2^n) → O(n) doesn't come from a smarter algorithm.
+   It comes from refusing to do the same work twice.
+```
+
 > 🧩 **Try these:**
 > - ✅ LC 509 Fibonacci Number — write naive AND memoized
 > - ✅ LC 70 Climbing Stairs — recurse on (n-1) + (n-2). **Same shape as Fibonacci.**
@@ -1352,6 +1405,69 @@ public int[] mergeSort(int[] arr, int lo, int hi) {
     return arr;
 }
 // merge() is the standard two-pointer combine — see any sorting reference
+```
+
+### 🎨 Visual — Merge Sort Split-and-Combine Tree
+
+```
+Input array:  [5, 2, 8, 1, 9, 3, 7, 4]
+
+DIVIDE phase — keep splitting until each piece has 1 element:
+
+                  [5, 2, 8, 1, 9, 3, 7, 4]
+                     /                \
+              [5, 2, 8, 1]         [9, 3, 7, 4]
+              /          \         /          \
+           [5, 2]      [8, 1]   [9, 3]      [7, 4]
+           /  \         /  \     /  \         /  \
+         [5] [2]     [8] [1]   [9] [3]     [7] [4]
+          ←──────── BASE CASE ────────→
+          (a single element is already sorted)
+
+
+CONQUER (merge) phase — pair up siblings and MERGE them back:
+
+         [5] [2]     [8] [1]   [9] [3]     [7] [4]
+           \  /        \  /      \  /        \  /
+          [2, 5]     [1, 8]    [3, 9]      [4, 7]
+              \        /          \          /
+           [1, 2, 5, 8]          [3, 4, 7, 9]
+                    \                /
+                  [1, 2, 3, 4, 5, 7, 8, 9]    ✅ SORTED
+
+
+WHY MERGE SORT IS O(n log n):
+
+   Tree HEIGHT  = log₂(n)   ← number of split levels
+   Work per LEVEL = O(n)    ← every element is merged exactly once
+                              across all merges on that level
+   Total = n × log n
+
+
+THE MERGE STEP (key insight — two sorted halves → one sorted whole):
+
+   left  = [1, 2, 5, 8]     ptr_L = 0
+   right = [3, 4, 7, 9]     ptr_R = 0
+
+   Compare left[ptr_L] vs right[ptr_R]; take the smaller.
+       1 vs 3 → take 1 from left   result = [1]
+       2 vs 3 → take 2 from left   result = [1, 2]
+       5 vs 3 → take 3 from right  result = [1, 2, 3]
+       5 vs 4 → take 4 from right  result = [1, 2, 3, 4]
+       5 vs 7 → take 5 from left   result = [1, 2, 3, 4, 5]
+       8 vs 7 → take 7 from right  result = [1, 2, 3, 4, 5, 7]
+       8 vs 9 → take 8 from left   result = [1, 2, 3, 4, 5, 7, 8]
+       (left exhausted, drain right) result = [1, 2, 3, 4, 5, 7, 8, 9]
+
+   Each merge is O(n_left + n_right) — strictly linear in segment size.
+
+
+CALL STACK DEPTH DURING MERGE SORT:
+
+   Max depth = log₂(n).  For n = 1,000,000, depth ≈ 20.
+   That's why merge sort never blows the call stack the way naive
+   recursion on long lists does (a linear-recursion left-fold on
+   1M elements would crash at depth ~10k).
 ```
 
 > **Why `lo + (hi - lo) / 2` instead of `(lo + hi) / 2`?** Overflow safety. See integer-overflow doc.

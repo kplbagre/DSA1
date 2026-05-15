@@ -188,7 +188,75 @@ To keep notes consistent and scannable, only use emojis from this **universal pa
 
 ---
 
-### 6. Git / Commit Conventions
+### 6. ASCII Visualizations — Draw the Spatial / Sequential Concept
+
+> **Established May 2026** after the "visualize all deep dives" pass. When a concept has spatial, sequential, or stateful structure, **a picture beats prose every time**. Drawing it ASCII-art-style — inside a fenced code block — is the standard.
+
+**The rule:**
+
+> If a concept has *any* of these properties, it MUST be paired with an ASCII visualization in the doc that introduces it:
+> - **Spatial** (grids, trees, arrays, board states, matrices)
+> - **Sequential** (call stacks, recursion trees, traversal orders, pointer animations)
+> - **Stateful evolution** (sliding windows, queue contents, union-find forests, BST bounds tightening)
+> - **Topological** (graph adjacency, cycle detection, DSU components)
+
+**Why ASCII (not embedded images):**
+
+| Reason | Detail |
+| --- | --- |
+| **Renders everywhere** | GitHub, IntelliJ, Obsidian, VS Code preview — all show monospace fenced blocks identically |
+| **No broken-link risk** | The diagram lives in the same file as the explanation; never goes 404 |
+| **Walmart-network-safe** | No external image hosts to whitelist or worry about |
+| **Diff-friendly** | Changes to a diagram show as line-level diffs in git |
+| **Editable** | Future-Kapil can tweak the diagram without launching a drawing tool |
+
+**Format conventions (memorize):**
+
+1. **Wrap the diagram in a plain fenced code block** (no language tag — it's ASCII art, not code):
+    ````markdown
+    ```
+    (your diagram here, monospace alignment matters)
+    ```
+    ````
+2. **Section header** — introduce the diagram with the heading `### 🎨 Visual — <one-line description>` (uses the existing 🎨 emoji from the approved palette)
+3. **Pair the picture with the invariant** — every diagram closes with a short callout that names the **algorithmic invariant** it teaches (e.g., *"KEY INVARIANT: the queue holds at most two adjacent levels"*). The picture without the invariant is half the lesson.
+4. **Use box-drawing characters consistently** — `┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼ ─ │ ━ ┃` for boxes; `→ ← ↑ ↓` for arrows; `▶ ◀ ▼ ▲` for emphasis arrows; `◆ ● ○ ✓ ✗` for markers
+5. **Keep widths ≤ 80 columns** so the diagram doesn't horizontal-scroll on narrow viewports
+
+**The "Picture + Invariant" pattern:**
+
+````markdown
+### 🎨 Visual — <what we're showing>
+
+```
+<the ASCII diagram>
+
+<optional step-by-step animation>
+
+KEY INVARIANT:
+   <one or two lines naming the algorithmic property the picture teaches>
+```
+````
+
+**Examples from the existing knowledge base** (read these for style reference):
+
+- `DSA/DeepDive/trees-fundamentals.md` — BFS queue animation, BST bounds propagation, LCA three cases
+- `DSA/DeepDive/graphs-fundamentals.md` — adjacency list vs matrix, BFS pond-ripple, DSU path compression
+- `DSA/DeepDive/recursion-fundamentals.md` — fib explosion vs memoized pruning, merge-sort split-and-combine
+- `DSA/DeepDive/two-pointers-sliding-window-fundamentals.md` — worm animation, atMost(K) inclusion-exclusion
+- `DSA/DeepDive/integer-overflow-and-limits.md` — 32-bit int number line + circular wrap
+
+**When NOT to draw:**
+
+- One-line code snippets (`set.add(5)`) — overkill
+- Pure-syntax reference tables — the table IS the visualization
+- Concepts that are inherently algebraic, not spatial (e.g., the `==` vs `.equals()` semantics)
+
+> **Cross-reference:** the note-type standards files (`DSA/DeepDive/notes-standards-deepdive.md`, `DSA/Reference/notes-standards-reference.md`) extend this rule with specifics about *where* in the doc the visuals must appear and how many are expected.
+
+---
+
+### 7. Git / Commit Conventions
 
 - **Do not commit unless explicitly asked.** If unclear, ask the user first.
 - Use conventional commit prefixes when no ticket is involved: `chore:`, `fix:`, `refactor:`, `docs:`, `feat:`.

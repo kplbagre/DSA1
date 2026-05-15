@@ -179,6 +179,60 @@ Arrays.toString(arr);    // "[1, 0, 1, ...]" ✅
 
 ---
 
+## 🎨 ASCII Visualizations — Optional but Encouraged
+
+> **Added May 2026.** The universal "draw the spatial / sequential concept" rule lives in master `AGENTS.md` Section 6. In **DeepDive** notes, visualizations are *mandatory* (3-5 minimum per doc). In **Reference** notes — which are compact cheatsheets — visualizations are **optional**, but they are *strongly encouraged in one specific case*: **when a small diagram captures pattern shape in fewer lines than the prose blockquote would take.**
+
+### When to add a visual to a Reference note
+
+Add a `### 🎨 Visual` block (or an inline ASCII picture under a pattern) when **all three** of these are true:
+
+1. The pattern has a **signature shape** that a reader can recognize in 1 second (e.g., two pointers converging, sliding window expand/shrink, monotonic stack pop-flush)
+2. The picture is **smaller than the prose** that would describe it (≤ 10 lines of ASCII)
+3. There is **no equivalent visual in the companion DeepDive** that the reader is expected to have read already (no duplication — link instead)
+
+### When to skip
+
+- The pattern is purely API-usage (e.g., "use `merge()` for counting") — no shape to draw
+- The visual would balloon the Reference past 600 lines
+- The companion DeepDive already has the same picture — link to it with `(See \`DeepDive/<topic>-fundamentals.md\` — section "<heading>")` instead of redrawing
+
+### Format (lighter than DeepDive)
+
+In Reference notes, the visual is allowed to be **inline under the pattern's code block** without its own `### 🎨 Visual` heading, as long as it sits inside a plain fenced block. The KEY INVARIANT line is still required — it's the part the reader will memorize.
+
+````markdown
+**3. Two Pointers — Converging** ⭐
+
+> Two pointers walk from the ends toward each other; the gap between them is the unexplored region.
+
+```java
+// code
+```
+
+```
+[ . . . . L → . . . ← R . . . ]
+          ^^^^^^^^^^^^^
+          unexplored
+```
+
+**KEY INVARIANT:** everything outside `[L, R]` is already decided.
+
+**🏷️ Example problems:** Two Sum II (LC 167), Container With Most Water (LC 11).
+````
+
+### Cross-reference policy
+
+If the same picture exists in the DeepDive, the Reference note **links** rather than duplicates:
+
+```markdown
+> **Shape:** see `DeepDive/arrays-fundamentals.md` — section "🎨 Visual — Two pointers converging."
+```
+
+This keeps Reference notes lean and prevents the two files from drifting out of sync when one picture gets edited.
+
+---
+
 ## 🧠 Tone & Pedagogy
 
 - **Brief and revision-friendly** — these are notes, not tutorials. Aim for 1-3 line conceptual explanations.
@@ -272,6 +326,7 @@ Reference-specific:
 - [ ] Cheat sheet at bottom
 - [ ] Cross-references to related notes added where relevant
 - [ ] No inline `if (...) return ...;` or other multi-statement lines
+- [ ] Any ASCII visual present is shorter than the prose it replaces, ends with a `KEY INVARIANT:` line, and is not duplicated from the companion DeepDive (link instead)
 
 ---
 
@@ -306,3 +361,4 @@ If something needs to deviate from the standard for a specific topic, call it ou
 | May 2026 | **Pattern/Problem section moved** to `Patterns/notes-standards-patterns.md` (now its own folder). This file is now Reference-only. |
 | May 2026 | **Long-form-then-short-form variant** documented for complex patterns (after Kapil's HashMap Subarray Sum + Sliding Window feedback). |
 | May 2026 | Cross-reference companions added (DeepDive + Patterns standards files now exist). |
+| May 2026 | **ASCII Visualizations — Optional but Encouraged** section added. Companion to the mandatory rule in DeepDive standards and the universal rule in master `AGENTS.md` Section 6. Reference notes draw a visual only when it's shorter than the prose, has no duplicate in the companion DeepDive, and ends with a `KEY INVARIANT:` line. |

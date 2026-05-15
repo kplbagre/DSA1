@@ -33,14 +33,19 @@ Every DeepDive note follows this section template. Sections marked **[REQUIRED]*
 6.  📖 Terminology Table                         [REQUIRED]
 7.  🛠️ Class / Skeleton (if applicable, e.g., TreeNode)
 8.  🧠 Mental Model (the "most important section") [REQUIRED]
+       └── must include ≥1 🎨 Visual block
 9.  🎨 Style Habits — Universal vs Context-Specific [REQUIRED]
 10. 🚶 / 🌊 / 🧭 Patterns — each with English-steps + template + example
+       └── each spatial/sequential pattern carries a 🎨 Visual block
 11. 🌳 Special Topics (e.g., BST, two-purpose recursion ladder)
 12. 🔬 Worked Walkthroughs (3-4 problems, fully traced)  [REQUIRED]
+       └── if state evolves step-by-step, include a 🎨 Visual trace
 13. ⚠️ Gotchas (Silent Bug Hall of Fame)          [REQUIRED]
 14. 🗺️ Practice Plan (in tiers)                   [REQUIRED]
 15. 🧾 TL;DR — One-Page Summary                   [REQUIRED]
 ```
+
+> **Visual minimum across the doc:** at least **3-5 🎨 Visual blocks** per DeepDive, distributed across mental-model / patterns / walkthroughs. See the "🎨 ASCII Visualizations" section below.
 
 ---
 
@@ -190,6 +195,81 @@ Every DeepDive needs one section explicitly labeled as the **mental model** for 
 > **Trust the recursion.** When you call `solve(root.left)`, **assume it correctly solves the left subtree**. Then combine that result with the right subtree's result and the current node's contribution.
 
 This blockquote is the entire mental model. The rest of the section unpacks it.
+
+---
+
+## 🎨 ASCII Visualizations — Mandatory for Spatial / Sequential Concepts
+
+> **Established in May 2026** — after a full retrofit pass across all six DeepDives (trees, backtracking, recursion, arrays, two-pointers-sliding-window, integer-overflow) added 15+ ASCII diagrams. Visualizations turned out to be the single highest-leverage edit: the moment a reader sees "the picture," the algorithm clicks. The universal "why ASCII" rule lives in master `AGENTS.md`; this section codifies **where** visuals must appear in a DeepDive note and **what they must teach**.
+
+### The hard rule
+
+Every DeepDive must contain **at least 3-5** `### 🎨 Visual — <description>` blocks, distributed across the mental-model / pattern / walkthrough sections per the placement rules below. If you find yourself writing a paragraph that describes "imagine an array with two pointers walking toward each other" or "picture a tree being explored level by level," **stop and draw it instead**.
+
+### Mandatory placements
+
+A 🎨 Visual block **must** appear at each of these locations (when the topic has spatial or sequential structure):
+
+| Placement | What the visual should teach |
+| --- | --- |
+| **After the mental-model worked example** | The shape of the data + the algorithm's "shape of progress" (e.g., recursion's call-stack push/pop, BFS's level-by-level expansion) |
+| **Inside each pattern section that has spatial structure** | The pattern's signature picture — the thing that makes it recognizable in 1 second (e.g., two pointers converging, sliding window expand/shrink, decision tree branching) |
+| **Inside any walkthrough where state evolves step-by-step** | A frame-by-frame trace of how the state changes (e.g., the queue contents at each BFS step, the worm sliding across a string) |
+| **Inside gotchas where the bug is geometric** | The exact pixel where the bug lives (e.g., off-by-one at boundary, mid-point overflow on the number line) |
+
+### Optional placements
+
+| Placement | Use when |
+| --- | --- |
+| Inside terminology table | A term is fundamentally visual (e.g., "BST property" — show the bounds picture) |
+| Inside special-topic sections | The topic adds a new structural concept (e.g., trie shape, segment tree shape) |
+| Inside TL;DR | Never. TL;DR is text-only. |
+
+### Format (recap — full spec in master `AGENTS.md`)
+
+````markdown
+### 🎨 Visual — <what this picture teaches>
+
+```
+<box-drawn ASCII art, ≤ 80 columns wide>
+```
+
+**KEY INVARIANT:** <one-sentence statement of the algorithmic invariant the picture demonstrates.>
+````
+
+- **Plain fenced block** (no language tag) so monospace alignment is preserved
+- **≤ 80 columns** — wider breaks side-by-side viewers
+- **End with KEY INVARIANT** — the picture without the invariant is decoration; the invariant is what the reader carries away
+
+### What an invariant statement looks like
+
+| Topic | Visual | KEY INVARIANT |
+| --- | --- | --- |
+| BFS queue | Animation of queue contents per level | "The queue holds at most 2 consecutive levels at any moment." |
+| BST bounds | Range labels propagating down the tree | "Every node has a `(min, max)` range its value must fit inside, narrowed by each turn taken." |
+| Two pointers | Pointers walking toward each other | "Everything between `left` and `right` is the unexplored region; outside is already decided." |
+| Kadane's algorithm | Extend-vs-restart fork at each index | "At index i, either extend the previous best subarray or restart fresh — never both." |
+| Integer mid-point | Number line + circular wrap-around | "`low + (high - low) / 2` cannot overflow because the offset is non-negative and bounded by `high`." |
+
+### When NOT to draw
+
+- The concept is **purely arithmetic** with no spatial intuition (e.g., "modular arithmetic" — better as a formula than a picture)
+- The picture would be **identical to one already in the doc** (don't duplicate; link to the earlier visual)
+- It's a **one-line method demo** (e.g., `set.add(5);` — no visual needed)
+- It's a **wrong-vs-right gotcha snippet** under 6 lines (the ❌/✅ diff is the visual)
+
+### Companion to "English steps before code"
+
+The two rules are siblings:
+
+1. **English steps before code** — tells the reader *what the algorithm does, step by step*
+2. **🎨 Visuals** — shows the reader *what the data looks like at each step*
+
+Together they form a **prose → picture → code** progression. Skipping either one means the reader has to reconstruct it mentally. Both should appear before any non-trivial template.
+
+### Cross-reference
+
+The universal "why ASCII" rationale + the 5 format conventions live in **master `AGENTS.md` Section 6** ("ASCII Visualizations — Draw the Spatial / Sequential Concept"). This section adds DeepDive-specific placement rules and the minimum-count expectation.
 
 ---
 
@@ -430,6 +510,15 @@ DeepDive-specific:
 - [ ] 🧾 TL;DR at bottom in bullet form, scannable in 30 seconds
 - [ ] Lesson-learned callouts ("May 2026: ...") embedded where relevant
 - [ ] Reference-Only walkthroughs (if any) have the 🔴 banner + Common Bugs sub-section + build-up ladder
+
+Visualization (per "🎨 ASCII Visualizations" section above):
+- [ ] **At least 3-5 `### 🎨 Visual — <desc>` blocks** distributed across the doc
+- [ ] Mental Model section has ≥1 visual (after the worked example)
+- [ ] Every spatial/sequential pattern has its signature picture
+- [ ] Every step-by-step walkthrough where state evolves has a trace visual
+- [ ] **Each visual ends with a `KEY INVARIANT:` sentence** stating the algorithmic invariant the picture teaches
+- [ ] Visuals are in plain fenced blocks (no language tag), ≤ 80 columns wide
+- [ ] No visual duplicated across sections — duplicates are replaced by a link to the original
 
 ---
 

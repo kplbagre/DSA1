@@ -61,11 +61,91 @@ Every problem and algorithm is tagged so you can **climb tiers in order**.
 
 > **Mental model:** A graph is just a set of vertices and a relationship (the edges). Everything else — paths, cycles, connectivity — is derived from that.
 
+### 🎨 Visual Reference — Graph Types at a Glance
+
+```
+   UNDIRECTED                      DIRECTED                       WEIGHTED
+   (edges are 2-way)               (edges have arrows)            (edges carry costs)
+
+       (1)─────(2)                   (1)─────►(2)                    (1)
+       /         \                    │         ▲                  4 / \ 7
+      /           \                   │         │                   /   \
+    (3)──────────(4)                 (3)◄──────(4)                (3)───(4)
+                                                                      2
+
+   CYCLIC GRAPH                    ACYCLIC / DAG                  TREE
+   (path returns to start)         (no cycles, directed)          (connected + acyclic)
+
+       (1)─────(2)                   (1)─────►(2)                    (1)
+        │       │                            │                      /   \
+        │       │                            ▼                    (2)   (3)
+       (3)─────(4)                  (3)─────►(4)                  /
+                                                                (4)
+   1→2→4→3→1 is a cycle          no path returns to start      V-1 edges, no cycle
+
+   CONNECTED                       DISCONNECTED                   COMPLETE
+   (one component)                 (multiple components)          (every pair connected)
+
+       (1)─────(2)                   (1)─────(2)     (5)            (1)─────(2)
+        │       │                    │                                │ ╲   ╱ │
+       (3)─────(4)                  (3)─────(4)                       │  ╲ ╱  │
+                                                                      │   X   │
+                                                                      │  ╱ ╲  │
+                                                                     (3)─────(4)
+
+   DEGREE / IN-DEGREE / OUT-DEGREE                  SELF-LOOP & PARALLEL EDGES
+
+   undirected: degree = edges touching v             ┌──┐
+   directed:                                         │  │   ← self-loop on 1
+     - in-degree = arrows pointing IN                ▼  │
+     - out-degree = arrows pointing OUT             (1)─┘ ═══════ (2)
+                                                                ⇧ parallel edges
+     (1)──►(2)──►(3)
+            ▲
+            │
+           (4)        v=2: in-degree=2, out-degree=1
+```
+
 ---
 
 ## 🗂️ Graph Representations [Striver G-2, G-3]
 
 Two ways. Pick based on density.
+
+### 🎨 Visual — Same Graph, Two Representations
+
+```
+Example undirected graph (V = 5, E = 6):
+
+         (0)
+        / | \
+       /  |  \
+     (1)─(2)─(3)
+       \     /
+        \   /
+         (4)
+
+Edges: (0,1) (0,2) (0,3) (1,2) (2,3) (1,4) (3,4)
+
+
+ADJACENCY LIST                          ADJACENCY MATRIX
+(sparse-friendly, O(V+E) memory)        (dense, O(V²) memory)
+
+  0 ──► [1, 2, 3]                              0  1  2  3  4
+  1 ──► [0, 2, 4]                          0 [ 0  1  1  1  0 ]
+  2 ──► [0, 1, 3]                          1 [ 1  0  1  0  1 ]
+  3 ──► [0, 2, 4]                          2 [ 1  1  0  1  0 ]
+  4 ──► [1, 3]                             3 [ 1  0  1  0  1 ]
+                                           4 [ 0  1  0  1  0 ]
+  Memory: 5 lists +
+          14 entries (=2E)                  Memory: 25 cells (=V²)
+                                            Symmetric across diagonal
+                                            (because undirected)
+```
+
+> **For DIRECTED graphs:** the matrix is **not** symmetric — `matrix[u][v] = 1` only if there's an edge `u → v`. For the adjacency list, you add `v` to `adj.get(u)` only, never the reverse.
+
+> **For WEIGHTED graphs:** the matrix stores weight (or `∞` for "no edge"). The adjacency list stores `int[]{neighbor, weight}` pairs.
 
 ### Adjacency List (default for sparse graphs — almost every interview problem)
 
@@ -153,6 +233,25 @@ for (int[] edge : edges) {
 
 > A **connected component** is a maximal set of mutually reachable vertices. A graph with 10 vertices might have 1 component (fully connected) or 10 components (no edges at all).
 
+### 🎨 Visual — Components in a Disconnected Graph
+
+```
+A graph with 3 components:
+
+   Component A          Component B          Component C
+   ──────────          ──────────           ──────────
+
+      (0)───(1)            (3)                (5)──(6)
+        │                    │                  │    │
+        │                   (4)                 │    │
+       (2)                                     (7)──(8)
+
+
+   8 vertices, 3 components.
+   To visit every vertex, you MUST start a fresh BFS/DFS from each component.
+   That's why the outer `for (i = 0; i < V; i++) if (!visited[i]) ...` loop exists.
+```
+
 **Why it matters:** for problems like "count islands" or "number of provinces", you're literally counting connected components.
 
 **The universal counting pattern:**
@@ -176,6 +275,50 @@ return components;
 ## 🌊 BFS — Breadth-First Search [Striver G-5]
 
 > Visit vertices **level by level**, expanding outward from the start. Uses a **queue**. Natural fit for "shortest path in unweighted graph" because the first time you see a vertex is via the fewest edges.
+
+### 🎨 Visual — BFS Level-by-Level (start = 0)
+
+```
+Graph:                          BFS expands like ripples in a pond,
+                                level by level from the start.
+     (0)
+    / | \                       Level 0:  ●
+  (1)(2)(3)                                          ● = currently being visited
+   |     |                      Level 1:  ●  ●  ●    ○ = unvisited
+  (4)   (5)                                          ◉ = already visited (recorded)
+        |
+       (6)                      Level 2:  ●  ●
+                                Level 3:  ●
+
+
+Step-by-step queue + visited evolution (BFS from 0):
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ Step │ Poll │ Queue after poll │ Add neighbors  │ Visited        │
+  ├──────┼──────┼──────────────────┼────────────────┼────────────────┤
+  │  0   │  -   │ [0]              │ enqueue 0      │ {0}            │
+  │  1   │  0   │ []               │ add 1,2,3      │ {0,1,2,3}      │
+  │  1   │  -   │ [1, 2, 3]        │ (queue now)    │                │
+  │  2   │  1   │ [2, 3]           │ add 4          │ {0,1,2,3,4}    │
+  │  2   │  -   │ [2, 3, 4]        │ (queue now)    │                │
+  │  3   │  2   │ [3, 4]           │ (no new nbrs)  │ {0,1,2,3,4}    │
+  │  4   │  3   │ [4]              │ add 5          │ {0,1,2,3,4,5}  │
+  │  4   │  -   │ [4, 5]           │ (queue now)    │                │
+  │  5   │  4   │ [5]              │ (no new nbrs)  │ {0,1,2,3,4,5}  │
+  │  6   │  5   │ []               │ add 6          │ {0..6}         │
+  │  6   │  -   │ [6]              │ (queue now)    │                │
+  │  7   │  6   │ []               │ done           │ {0..6}         │
+  └──────┴──────┴──────────────────┴────────────────┴────────────────┘
+
+  BFS order:  0 → 1 → 2 → 3 → 4 → 5 → 6
+              └─── L0 ──┴── L1 ──┴── L2 ──┘  (distances: 0,1,1,1,2,2,3)
+
+
+Key invariant:  THE QUEUE ALWAYS HOLDS AT MOST TWO LEVELS AT A TIME.
+                That's why BFS gives shortest path in unweighted graphs —
+                a vertex is dequeued only after every vertex at a smaller
+                distance has been processed.
+```
 
 **Time:** `O(V + E)`. **Space:** `O(V)` for queue + visited.
 
@@ -249,6 +392,62 @@ while (!queue.isEmpty()) {
 ## 🚶 DFS — Depth-First Search [Striver G-6]
 
 > Go as deep as possible from each vertex before backtracking. Uses **recursion** (implicit stack) or an explicit `Deque`. Natural fit for "is there a path", "find all paths", "cycle detection", "topological sort".
+
+### 🎨 Visual — DFS Diving Deep (start = 0)
+
+```
+Same graph:                      DFS dives down ONE branch before
+                                 backtracking — like exploring a maze
+     (0)                         and always taking the leftmost door first.
+    / | \
+  (1)(2)(3)                      The recursion stack grows DEEP, not WIDE.
+   |     |
+  (4)   (5)
+        |
+       (6)
+
+
+Step-by-step recursion stack + order:
+
+  ┌──────┬──────────────────────────────┬─────────────────┐
+  │ Step │ Recursion stack (top → btm)  │ Order recorded  │
+  ├──────┼──────────────────────────────┼─────────────────┤
+  │  1   │ [0]                          │ 0               │
+  │  2   │ [1, 0]                       │ 0, 1            │
+  │  3   │ [4, 1, 0]                    │ 0, 1, 4         │
+  │  4   │ [1, 0]      ← 4 returns      │ 0, 1, 4         │
+  │  5   │ [0]         ← 1 returns      │ 0, 1, 4         │
+  │  6   │ [2, 0]                       │ 0, 1, 4, 2      │
+  │  7   │ [0]         ← 2 returns      │ 0, 1, 4, 2      │
+  │  8   │ [3, 0]                       │ 0, 1, 4, 2, 3   │
+  │  9   │ [5, 3, 0]                    │ 0, 1, 4, 2, 3, 5│
+  │ 10   │ [6, 5, 3, 0]                 │ ..., 5, 6       │
+  │ 11   │ [5, 3, 0]   ← 6 returns      │                 │
+  │ 12   │ [3, 0]      ← 5 returns      │                 │
+  │ 13   │ [0]         ← 3 returns      │                 │
+  │ 14   │ []          ← 0 returns      │ done            │
+  └──────┴──────────────────────────────┴─────────────────┘
+
+  DFS order:  0 → 1 → 4 → 2 → 3 → 5 → 6
+
+
+BFS vs DFS — same graph, very different traversal:
+
+   BFS order: 0  1  2  3  4  5  6        (level by level)
+   DFS order: 0  1  4  2  3  5  6        (branch by branch)
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │ BFS visualization:           DFS visualization:              │
+   │                                                              │
+   │     0                            0                           │
+   │   / | \                        /                             │
+   │  1  2  3       ←→             1                              │
+   │  |     |                      |                              │
+   │  4     5                      4 ← deep first                 │
+   │        |                         (then backtrack)            │
+   │        6                                                     │
+   └──────────────────────────────────────────────────────────────┘
+```
 
 **Time:** `O(V + E)`. **Space:** `O(V)` for recursion + visited.
 
@@ -637,6 +836,43 @@ private void dfs(int[][] grid, int r, int c, int rows, int cols,
 
 > **The key insight:** in an undirected graph, an edge `(u, v)` always goes both ways. So when you DFS from `u` to `v`, you'll see `u` again from `v`'s neighbors — that's NOT a cycle. A real cycle means you reach a visited vertex that is **NOT your immediate parent.**
 
+### 🎨 Visual — Why the Parent Check Matters
+
+```
+CASE A: NOT a cycle (just the reverse edge)
+─────────────────────────────────────────────
+
+   DFS path: 0 → 1                     (0)─────(1)
+                                        ▲
+   At vertex 1, neighbor list           │   ← from 1, we see 0 in neighbors.
+   includes 0. But 0 is the parent.    parent of 1
+   This is the SAME edge we came in    is 0
+   on, not a cycle.
+
+
+
+CASE B: REAL cycle (back edge to non-parent)
+─────────────────────────────────────────────
+
+   DFS path: 0 → 1 → 2                    (0)─────(1)
+                                            ╲       │
+   At vertex 2, neighbor list includes       ╲      │
+   0. 0 is NOT 2's parent (1 is). So          ╲     │
+   this is a "back edge" → cycle found.       (2)──┘
+                                          ↑
+                                  This edge (2,0) closes the cycle.
+
+
+
+The algorithm in one picture:
+
+      ┌─ neighbor of u is visited? ──┐
+      │                              │
+      ▼                              ▼
+   YES, AND it IS parent          YES, AND it is NOT parent
+   → IGNORE (reverse edge)        → CYCLE FOUND
+```
+
 ### Via DFS (parent tracking)
 
 **Steps in plain English:**
@@ -722,6 +958,38 @@ if (visited[v] && v != parent) {
 
 > A graph is **bipartite** if you can color every vertex with one of two colors such that no edge connects same-colored vertices. Equivalent: no odd-length cycle exists.
 
+### 🎨 Visual — Bipartite vs Not Bipartite
+
+```
+BIPARTITE ✅                                 NOT BIPARTITE ❌
+(even-length cycles only)                    (contains an ODD cycle)
+
+
+    [W]─────[B]                                 [W]─────[B]
+     │       │                                   │       │
+     │       │                                   │       │
+    [B]─────[W]                                 [B]─────[W]
+                                                  ╲     ╱
+   Cycle length = 4 (EVEN)                         ╲   ╱
+   2 colors suffice                                 [B]
+                                                  ↑
+                                            Cycle 0→1→2→0 has length 3 (ODD)
+                                            Coloring conflict guaranteed:
+   COLORING TRACE:                          you'd try to color the
+     start at top-left: W                   triangle's 3rd vertex but
+     neighbor → flip to B                   BOTH options conflict.
+     neighbor → flip to W
+     ...all consistent ✅                   COLORING TRACE:
+                                              0 = W
+                                              1 = B (flip from 0)
+                                              2 = W (flip from 1)
+                                              back to 0: 2's neighbor 0 = W
+                                                         but 2 is also W
+                                                         → CONFLICT ❌
+```
+
+> **Mental hook (also gives you the proof):** *bipartite ⇔ no odd-length cycle.* Every BFS level alternates colors. An odd cycle would force two same-colored vertices to be adjacent, breaking 2-coloring.
+
 **The algorithm:** BFS/DFS the graph, coloring as you go. If you ever try to color a vertex with a color that conflicts with a neighbor → not bipartite.
 
 ### Via BFS
@@ -788,6 +1056,61 @@ private boolean dfsColor(int u, int currColor, List<List<Integer>> adj, int[] co
 ## 🔁 Cycle Detection — Directed Graph [Striver G-19, G-20]
 
 > **Why undirected detection doesn't work here:** in a directed graph, there's no "parent" — direction matters. You can have `A → B` and `B → C` with `A` not reachable from `C` at all. The trick is tracking which vertices are **currently in the active recursion path**.
+
+### 🎨 Visual — `visited` vs `pathVisited` (the two-array trick)
+
+```
+Three-state coloring intuition:
+
+   □ WHITE      (not visited yet — visited[v] = false)
+   ▨ GRAY       (in current DFS recursion path — pathVisited[v] = true)
+   ■ BLACK      (fully processed — visited[v] = true, pathVisited[v] = false)
+
+
+CASE A: No cycle — diamond DAG
+
+   (0)──►(1)──►(3)        DFS(0):
+    │          ▲            visit 0 [GRAY]
+    ▼          │              recurse to 1
+   (2)────────┘                visit 1 [GRAY]
+                                 recurse to 3
+   When 0 explores 2,             visit 3 [GRAY]
+   then 2 explores 3,             return ←  3 becomes BLACK
+   3 is already BLACK, NOT      return    ←  1 becomes BLACK
+   GRAY — so NO cycle.            recurse to 2
+                                    visit 2 [GRAY]
+                                      explore 3: BLACK → skip
+                                    return ← 2 becomes BLACK
+                                  return ← 0 becomes BLACK
+
+
+CASE B: Cycle present
+
+   (0)──►(1)──►(2)        DFS(0):
+          ▲    │            visit 0 [GRAY]
+          │    │              recurse to 1
+          └────┘                visit 1 [GRAY]
+                                 recurse to 2
+   At 2, neighbor 1 is              visit 2 [GRAY]
+   GRAY (still on the                 explore 1: GRAY → CYCLE FOUND ❌
+   active call stack).
+                                   ↑ back edge into the current DFS path
+                                     means we're going in circles
+
+
+WHY THIS WORKS:
+
+  An edge u → v that points to a GRAY vertex v means v is an
+  ancestor of u in the DFS recursion. The path  v ↝...↝ u → v
+  is a cycle.
+
+  An edge u → v pointing to a BLACK vertex means v's whole subtree
+  has finished — that's a "cross" or "forward" edge, NOT a cycle.
+
+CRUCIAL backtrack step:
+  Before returning from DFS(u), set pathVisited[u] = false.
+  Otherwise GRAY would leak into BLACK and produce false positives.
+```
 
 ### Via DFS with Recursion Stack (`pathVisited`)
 
@@ -866,6 +1189,88 @@ if (pathVisited[v]) {
 > **What it is:** a linear ordering of vertices of a **DAG** (Directed Acyclic Graph) such that for every edge `u → v`, `u` appears before `v`. Used for prerequisite chains, build orders, task scheduling.
 
 > **Critical:** topological sort **only exists for DAGs**. If there's a cycle, no valid topo order exists — and this fact is itself the standard way to detect a directed cycle.
+
+### 🎨 Visual — The Prerequisite Graph
+
+```
+Example: course prerequisites
+
+      (0: Intro CS)
+       │       │
+       ▼       ▼
+   (1: Algos) (2: Data Struct)
+       │       │
+       └───┬───┘
+           ▼
+      (3: ML)
+           │
+           ▼
+      (4: Capstone)
+
+
+   Valid topological orders:
+     0, 1, 2, 3, 4   ✅
+     0, 2, 1, 3, 4   ✅   (1 and 2 are independent)
+
+   Invalid:
+     1, 0, 2, 3, 4   ❌   (1 before 0 violates 0→1)
+     0, 1, 3, 2, 4   ❌   (2 must come before 3)
+
+
+   Rule: for every edge u → v, u must appear BEFORE v in the order.
+```
+
+### 🎨 Visual — Kahn's Algorithm Step-by-Step
+
+```
+Same DAG. Kahn's = repeatedly pluck out vertices with in-degree 0.
+
+Initial in-degrees:                   Queue (in-degree 0 vertices):
+  0: 0   1: 1   2: 1   3: 2   4: 1     [0]
+
+
+Step 1: Poll 0. Decrement nbrs of 0 (= 1 and 2):
+  0: 0   1: 0   2: 0   3: 2   4: 1     [1, 2]
+  Order so far: [0]
+  1 and 2 hit in-degree 0 → enqueue both.
+
+Step 2: Poll 1. Decrement 3:
+  0: 0   1: 0   2: 0   3: 1   4: 1     [2]
+  Order so far: [0, 1]
+  3 still has in-degree 1 (waiting for 2) → do NOT enqueue.
+
+Step 3: Poll 2. Decrement 3:
+  0: 0   1: 0   2: 0   3: 0   4: 1     [3]
+  Order so far: [0, 1, 2]
+  3 hits in-degree 0 → enqueue.
+
+Step 4: Poll 3. Decrement 4:
+  0: 0   1: 0   2: 0   3: 0   4: 0     [4]
+  Order so far: [0, 1, 2, 3]
+  4 hits in-degree 0 → enqueue.
+
+Step 5: Poll 4. No neighbors.
+  Order so far: [0, 1, 2, 3, 4]    ← DONE!
+
+
+Queue evolution:  [0] → [1, 2] → [2] → [3] → [4] → []
+Order produced:   [0, 1, 2, 3, 4]
+Size == V?        Yes → it's a valid DAG.
+
+────────────────────────────────────────────────────────
+
+If the order is shorter than V at the end, you had a CYCLE.
+The "stuck" vertices form one or more cycles where every
+vertex always has at least one incoming edge from another
+stuck vertex — so none ever hits in-degree 0.
+
+Example (cycle):
+  (0)──►(1)──►(2)──►(0)
+
+  Initial in-degrees: 0:1, 1:1, 2:1
+  Queue is empty from the start → nothing to plug in.
+  Order = [], size 0 < 3 → CYCLE detected.
+```
 
 ### Approach 1: DFS-Based Topo Sort [G-21]
 
@@ -1166,6 +1571,95 @@ public int ladderLength(String beginWord, String endWord, List<String> wordList)
 
 > **Crucial constraint: NO negative edge weights.** Dijkstra's greedy choice depends on "once finalized, the distance can't decrease" — negative edges break this invariant. Use Bellman-Ford instead.
 
+### 🎨 Visual — Dijkstra Relaxation Trace (source = 0)
+
+```
+Weighted graph:
+
+         4
+     (0)─────(1)
+      │ \      │
+    1 │  \ 5   │ 1
+      │   \    │
+     (2)──(3)──(4)
+        2    3
+
+Edges: 0─1 (w=4), 0─2 (w=1), 0─3 (w=5),
+       1─4 (w=1), 2─3 (w=2), 3─4 (w=3)
+
+
+Initial state (dist[i] = ∞ except dist[0] = 0):
+
+  dist:  0:0   1:∞   2:∞   3:∞   4:∞
+  PQ:    [(0, 0)]                          ← (distance, vertex)
+  done:  {}
+
+
+Step 1: pop (0, 0). Relax neighbors:
+  0→1 (w=4):  0 + 4 = 4  <  ∞  → dist[1] = 4, push (4, 1)
+  0→2 (w=1):  0 + 1 = 1  <  ∞  → dist[2] = 1, push (1, 2)
+  0→3 (w=5):  0 + 5 = 5  <  ∞  → dist[3] = 5, push (5, 3)
+
+  dist:  0:0   1:4   2:1   3:5   4:∞
+  PQ:    [(1, 2), (4, 1), (5, 3)]
+  done:  {0}
+
+
+Step 2: pop (1, 2). Relax neighbors:
+  2→0: skip (already done)
+  2→3 (w=2):  1 + 2 = 3  <  5  → dist[3] = 3, push (3, 3)
+
+  dist:  0:0   1:4   2:1   3:3   4:∞
+  PQ:    [(3, 3), (4, 1), (5, 3)]      ← (5,3) is now STALE
+  done:  {0, 2}
+
+
+Step 3: pop (3, 3). Relax neighbors:
+  3→0: skip
+  3→2: 3 + 2 = 5 > 1, no update
+  3→4 (w=3):  3 + 3 = 6  <  ∞  → dist[4] = 6, push (6, 4)
+
+  dist:  0:0   1:4   2:1   3:3   4:6
+  PQ:    [(4, 1), (5, 3), (6, 4)]
+  done:  {0, 2, 3}
+
+
+Step 4: pop (4, 1). Relax neighbors:
+  1→0: skip
+  1→4 (w=1):  4 + 1 = 5  <  6  → dist[4] = 5, push (5, 4)
+
+  dist:  0:0   1:4   2:1   3:3   4:5
+  PQ:    [(5, 3), (5, 4), (6, 4)]      ← (6,4) is STALE
+  done:  {0, 1, 2, 3}
+
+
+Step 5: pop (5, 3). STALE — dist[3]=3, popped 5. Skip.
+
+Step 6: pop (5, 4). Relax neighbors: all already cheaper. Done.
+
+Step 7: pop (6, 4). STALE. Skip.
+
+Final distances:
+  dist[0]=0  dist[1]=4  dist[2]=1  dist[3]=3  dist[4]=5
+
+  Shortest path 0→4 has cost 5 (route: 0 → 2 → 3 → 4? No, that's 1+2+3=6.
+                                actual route: 0 → 1 → 4 = 4+1 = 5 ✅)
+
+
+KEY OBSERVATIONS:
+
+  1. PQ may contain MULTIPLE entries for the same vertex (stale entries).
+     That's fine — we check `if (d > dist[u]) skip;` to discard them.
+
+  2. Once a vertex pops out of PQ with its smallest distance, that
+     distance is FINAL. Greedy choice is safe because all edges are
+     non-negative — no future path can be shorter.
+
+  3. This is why Dijkstra FAILS with negative weights. A finalized
+     vertex's distance could later be made smaller by a negative edge,
+     but Dijkstra never revisits it.
+```
+
 **Time:** `O((V + E) log V)` with binary heap. **Space:** `O(V)`.
 
 **Steps in plain English:**
@@ -1350,6 +1844,85 @@ public int[][] floydWarshall(int V, int[][] edges, int n) {
 
 > **What MST is:** a subset of edges that connects all vertices with **minimum total weight** and **no cycles**. Has exactly V-1 edges.
 
+### 🎨 Visual — Prim vs Kruskal on the SAME Graph
+
+```
+Input graph (V=5, E=7):
+
+         3
+     (0)─────(1)
+      │ ╲      │
+    1 │  ╲ 4   │ 2
+      │   ╲    │
+     (2)──(3)──(4)
+        5    6
+
+Edges: (0,1,3) (0,2,1) (0,3,4) (1,4,2) (2,3,5) (3,4,6)
+
+MST goal: pick 4 edges (V-1) connecting all 5 vertices, minimum total weight.
+
+
+───────────────────────────────────────────────────────────────────────
+PRIM'S — grow from a single vertex (start = 0)
+───────────────────────────────────────────────────────────────────────
+
+  Tree starts as {0}. Heap holds candidate edges from tree to non-tree.
+
+  Step 1: tree = {0}                  Heap: [(0,1,3), (0,2,1), (0,3,4)]
+  Pick min edge (0,2,1)               Add 2.
+
+  Step 2: tree = {0, 2}               Heap: [(0,1,3), (0,3,4), (2,3,5)]
+  Pick min edge (0,1,3)               Add 1.
+
+  Step 3: tree = {0, 1, 2}            Heap: [(1,4,2), (0,3,4), (2,3,5)]
+  Pick min edge (1,4,2)               Add 4.
+
+  Step 4: tree = {0, 1, 2, 4}         Heap: [(0,3,4), (2,3,5), (3,4,6)]
+  Pick min edge (0,3,4)               Add 3.
+
+  Tree complete: {0, 1, 2, 3, 4}     Total weight = 1 + 3 + 2 + 4 = 10
+
+
+───────────────────────────────────────────────────────────────────────
+KRUSKAL'S — sort all edges, pick each that doesn't form a cycle (DSU)
+───────────────────────────────────────────────────────────────────────
+
+  Sorted edges (by weight):
+    (0,2,1) → (1,4,2) → (0,1,3) → (0,3,4) → (2,3,5) → (3,4,6)
+
+  Initial DSU: {0} {1} {2} {3} {4}    (5 components)
+
+  Edge (0,2,1):  find(0)≠find(2)?  yes → union   {0,2} {1} {3} {4}     +1
+  Edge (1,4,2):  find(1)≠find(4)?  yes → union   {0,2} {1,4} {3}       +2
+  Edge (0,1,3):  find(0)≠find(1)?  yes → union   {0,1,2,4} {3}         +3
+  Edge (0,3,4):  find(0)≠find(3)?  yes → union   {0,1,2,3,4}           +4
+  ── stop: V-1 = 4 edges used ──
+
+  Total weight = 1 + 2 + 3 + 4 = 10   ✅ same as Prim's
+
+
+───────────────────────────────────────────────────────────────────────
+THE MST (both algorithms produce the same tree here):
+───────────────────────────────────────────────────────────────────────
+
+         3
+     (0)─────(1)
+      │        │
+    1 │      2 │                MST edges: (0,2,1), (0,1,3), (1,4,2), (0,3,4)
+      │        │                Total: 10
+     (2)      (4)
+      │
+    ? │  ← wait, the original had edge (0,3,4) not (2,3,5).
+   (3)─┘    The MST picks (0,3,4) over (2,3,5).
+
+
+MENTAL HOOK:
+  Prim's   — like a spreading bushfire from one starting tree.
+  Kruskal's — like a global edge auction; cheapest non-cycling
+              edge wins each round.
+  Both are GREEDY; both end at the same total weight (when unique).
+```
+
 > **Two algorithms** — both correct, both `O(E log V)` ish:
 
 | Algorithm | Data structure | Best for |
@@ -1435,6 +2008,84 @@ public int kruskalMST(int V, int[][] edges) {
 > **What it is:** a data structure that efficiently tracks **set membership** and supports two operations:
 > - `find(x)` — return the representative of the set containing `x`
 > - `union(x, y)` — merge the sets containing `x` and `y`
+
+### 🎨 Visual — DSU as a Forest of Up-Pointing Trees
+
+```
+Each set is a tree. The root represents the set.
+parent[root] = root (self-loop semantically).
+
+
+INITIAL — 5 singleton sets:
+
+  parent: [0, 1, 2, 3, 4]                  (0)  (1)  (2)  (3)  (4)
+  rank:   [0, 0, 0, 0, 0]                   ↑    ↑    ↑    ↑    ↑
+                                            └────each is its own root
+
+
+AFTER union(0, 1) — attach lower-rank under higher-rank.
+Both have rank 0, so we pick a root and bump its rank:
+
+  parent: [0, 0, 2, 3, 4]                       (0)   (2)  (3)  (4)
+  rank:   [1, 0, 0, 0, 0]                       /
+                                              (1)
+
+AFTER union(2, 3):
+
+  parent: [0, 0, 2, 2, 4]                       (0)   (2)  (4)
+  rank:   [1, 0, 1, 0, 0]                       /     /
+                                              (1)   (3)
+
+AFTER union(1, 3) — find(1)=0, find(3)=2. Both have rank 1.
+Attach 2 under 0, bump rank of 0:
+
+  parent: [0, 0, 0, 2, 4]                       (0)            (4)
+  rank:   [2, 0, 1, 0, 0]                      / \
+                                             (1) (2)
+                                                  │
+                                                 (3)
+
+  find(3) walks: 3 → 2 → 0     (depth 2)
+```
+
+### 🎨 Visual — Path Compression in Action
+
+```
+BEFORE find(3):           AFTER find(3) (compression flattens path):
+
+      (0)                        (0)
+     / \                       / | \
+   (1) (2)                  (1)(2)(3)        ← 3 now points directly to root!
+        │
+       (3)                  Future find(3) is O(1).
+
+Recursion: find(3) = find(2) = find(0) = 0;
+           on the way back, every node's parent is rewritten to 0.
+
+  Before: parent = [0, 0, 0, 2, 4]
+  After:  parent = [0, 0, 0, 0, 4]   ← only parent[3] changed
+```
+
+### 🎨 Visual — Why Both Optimizations Matter
+
+```
+WITHOUT optimizations (worst case):           WITH both (amortized O(α(N)) ≈ O(1)):
+
+  union(1,0), union(2,1), union(3,2), ...       Any sequence of N operations
+  forms a LINKED LIST:                          takes total O(N α(N)) time.
+
+       (0)                                      Trees stay shallow because:
+        ↑                                        - union by rank limits height
+       (1)                                        to O(log N)
+        ↑                                        - path compression flattens
+       (2)                                        them further on every find
+        ↑
+       (3)        ← find(3) is O(N)!
+        ⋮
+
+  Without rank, every union could double the depth.
+  Without compression, every find re-walks the same path.
+```
 
 > **Why it matters:** Kruskal's MST, connected-components in online queries, account merging, network connectivity — DSU is the right tool whenever the problem is *"is X in the same group as Y?"* over time.
 
@@ -2272,3 +2923,4 @@ In a matrix, `r` is row (y-axis, top-to-bottom) and `c` is column (x-axis, left-
 | Date | Change |
 | --- | --- |
 | May 2026 | Initial version. Curriculum aligned to Striver's Graph Series (56 videos, G-1 through G-56). Tiered practice plan (5 tiers) with explicit difficulty tags. Code rewritten in project style. Decision frameworks (5-question funnel + keyword signals) added as this doc's pedagogical contribution. |
+| May 2026 | **Visual reference pass.** Added 9 ASCII diagram blocks: graph types reference (undirected/directed/weighted/cyclic/DAG/tree/connected/disconnected/complete, self-loop, parallel edges); adjacency list vs matrix side-by-side; connected-components diagram; BFS level-by-level trace; DFS recursion-stack trace + BFS-vs-DFS comparison; undirected cycle detection (parent edge vs back edge); bipartite vs odd-cycle counter-example; directed cycle white/gray/black coloring; Kahn's topological sort step-by-step animation; Dijkstra's relaxation trace (with stale-entry handling); Prim vs Kruskal on the same graph; DSU forest visualization (initial → unions → path compression flattening). |
