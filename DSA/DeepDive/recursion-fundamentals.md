@@ -111,6 +111,15 @@ For "reverse a linked list": `null` or single node → return the node itself.
 
 **The base case is always the easiest part of the problem.** Don't overthink it.
 
+> **⚠️ The base case can be EXPLICIT or IMPLICIT.** Most of this doc uses the explicit form. But there's a second valid form you'll see in graph DFS and N-ary tree code — covered in detail in **Pattern 3.4 — Recursion Over a Collection** below.
+>
+> | Form | What it looks like | Where you'll see it |
+> | --- | --- | --- |
+> | **Explicit** | `if (isBaseCase(input)) return baseValue;` at the top of the method | Factorial, linear list, binary tree, take/not-take — the next 1000 lines of this doc |
+> | **Implicit** | No early return. Recursion stops when the `for` loop has nothing to iterate over (or filters everything out). | Graph DFS, N-ary tree traversal, trie walk |
+>
+> Both are valid base cases. The implicit form just expresses termination through *loop exhaustion* instead of an *early return*. **If you ever read recursive code and ask "where's the base case?" — look at the loop.**
+
 ### Question 2: What's the recursive case?
 
 > *"Assuming the recursive call works correctly on a smaller input, how do I use its result?"*
@@ -1289,6 +1298,237 @@ path = []        → results: [[]]
 
 ---
 
+#### 3.4 — Recursion Over a Collection (Implicit Base Case)
+
+> **Established in May 2026** after Kapil read a graph-DFS snippet and asked *"where's the base case? this method has no return statement."* It's a real gap: every standard graph problem (LC 200 Number of Islands, LC 547 Provinces, LC 695 Max Area of Island, LC 133 Clone Graph) uses this style, and the previous patterns in this doc all use the explicit `if (isBaseCase) return;` form.
+
+##### 🧠 Mental model
+
+> **The loop IS the base case.** The recursion stops not when you hit an `if (...) return;` line at the top of the method, but when the **`for` loop's iteration set is exhausted** — either the collection is empty, or every candidate is filtered out at the call site. No explicit early return is needed because the method simply falls off the end when the loop runs zero times.
+
+Put differently — there are **two valid places** the termination logic can live:
+
+| Style | Filter location | Mental phrase | Canonical example |
+| --- | --- | --- | --- |
+| **Explicit base case** (Patterns 1–3 above) | Top of the **callee** (`if (isBaseCase) return;`) | *"Guard at the door."* | `factorial(n)`, `maxDepth(root)`, `dfs(TreeNode root)` |
+| **Implicit base case** (this pattern) | At the **call site** (`if (!visited[v]) recurse(v);`) | *"Filter before knocking."* | Graph DFS, N-ary tree traversal, trie walk |
+
+Both produce the same traversal. The implicit form is **strictly more efficient** in graphs — it never enters a frame that would immediately return — which is why every graph editorial you'll read uses it.
+
+##### When to use the implicit form
+
+Use it when **all three** are true:
+
+1. You're recursing **over a collection of candidates** (`for (int v : adj.get(u))`, `for (TreeNode child : node.children)`, `for (char c : trie.children.keySet())`) — not on a single child or a parameter you decrement
+2. **Not every candidate is valid** — some need to be filtered (already visited, out of bounds, mismatched character)
+3. The caller has enough info to filter at the call site — `visited[]`, bounds, parent-side bookkeeping
+
+If the candidate set is always non-empty and always valid (e.g., binary tree where you always recurse on `node.left` and `node.right` even if `null`) — stick with the **explicit** form, because the implicit form needs a non-null guard somewhere and you might as well put it at the top.
+
+##### Use cases — where you'll see this pattern
+
+| Problem family | The implicit base case is... |
+| --- | --- |
+| **Graph DFS** (LC 200, 547, 695, 733, 463) | "Every neighbor is already in `visited`" — the `if (!visited[v])` filter exhausts |
+| **Grid DFS / flood fill** (LC 200 Number of Islands, LC 695 Max Area, LC 130 Surrounded Regions) | "Every 4-direction neighbor is out of bounds OR not the target value OR already visited" |
+| **N-ary tree traversal** (LC 589 N-ary Preorder, LC 590 Postorder, LC 429 Level Order) | "`node.children` is empty" — the leaf condition |
+| **Trie walk** (LC 208 Implement Trie, LC 212 Word Search II) | "`node.children.isEmpty()`" or "no child matches the next character" |
+| **Topological sort via DFS** (LC 207 Course Schedule, LC 210) | "Every prerequisite of this course has been pushed" |
+
+##### Template — Steps in plain English
+
+1. **Mark / record on entry** — do the per-node work first (add to result, mark visited, mutate state). No early return.
+2. **Loop over the candidates** — iterate the collection of next-step options (neighbors, children, characters).
+3. **Filter at the call site** — for each candidate, check if it's valid (`!visited[v]`, `in-bounds`, `matches`) before recursing.
+4. **Recurse** — descend into the valid candidates.
+5. **(Optional) undo** — if backtracking, restore state on the way out. Pure DFS traversal doesn't undo.
+
+```java
+private void dfsHelper(int u, List<List<Integer>> adj,
+                       boolean[] visited, List<Integer> order) {
+    // Step 1 — mark + record on entry (no early-return guard)
+    visited[u] = true;
+    order.add(u);
+    // Step 2 — loop over candidates
+    for (int v : adj.get(u)) {
+        // Step 3 — filter at the call site
+        if (!visited[v]) {
+            // Step 4 — recurse into valid candidates
+            dfsHelper(v, adj, visited, order);
+        }
+    }
+    // No explicit return needed — method falls off the end.
+    // Base case = the for-loop body never executed.
+}
+```
+
+Note: **there is no `if (...) return;` line anywhere**. Termination is purely the for-loop running zero times — either because `adj.get(u)` is empty, or because the `if (!visited[v])` filter rejected every neighbor.
+
+##### 🎨 Visual — Where the recursion actually stops
+
+```
+Graph:        0
+            /   \
+           1     2
+           |
+           3
+
+Trace (▼ recurse, ▲ return, ★ implicit base case):
+
+dfsHelper(0)
+  mark 0, order=[0]
+  adj[0] = [1, 2]
+  ▼ v=1 (not visited)
+     dfsHelper(1)
+       mark 1, order=[0,1]
+       adj[1] = [0, 3]
+       skip v=0 (visited — call-site filter rejects)
+       ▼ v=3 (not visited)
+          dfsHelper(3)
+            mark 3, order=[0,1,3]
+            adj[3] = [1]
+            skip v=1 (visited — call-site filter rejects)
+            for-loop has nothing left ───────────────┐
+                                                     │
+            ★ IMPLICIT BASE CASE HIT ★  ────────────┘
+            (method falls off the end, returns void)
+       ▲ back at dfsHelper(1)
+       for-loop has no more candidates
+       ★ IMPLICIT BASE CASE HIT ★
+  ▲ back at dfsHelper(0)
+  ▼ v=2 (not visited)
+     dfsHelper(2)
+       mark 2, order=[0,1,3,2]
+       adj[2] = [0]
+       skip v=0 (visited)
+       for-loop has nothing left
+       ★ IMPLICIT BASE CASE HIT ★
+  ▲ back at dfsHelper(0)
+  for-loop done
+  ★ IMPLICIT BASE CASE HIT ★
+
+Final order: [0, 1, 3, 2]
+```
+
+**KEY INVARIANT:** the recursion stops at **any node whose every neighbor is filtered out by the call-site guard** (`!visited[v]`). The `for` + `if` combo replaces what `if (root == null) return;` does in tree DFS — termination is expressed through *loop exhaustion* instead of an *early return*.
+
+##### Equivalent rewrite with explicit base case (for comparison)
+
+The same algorithm in **Style 1 — explicit base case** form. Both produce identical `order`; the explicit form just wastes a stack frame per already-visited candidate (it enters the frame, checks, immediately returns).
+
+```java
+private void dfsExplicit(int u, List<List<Integer>> adj,
+                         boolean[] visited, List<Integer> order) {
+    // Explicit base case — already visited, do nothing
+    if (visited[u]) {
+        return;
+    }
+    visited[u] = true;
+    order.add(u);
+    // Recurse on EVERY neighbor; let the base case filter
+    for (int v : adj.get(u)) {
+        dfsExplicit(v, adj, visited, order);
+    }
+}
+```
+
+| | Implicit (preferred for graphs) | Explicit (rewrite) |
+| --- | --- | --- |
+| Stack frames entered for an n-node graph with m edges | O(n) — one per visited node | O(n + m) — one per attempted descent |
+| Where the filter lives | Call site (`if (!visited[v])`) | Top of callee (`if (visited[u]) return;`) |
+| Readability for graph problems | Idiomatic — matches every editorial | Verbose — fine but non-standard |
+
+##### A second example — N-ary tree preorder (LC 589)
+
+The same pattern, no `visited[]` needed because trees have no cycles. The implicit base case fires at any leaf — `node.children` is empty, the for loop runs zero times.
+
+```java
+public List<Integer> preorder(Node root) {
+    List<Integer> result = new ArrayList<>();
+    if (root == null) {
+        return result;
+    }
+    dfs(root, result);
+    return result;
+}
+
+private void dfs(Node node, List<Integer> result) {
+    // Step 1 — mark + record on entry
+    result.add(node.val);
+    // Step 2 + 3 + 4 — loop, filter (none needed), recurse
+    for (Node child : node.children) {
+        dfs(child, result);
+    }
+    // Implicit base case: at a leaf, node.children is empty,
+    // the for loop runs zero times, and the method returns.
+}
+```
+
+> **Note on the public-facing `preorder`:** the `if (root == null)` guard is at the **caller**, not inside `dfs`. The caller filters before knocking — once `dfs` is entered, `node` is guaranteed non-null. Same idea as the `if (!visited[v])` filter in the graph version.
+
+##### 🐞 Common bugs in implicit-base-case recursion
+
+**Bug 1 — Forgetting to mark *before* recursing.** If you write `for (v) { dfsHelper(v); visited[u] = true; }`, every neighbor will see `u` as not-yet-visited and infinite-loop on a cyclic graph. Mark on entry, before the loop.
+
+```java
+// ❌ wrong — marking after recursion → infinite loop on cycles
+private void dfs(int u, ...) {
+    for (int v : adj.get(u)) {
+        if (!visited[v]) {
+            dfs(v, ...);
+        }
+    }
+    visited[u] = true;
+}
+
+// ✅ right — mark on entry, before the loop
+private void dfs(int u, ...) {
+    visited[u] = true;
+    for (int v : adj.get(u)) {
+        if (!visited[v]) {
+            dfs(v, ...);
+        }
+    }
+}
+```
+
+**Bug 2 — Filtering at the callee instead of the call site, then forgetting to early-return.** If you switch styles mid-method, you get neither benefit and double the bugs.
+
+```java
+// ❌ confused mix — checks visited inside callee but doesn't return
+private void dfs(int u, ...) {
+    if (visited[u]) {
+        // forgot to return — falls through and re-records u!
+    }
+    visited[u] = true;
+    order.add(u);
+    ...
+}
+```
+
+Pick one style and commit to it.
+
+**Bug 3 — Iterating a mutable collection and mutating it during the loop.** If the recursive call removes from `adj.get(u)`, you get `ConcurrentModificationException`. Iterate a snapshot or use an index-based loop.
+
+##### 🧩 Try these (in order)
+
+> - ✅ **LC 200 Number of Islands** — flood-fill DFS on a grid, perfect first practice
+> - ✅ **LC 547 Number of Provinces** — DFS on a friendship graph (adjacency matrix form)
+> - ✅ **LC 695 Max Area of Island** — same as LC 200 but return value-via-shared-`int[1]` or sum-as-you-go
+> - ✅ **LC 463 Island Perimeter** — DFS where the call-site filter checks *both* out-of-bounds *and* not-yet-visited
+> - 🟡 **After LC 200** — LC 130 Surrounded Regions (border-DFS marking + 2-pass)
+> - 🟡 **After LC 547** — LC 207 Course Schedule (cycle detection variant — needs 3-color visited)
+> - 🟡 **After LC 207** — LC 210 Course Schedule II (topological order via post-order DFS)
+> - 🔴 LC 133 Clone Graph — DFS + a HashMap accumulator; needs the implicit base case + visited-as-map trick
+
+##### Mental hook for the interview
+
+> *"In graph DFS, the base case is the for-loop. When every neighbor is already in `visited`, the loop runs zero times and the recursion unwinds. I don't need an explicit `if (...) return;` because the filter at the call site already does that job — and it does it without wasting stack frames."*
+
+Say that aloud once and you'll never confuse Pattern 3.4 with the explicit-base-case patterns again.
+
+---
+
 ### Pattern 4: Divide and Conquer
 
 > Split the input into **two (or more) independent halves**, recurse on each, **combine** the results. Often gives O(n log n) algorithms.
@@ -1897,6 +2137,8 @@ ReturnType solve(input) {
 
 **Why:** missing or wrong base case = stack overflow or wrong answer. Forcing yourself to write it line 1 means you've thought about it before you've written any other code.
 
+> **Exception — implicit-base-case style (see Pattern 3.4).** When you're doing graph DFS, N-ary tree traversal, or anything that recurses **over a collection of filtered candidates**, the base case isn't a top-of-method early return — it's the `for` loop running zero times. In that style, "writing the base case first" means **writing the call-site filter first** (`if (!visited[v])` before the recursive call). The termination logic still has to be the *first* thing you commit to — it just lives at the call site instead of the callee. Pick one of the two locations before writing any other code.
+
 ---
 
 #### Habit 2 — Name your recursive results
@@ -2039,6 +2281,8 @@ public int factorial(int n) {
     return n * factorial(n - 1);
 }
 ```
+
+> **Note — implicit base cases are NOT missing base cases.** Graph DFS with no `if (...) return;` line is not buggy; the for-loop's call-site filter (`if (!visited[v])`) IS the base case. See Pattern 3.4 and the dedicated gotcha *"I can't find the base case in this DFS"* in the silent-bug hall of fame.
 
 ---
 
@@ -2776,6 +3020,31 @@ public int solve(...) { answer = 0; helper(...); return answer; }
 
 ---
 
+**"I can't find the base case in this DFS — there's no `return`."** If the method is `void`, starts mutating immediately with no top-of-method early return, and only contains a `for` loop with a guarded recursive call inside — **the base case is in the for-loop, not the method body**.
+
+```java
+// "Where's the base case??" → it's the loop running zero times.
+private void dfs(int u, List<List<Integer>> adj, boolean[] visited, List<Integer> order) {
+    visited[u] = true;
+    order.add(u);
+    for (int v : adj.get(u)) {
+        if (!visited[v]) {           // ← call-site filter
+            dfs(v, adj, visited, order);
+        }
+    }
+    // ★ Implicit base case: when adj.get(u) is empty OR
+    //   every v fails the !visited[v] check, the loop body
+    //   never runs, the method falls off the end. That's
+    //   exactly equivalent to `if (isBaseCase) return;`.
+}
+```
+
+**The fix — recognition, not code change.** This is the **implicit base case** pattern (see Pattern 3.4). It is *not* a bug — it's the idiomatic style for graph DFS, N-ary tree traversal, and trie walks. When you see code like this, read the call-site filter (`if (!visited[v])`) as the base case and move on.
+
+> **Mental check:** if you can't find a `return` and you're worried about an infinite loop, ask *"does the iteration set shrink each time?"* — if `visited` grows, or the recursion descends into strictly-smaller children, the loop will eventually exhaust → termination is guaranteed.
+
+---
+
 **Returning early from one branch but not the other.** Especially in OR-style recursion (e.g., "does any path exist?"), returning `false` from the first branch instead of trying the other is a classic bug.
 
 ```java
@@ -2801,9 +3070,10 @@ return hasPath(node.left, target) || hasPath(node.right, target);
 - **Recursion** = a function that calls itself on a smaller input
 - **Every recursion needs:** (1) a base case to stop, (2) a recursive call on smaller input, (3) work to combine the result
 - **The 3 questions:** What's the base case? What does the recursive call return? How do I combine?
+- **Base case can be EXPLICIT or IMPLICIT** — explicit = `if (...) return;` at top of method (Patterns 1–3); implicit = `for` loop runs zero times because the call-site filter rejected every candidate (Pattern 3.4 — graph DFS, N-ary trees)
 - **Leap of faith:** trust that `solve(smaller)` returns the right answer; don't trace the entire stack
 - **The call stack** does the bookkeeping for free — you only write the logic for one frame
-- **7 patterns:** Linear (one call), Binary (two calls), Backtracking (try/undo), Divide & Conquer (split halves), Tail/Accumulator (carry result down), Memoization (cache subproblem answers), **Two-Purpose** (return one thing + mutate a shared field — the spine of LC 543 / 124 / 687)
+- **7 patterns:** Linear (one call), Binary (two calls), Backtracking (try/undo — incl. **3.4 Recursion-Over-a-Collection** for graph DFS), Divide & Conquer (split halves), Tail/Accumulator (carry result down), Memoization (cache subproblem answers), **Two-Purpose** (return one thing + mutate a shared field — the spine of LC 543 / 124 / 687)
 - **Memoization** turns most exponential recursions into polynomial — key the cache on **all** parameters that affect the answer
 - **Tier 1 (Foundational 6) you must master:** LC 509, 70, 344, 206, 21, 50
 - **Don't use `static`** for problem state on LeetCode — use instance fields, reset in entry method

@@ -33,6 +33,22 @@ Every problem and algorithm is tagged so you can **climb tiers in order**.
 
 ---
 
+## 📍 Reading Roadmap — Medium vs Advanced
+
+> **The doc is split into two halves.** The first half is **everything you need for a medium-level SDE-2/SDE-3 interview**. The second half is senior+ territory — important to be aware of, optional to master cold.
+
+| Section | Scope | Striver videos | When to read |
+| --- | --- | --- | --- |
+| **Medium-level core** ✅ | Representation → BFS/DFS → Grid problems → Cycle detection → Bipartite → Topological Sort | G-1 to G-26 | **Start here. Master before any interview.** |
+| **Senior likely** 🟡 | Shortest Path family (BFS-SP, DAG-SP, Word Ladder, Dijkstra) | G-27 to G-35 | After Topo Sort; commonly asked at L5+ |
+| **Advanced / Senior+** 🔴 | Dijkstra applications, Bellman-Ford, Floyd-Warshall, MST, DSU, Kosaraju, Tarjan, Articulation Points | G-36 to G-56 | Read for awareness; attempt only after Tiers 1–3 of the Practice Plan are solid |
+
+> **Look for the `═══ ✋ END OF MEDIUM-LEVEL SCOPE ═══` divider** — that's where the medium portion ends. Everything below is for senior roles, system-design-adjacent rounds, or interview-prep round 2.
+>
+> **If you have ≤ 3 weeks:** master only the Medium-level core. That alone solves ~80% of LC graph problems and almost every SDE-2 graph interview question.
+
+---
+
 ## 📖 Terminology (Memorize These) [Striver G-1]
 
 | Term | Meaning |
@@ -337,15 +353,23 @@ public List<Integer> bfs(int start, List<List<Integer>> adj, int V) {
     // Step 2 — queue with starting vertex
     Queue<Integer> queue = new ArrayDeque<>();
     queue.offer(start);
-    visited[start] = true;
+    visited[start] = true;               // ← mark AT THE SAME TIME as offering.
+                                         //   Otherwise a neighbor of `start` could
+                                         //   look at `start` later, see it's still
+                                         //   unvisited, and re-enqueue it.
     List<Integer> order = new ArrayList<>();
     // Step 3 — drain the queue
     while (!queue.isEmpty()) {
-        int u = queue.poll();
+        int u = queue.poll();            // ← guaranteed unvisited-as-recorded here,
+                                         //   because the only way u got in was
+                                         //   through the filter below, which marks
+                                         //   visited BEFORE offering.
         order.add(u);
         for (int v : adj.get(u)) {
-            if (!visited[v]) {
-                visited[v] = true;       // mark visited BEFORE enqueuing
+            if (!visited[v]) {           // ← gatekeeper: only unvisited neighbors enter
+                visited[v] = true;       // ← mark BEFORE offering. This is the line
+                                         //   that prevents v from being enqueued
+                                         //   again by another neighbor of u.
                 queue.offer(v);
             }
         }
@@ -354,33 +378,58 @@ public List<Integer> bfs(int start, List<List<Integer>> adj, int V) {
 }
 ```
 
-> **The single most common BFS bug:** marking visited AFTER polling instead of BEFORE enqueuing. This causes the same vertex to be enqueued multiple times, leading to O(V²) work or wrong answers.
+> **Read the marking placement as a contract:** *"A node is marked visited at the exact moment it enters the queue — never later."* This guarantees every node enters the queue **exactly once**, so queue size ≤ V and total work is tight O(V + E).
+
+> **The single most common BFS bug:** marking visited AFTER polling instead of BEFORE enqueuing. The output is still correct (the `if (visited[u]) continue;` guard catches duplicates) — but the same vertex ends up in the queue multiple times, leading to O(V·E) work in dense graphs.
+
+**Read the annotations carefully — they pinpoint the exact moment the bug appears:**
 
 ```java
 // ❌ Mark AFTER polling — same vertex enqueued multiple times
-queue.offer(start);
+
+queue.offer(start);                      // ← start added to queue, but visited[start]
+                                         //   is still FALSE at this moment!
+
 while (!queue.isEmpty()) {
     int u = queue.poll();
-    if (visited[u]) continue;
-    visited[u] = true;
+    if (visited[u]) continue;            // ← only NOW do we check. The same node may
+                                         //   have been queued multiple times before
+                                         //   this point — we just throw away the dups.
+    visited[u] = true;                   // ← mark on POLL, not on OFFER. This is the
+                                         //   timing that breaks the "enqueued exactly
+                                         //   once" invariant.
     for (int v : adj.get(u)) {
-        queue.offer(v);                  // v may already be in the queue
+        queue.offer(v);                  // ← v could ALREADY be in the queue (added
+                                         //   by an earlier neighbor of u, or even by
+                                         //   another vertex two steps ago) — but
+                                         //   visited[v] is only flipped AT POLL, so
+                                         //   this offer happens anyway. Duplicate.
     }
 }
 
-// ✅ Mark BEFORE enqueuing — each vertex enqueued exactly once
+
+// ✅ Mark BEFORE enqueuing — each vertex enters the queue exactly once
+
 queue.offer(start);
-visited[start] = true;
+visited[start] = true;                   // ← marked AT THE SAME LINE as offering.
+                                         //   Now no neighbor of start can ever see
+                                         //   start as unvisited.
+
 while (!queue.isEmpty()) {
-    int u = queue.poll();
+    int u = queue.poll();                // ← guaranteed to be its first-and-only
+                                         //   appearance in the queue.
     for (int v : adj.get(u)) {
-        if (!visited[v]) {
-            visited[v] = true;
+        if (!visited[v]) {               // ← gatekeeper at the call site
+            visited[v] = true;           // ← mark NOW, before the offer. So if u has
+                                         //   another neighbor w that points to v too,
+                                         //   w will see v as visited — no duplicate.
             queue.offer(v);
         }
     }
 }
 ```
+
+> **The mental shift:** stop thinking *"I'll mark it visited when I process it"* — that's too late. Think *"I'll mark it visited the instant it earns a seat in the queue."* The seat-grab and the marking are a single atomic event.
 
 > 🧩 **Try these (BFS warm-up):**
 > - ✅ **LC 102** Binary Tree Level Order — BFS on a tree (you've already done this)
@@ -467,17 +516,33 @@ public List<Integer> dfs(int start, List<List<Integer>> adj, int V) {
 
 private void dfsHelper(int u, List<List<Integer>> adj,
                        boolean[] visited, List<Integer> order) {
-    // Step 2 — mark + record
-    visited[u] = true;
+    // Step 2 — mark + record ON ENTRY, before the loop
+    visited[u] = true;                   // ← mark FIRST, before doing any work.
+                                         //   This is the DFS analog of "mark on
+                                         //   enqueue" — we mark the moment we
+                                         //   "enter the function" for this node,
+                                         //   not after we've explored its kids.
     order.add(u);
     // Step 3 — recurse on unvisited neighbors
     for (int v : adj.get(u)) {
-        if (!visited[v]) {
+        if (!visited[v]) {               // ← gatekeeper at the call site. Same role
+                                         //   as `if (!visited[v])` in BFS — it
+                                         //   prevents re-entering a node we've
+                                         //   already started processing.
             dfsHelper(v, adj, visited, order);
         }
     }
+    // No explicit return needed — implicit base case fires when every neighbor
+    // is already visited and the for-loop body runs zero times.
+    // (See `recursion-fundamentals.md` Pattern 3.4 for the full mental model.)
 }
 ```
+
+> **Why marking AFTER the loop would be catastrophic:** if you wrote `for (v) recurse(v); visited[u] = true;` instead — every neighbor of `u` would call back into `u` (because `u` isn't marked yet), and you'd get **infinite recursion → stack overflow** on any cycle. Marking on entry is what makes graph DFS safe in the presence of cycles. Trees don't need this rule because there are no cycles, but graphs absolutely do.
+
+### The BFS-vs-DFS marking rule — one sentence
+
+> **In both BFS and DFS, mark `visited` at the exact moment you "claim" the node** — for BFS that's the moment you offer it to the queue; for DFS that's the moment you enter the recursive call. The `if (!visited[v])` filter at the call site is the gatekeeper that turns this discipline into "enqueued/entered exactly once."
 
 **Iterative DFS (explicit stack) — when recursion depth is a risk:**
 
@@ -486,17 +551,22 @@ public List<Integer> dfsIterative(int start, List<List<Integer>> adj, int V) {
     boolean[] visited = new boolean[V];
     List<Integer> order = new ArrayList<>();
     Deque<Integer> stack = new ArrayDeque<>();
-    stack.push(start);
+    stack.push(start);                   // ← note: we do NOT mark visited yet.
+                                         //   Iterative DFS intentionally allows
+                                         //   duplicates on the stack — read below.
     while (!stack.isEmpty()) {
         int u = stack.pop();
-        if (visited[u]) {
-            continue;
+        if (visited[u]) {                // ← duplicate-on-stack handler. Without this,
+            continue;                    //   we'd record u twice.
         }
-        visited[u] = true;
+        visited[u] = true;               // ← mark on POP, not on PUSH. This is the
+                                         //   iterative-DFS convention — see note below.
         order.add(u);
         for (int v : adj.get(u)) {
             if (!visited[v]) {
-                stack.push(v);
+                stack.push(v);           // ← v may already be on the stack lower down,
+                                         //   but the `if (visited[u]) continue;` filter
+                                         //   above will skip it the second time.
             }
         }
     }
@@ -504,7 +574,31 @@ public List<Integer> dfsIterative(int start, List<List<Integer>> adj, int V) {
 }
 ```
 
+> **"Why does iterative DFS allow duplicates but BFS doesn't?"** — Subtle but important:
+>
+> | | BFS (mark-on-enqueue) | Iterative DFS (mark-on-pop) |
+> | --- | --- | --- |
+> | **Cost of allowing duplicates** | Queue can blow up to O(V·E) — every duplicate gets processed wastefully | Stack grows a little, but the `if (visited[u]) continue;` skip is O(1) per duplicate |
+> | **Why we tolerate it in DFS** | We don't — mark-on-enqueue is correct and efficient for BFS | Mark-on-push works too, but mark-on-pop **preserves the same traversal order as recursive DFS** (last-pushed neighbor is the first to be fully explored before its siblings) |
+> | **Bottom line** | Always mark on enqueue | Either works; mark-on-pop is the convention you'll see in editorials |
+>
+> If you want **mark-on-push for iterative DFS too** (slightly more memory-efficient), the code looks just like BFS — replace `stack.push(start); visited[start] = true;` and mark inside the `if (!visited[v])` block before pushing. Just be aware the visit order may differ from recursive DFS.
+
 > **Why `Deque` and not `Stack`:** Java's legacy `Stack` class is synchronized and slow. `Deque<Integer> stack = new ArrayDeque<>();` is the modern idiom — use `push()` / `pop()` / `peek()`.
+
+### 🧭 Interview default — recursive or iterative?
+
+> **Write recursive DFS by default.** Roughly **~85% of interview-prep solutions** (LeetCode editorials, Striver, NeetCode, GfG, CCI) use the recursive form. It's shorter, mirrors the problem shape, and is what interviewers expect.
+>
+> **Switch to iterative when** any of these is true:
+>
+> | Trigger | Why |
+> | --- | --- |
+> | `V ≥ 10⁵` and worst case is a chain | Recursion will overflow JVM's ~10⁴-frame default stack |
+> | Python with default `sys.setrecursionlimit = 1000` | Recursion limit is the bottleneck, not algorithmic |
+> | Interviewer asks *"what if you can't use recursion?"* | Show you know iterative + can explain the tradeoff |
+>
+> **The senior-engineer answer:** *"I'd write recursive by default — shorter, matches the problem shape. If V can be 10⁵+ and the worst case is a chain, I'd switch to iterative to avoid stack overflow. Both are O(V + E) time."* Say that aloud once and you've covered the question.
 
 > 🧩 **Try these (DFS warm-up):**
 > - ✅ Practice problem: DFS traversal output of a graph from vertex 0
@@ -573,7 +667,124 @@ Q5: Are we MERGING SETS / counting components dynamically?
 
 ## 🧩 Grid BFS/DFS Problems [Striver G-7 to G-16]
 
-> **The core insight:** a grid is a hidden graph. Each cell is a vertex; adjacency is the 4 (or 8) neighbors. The traversal patterns are identical to general graph BFS/DFS, just with cell coordinates.
+> **First-timer bridge:** if you have NEVER applied BFS/DFS to a 2-D grid before, **do not skip this intro.** Up to now we drew graphs as circles connected by edges, with vertex IDs `0..V-1`. A grid problem hands you a `char[][]` or `int[][]` instead — and your job is to realize that this matrix **is already a graph**, just disguised. The traversal templates are exactly what you've learned; what changes is **how you name a vertex** and **how you find its neighbors**.
+
+### 🎨 Visual — A grid IS a graph (just in disguise)
+
+```
+The SAME thing, drawn two ways:
+
+
+  AS A MATRIX (what the problem gives you):
+
+         col 0   col 1   col 2
+       ┌───────┬───────┬───────┐
+  row 0│   1   │   1   │   0   │
+       ├───────┼───────┼───────┤
+  row 1│   1   │   0   │   1   │
+       ├───────┼───────┼───────┤
+  row 2│   0   │   1   │   1   │
+       └───────┴───────┴───────┘
+
+
+  AS A GRAPH (what your traversal code sees):
+
+       (0,0)───(0,1)                       (1,2)
+         │                                   │
+       (1,0)                       (2,1)───(2,2)
+
+
+  TWO CONNECTED COMPONENTS:
+    Component A = {(0,0), (0,1), (1,0)}     ← L-shape, top-left
+    Component B = {(1,2), (2,1), (2,2)}     ← L-shape, bottom-right
+
+  Water cells (0,2), (1,1), (2,0) are NOT in the graph at all —
+  they're absent from the vertex set, not just disconnected.
+
+
+  RULES OF THE DISGUISE:
+    • Each LAND cell (value '1') is a VERTEX.
+    • Two cells share an EDGE iff they are 4-directional neighbors
+      (up / right / down / left) AND both are LAND.
+    • Water cells ('0') are NOT vertices — they are absent from the graph.
+    • You never build the adjacency list explicitly. You compute
+      neighbors ON THE FLY using (r ± 1, c) and (r, c ± 1).
+
+  KEY INVARIANT:
+    A 2-D grid problem = a graph problem where the vertex ID is the
+    pair (r, c) and adjacency is a 1-step move on the grid. Once you
+    see this, every BFS / DFS template you already know applies verbatim.
+```
+
+> **What's actually different from adjacency-list graphs?**
+
+| Adjacency-list graph | Grid graph |
+| --- | --- |
+| Vertex ID is an `int` (`0..V-1`) | Vertex ID is a pair `(r, c)` |
+| Neighbors via `adj.get(u)` | Neighbors via `(r±1, c)` / `(r, c±1)` |
+| `visited` is `boolean[V]` | `visited` is `boolean[rows][cols]` (or mutate input) |
+| Edges are explicit in input | Edges are implicit — bounds + cell value define them |
+
+> **Why this realization matters:** once you internalize *"grid = graph,"* you stop memorizing 10 different "grid problems" and instead see them as **the same 3 traversals** (single-source BFS, single-source DFS, multi-source BFS) applied to a coordinate-based vertex space. The Striver problems G-7 through G-16 are all variations of one of those three traversals.
+
+> **⚠️ First-timer trap — DO NOT confuse a grid matrix with an adjacency matrix.** They look identical (both are `int[][]`) but mean OPPOSITE things. A grid like the one above is **not** an adjacency matrix — the value `grid[1][1] = 0` does *not* mean "vertex 1 has no self-loop." It means *"the cell at coordinate (1, 1) is water."* See the table below — burn it into your head once and you'll never confuse them again.
+
+### 🎨 Visual — Adjacency matrix vs Grid problem matrix (same shape, opposite meaning)
+
+```
+SAME 3x3 INT MATRIX, TWO COMPLETELY DIFFERENT INTERPRETATIONS:
+
+
+  ╭─ ADJACENCY MATRIX ──────────────╮     ╭─ GRID PROBLEM MATRIX ───────────╮
+  │                                 │     │                                 │
+  │       col=v0  col=v1  col=v2    │     │       col 0   col 1   col 2     │
+  │     ┌──────┬──────┬──────┐      │     │     ┌───────┬───────┬───────┐   │
+  │ v0  │  0   │  1   │  1   │      │     │  r0 │   1   │   1   │   0   │   │
+  │     ├──────┼──────┼──────┤      │     │     ├───────┼───────┼───────┤   │
+  │ v1  │  1   │  0   │  1   │      │     │  r1 │   1   │   0   │   1   │   │
+  │     ├──────┼──────┼──────┤      │     │     ├───────┼───────┼───────┤   │
+  │ v2  │  1   │  1   │  0   │      │     │  r2 │   0   │   1   │   1   │   │
+  │     └──────┴──────┴──────┘      │     │     └───────┴───────┴───────┘   │
+  │                                 │     │                                 │
+  │ INDICES ARE: vertex IDs         │     │ INDICES ARE: cell coordinates   │
+  │              (0, 1, 2 are       │     │              (r, c) — the       │
+  │               vertices)         │     │              vertex's NAME      │
+  │                                 │     │                                 │
+  │ CELL VALUE: 1 = there is an     │     │ CELL VALUE: 1 = this cell       │
+  │             edge between        │     │             is LAND             │
+  │             v_i and v_j         │     │             0 = this cell       │
+  │             0 = no edge         │     │             is WATER            │
+  │                                 │     │                                 │
+  │ DIAGONAL [i][i]: self-loop      │     │ DIAGONAL [r][r]: just one cell  │
+  │   (usually 0 — we don't add     │     │   of state — no special meaning │
+  │    self-loops by default)       │     │                                 │
+  │                                 │     │ ARE TWO CELLS CONNECTED?        │
+  │ ARE v_i AND v_j CONNECTED?      │     │   Computed on the fly:          │
+  │   Read the matrix: M[i][j]      │     │   - Are they 4-adjacent?        │
+  │                                 │     │     |r-r'| + |c-c'| == 1        │
+  │                                 │     │   - Are BOTH land?              │
+  │                                 │     │     grid[r][c] == '1'           │
+  │                                 │     │     grid[r'][c'] == '1'         │
+  │                                 │     │                                 │
+  ╰─────────────────────────────────╯     ╰─────────────────────────────────╯
+
+
+KEY INVARIANT:
+   The shape of the array tells you NOTHING about what it represents.
+   You have to read the problem: "is M[i][j] describing a RELATIONSHIP
+   between two things, or the STATE of one thing at position (i, j)?"
+
+     • Adjacency matrix → describes a relationship (edge yes/no).
+     • Grid matrix       → describes a state (land/water, color, height).
+
+   Grid problems are NEVER adjacency matrices — the "edges" in a grid
+   problem are 4-directional moves, and that rule lives in your traversal
+   code, not in the array.
+```
+
+> **The "vertex always reaches itself" intuition is correct — but for the WRONG matrix.** In an adjacency matrix, yes, every vertex trivially reaches itself (the diagonal *could* be `1`). In a grid problem, the coordinate `(1, 1)` is just a *position*; its cell value tells you what's *at* that position, not whether it has a self-loop. The vertex always reaches itself implicitly in graph traversal — you just don't store that fact in the grid array.
+
+---
 
 **Universal grid utilities:**
 
@@ -588,7 +799,495 @@ private boolean inBounds(int r, int c, int rows, int cols) {
 }
 ```
 
-> **Why `{-1, 0, 1, 0}` and `{0, 1, 0, -1}`:** they pair up as `(dr, dc)` → (-1, 0) up, (0, 1) right, (1, 0) down, (0, -1) left. Memorize this. For 8-directional, append the diagonals: `{-1, -1, 1, 1}` and `{-1, 1, -1, 1}`.
+### 🎨 Visual — Why the direction arrays are paired the way they are
+
+```
+The 4 directions, indexed:
+
+                              d = 0
+                          (UP, r-1, c)
+                                ▲
+                                │
+   d = 3 ◀── (LEFT, r, c-1)     ●     (RIGHT, r, c+1) ──▶ d = 1
+                           CELL (r, c)
+                                │
+                                ▼
+                        (DOWN, r+1, c)
+                              d = 2
+
+
+PAIRED ARRAYS:                INDEX REVEALS DIRECTION:
+  DR = {-1,  0,  1,  0}         d=0 → (DR[0], DC[0]) = (-1,  0) → UP
+  DC = { 0,  1,  0, -1}         d=1 → (DR[1], DC[1]) = ( 0,  1) → RIGHT
+                                d=2 → (DR[2], DC[2]) = ( 1,  0) → DOWN
+                                d=3 → (DR[3], DC[3]) = ( 0, -1) → LEFT
+
+
+HOW THE LOOP WORKS:
+
+  for (int d = 0; d < 4; d++) {
+      int nr = r + DR[d];        ← compute next row
+      int nc = c + DC[d];        ← compute next col
+      // ...check bounds + cell value, then recurse / enqueue
+  }
+
+KEY INVARIANT:
+   DR[d] and DC[d] together encode one of the 4 unit moves. The
+   loop replaces 4 hardcoded recursive calls (up/down/left/right)
+   with a clean iteration — and lets you swap in 8-directional
+   movement by extending both arrays to 8 entries.
+```
+
+> **🧠 Mnemonic for memorizing DR / DC (Kapil's rule):**
+>
+> | Array | Affects | Stays 0 for | Active for |
+> | --- | --- | --- | --- |
+> | **DR** (delta row) | the ROW coordinate | LEFT / RIGHT moves (col changes, row doesn't) | UP / DOWN moves |
+> | **DC** (delta col) | the COL coordinate | UP / DOWN moves (row changes, col doesn't) | LEFT / RIGHT moves |
+>
+> In every single move, **exactly one** of `(DR[d], DC[d])` is `±1`; **the other is 0**. That's the whole rule. If `DR` is non-zero, you're moving vertically. If `DC` is non-zero, you're moving horizontally. They never both fire at once (for 4-directional).
+>
+> **Fallback recipe if you forget the exact arrays in an interview:** don't memorize the literals — *reconstruct* them on the spot:
+>
+> 1. Write `UP, RIGHT, DOWN, LEFT` on scratch paper (any cyclic order works).
+> 2. For each: ask *"does row change? by how much?"* → that's `DR[d]`. *"Does col change? by how much?"* → that's `DC[d]`.
+> 3. Read off the answers vertically: `DR = {-1, 0, 1, 0}`, `DC = {0, 1, 0, -1}`. Done.
+>
+> No memorization required — just the 4 directions and 30 seconds of derivation.
+
+---
+
+### 🌀 Alternative: a single 4×2 array (often easier to remember)
+
+Many engineers find a **single 4×2 array** more intuitive than two parallel 1-D arrays — because each `{dr, dc}` pair sits together on its own row, with no risk of misaligning the two arrays.
+
+```java
+private static final int[][] DIRS = {
+    {-1,  0},      // UP    (row decreases, col stays)
+    { 0,  1},      // RIGHT (row stays, col increases)
+    { 1,  0},      // DOWN  (row increases, col stays)
+    { 0, -1}       // LEFT  (row stays, col decreases)
+};
+```
+
+```java
+// The loop becomes even cleaner:
+for (int[] dir : DIRS) {
+    int nr = r + dir[0];
+    int nc = c + dir[1];
+    // ...check bounds + cell value, then recurse / enqueue
+}
+```
+
+> **Why this is genuinely easier to memorize:**
+>
+> | Two-array style (`DR[]` + `DC[]`) | Single-array style (`DIRS[][]`) |
+> | --- | --- |
+> | Two arrays must stay aligned | One array — pairs can never misalign |
+> | Visually you read **vertically** to get one direction | Visually you read **one row** to get one direction |
+> | Memorize **two** literal sequences | Memorize **four** direction-pairs you can write in any order |
+> | Common in competitive-programming code | Common in production Java code |
+>
+> **Order doesn't matter** — `DIRS` can be `{up, right, down, left}` or `{down, left, up, right}` or any permutation. As long as all four unit moves appear exactly once, every grid algorithm in this doc still works correctly.
+>
+> **Use whichever style you find easier.** Both compile to identical bytecode and both are accepted in interviews. The rest of this doc shows the `DR[]` / `DC[]` style because that's the Striver convention — but feel free to mentally substitute `DIRS[][]` when you write code yourself.
+
+---
+
+> **For 8-directional movement** (used in some chess/king-move problems and LC 1091 Shortest Path in Binary Matrix):
+>
+> ```java
+> // Two-array style:
+> int[] DR8 = {-1, -1, -1,  0, 0,  1, 1, 1};
+> int[] DC8 = {-1,  0,  1, -1, 1, -1, 0, 1};
+>
+> // Or single 4×2 → 8×2 alternative:
+> int[][] DIRS8 = {
+>     {-1, -1}, {-1, 0}, {-1, 1},        // top-left, top, top-right
+>     { 0, -1},          { 0, 1},        // left,            right
+>     { 1, -1}, { 1, 0}, { 1, 1}         // bottom-left, bottom, bottom-right
+> };
+> ```
+>
+> The 8-directional case is where the `DIRS[][]` style really shines — laid out as a 3×3 "punched-out center" pattern (8 entries because the center `{0,0}` doesn't count as a move), it's nearly impossible to forget.
+
+---
+
+## 🧱 Grid DFS and BFS Templates — your building blocks before any problem
+
+> **Before you attempt LC 200 (Number of Islands) or any grid problem, write these two templates from memory.** They are nearly identical to the adjacency-list versions you already know — the ONLY differences are:
+>
+> 1. **Vertex name** is `(r, c)` instead of an `int`
+> 2. **Neighbors** come from the direction arrays (`DR[d]`, `DC[d]`) instead of `adj.get(u)`
+>
+> Everything else — mark-on-enqueue, bounds-checking, the BFS-vs-DFS marking discipline — is **identical** to the adjacency-list templates. If you've internalized the general BFS/DFS templates earlier in this doc, you've already done 90% of the work.
+
+---
+
+### Grid DFS — the canonical template
+
+**The contract:** *"Given a starting cell `(r, c)` on a grid, recursively visit every cell reachable from it via 4-directional moves on land. Mark each visited cell so we never revisit it."*
+
+**Steps in plain English:**
+
+1. **Entry guard (combined check)** — if `(r, c)` is out of bounds OR is water (`'0'`) OR was already visited, return immediately. This single `if` does triple duty.
+2. **Mark current cell as visited** — flip the value in-place (`'1' → '0'`) so subsequent visits hit the entry guard. *(If the problem forbids mutating input, use a separate `boolean[][] visited` array — same logic.)*
+3. **Recurse into all 4 neighbors** using `DR[d]` / `DC[d]`. Each recursive call re-enters at Step 1, so out-of-bounds and water cells short-circuit cleanly.
+
+```java
+private void dfs(char[][] grid, int r, int c, int rows, int cols) {
+    // Step 1 — combined entry guard does triple duty:
+    //          out-of-bounds + water + already-visited
+    if (!inBounds(r, c, rows, cols) || grid[r][c] != '1') {
+        return;
+    }
+    // Step 2 — mark visited IN PLACE so we never revisit this cell
+    grid[r][c] = '0';          // ← mark-on-entry (DFS analog of mark-on-enqueue)
+    // Step 3 — recurse into 4 neighbors
+    for (int d = 0; d < 4; d++) {
+        dfs(grid, r + DR[d], c + DC[d], rows, cols);
+    }
+    // ← no explicit return; the for-loop exhausts naturally
+    //   (this is the IMPLICIT base case — see recursion-fundamentals.md §3.4)
+}
+```
+
+> **Why the bounds check goes FIRST in the `||` chain:** Java's `||` short-circuits left-to-right. If we wrote `grid[r][c] != '1' || !inBounds(...)`, then for any out-of-bounds call (e.g., `dfs(-1, 0, ...)`), the FIRST condition would try to read `grid[-1][0]` and throw `ArrayIndexOutOfBoundsException`. **Bounds-check first, value-check second** — always.
+
+### 🎨 Visual — DFS sweeping a 2×2 island
+
+```
+Tiny grid (one 2x2 island):              Land cells: (0,0), (0,1), (1,0), (1,1)
+                                          Start DFS from (0, 0).
+  ┌───┬───┬───┐
+  │ 1 │ 1 │ 0 │
+  ├───┼───┼───┤                          KEY: ✓ = marked visited at this step
+  │ 1 │ 1 │ 0 │                               ↳ = recurses INTO this call
+  ├───┼───┼───┤                               ⊘ = returns immediately (guard fails)
+  │ 0 │ 0 │ 0 │
+  └───┴───┴───┘
+
+
+DFS RECURSION TREE (left-to-right = order of recursive calls):
+
+  dfs(0,0)  ✓ mark (0,0) = '0'
+    │
+    ├─↳ dfs(-1, 0)   ⊘ out of bounds
+    │
+    ├─↳ dfs( 0, 1)  ✓ mark (0,1) = '0'
+    │     │
+    │     ├─↳ dfs(-1, 1)   ⊘ out of bounds
+    │     ├─↳ dfs( 0, 2)   ⊘ water (grid[0][2] = '0')
+    │     ├─↳ dfs( 1, 1)  ✓ mark (1,1) = '0'
+    │     │     │
+    │     │     ├─↳ dfs( 0, 1)   ⊘ already '0' (just marked above)
+    │     │     ├─↳ dfs( 1, 2)   ⊘ water
+    │     │     ├─↳ dfs( 2, 1)   ⊘ water
+    │     │     └─↳ dfs( 1, 0)  ✓ mark (1,0) = '0'
+    │     │           │
+    │     │           ├─↳ dfs( 0, 0)   ⊘ already '0'
+    │     │           ├─↳ dfs( 1, 1)   ⊘ already '0'
+    │     │           ├─↳ dfs( 2, 0)   ⊘ water
+    │     │           └─↳ dfs( 1,-1)   ⊘ out of bounds
+    │     │     ← (1, 0) returns
+    │     ← (1, 1) returns
+    │     └─↳ dfs( 0, 0)   ⊘ already '0'
+    │     ← (0, 1) returns
+    │
+    ├─↳ dfs( 1, 0)   ⊘ already '0' (marked deep in the recursion above)
+    │
+    └─↳ dfs( 0,-1)   ⊘ out of bounds
+  ← (0, 0) returns — DFS complete.
+
+Final grid (all 4 land cells flipped to '0'):
+
+  ┌───┬───┬───┐
+  │ 0 │ 0 │ 0 │
+  ├───┼───┼───┤
+  │ 0 │ 0 │ 0 │
+  ├───┼───┼───┤
+  │ 0 │ 0 │ 0 │
+  └───┴───┴───┘
+
+
+KEY INVARIANT:
+   Every land cell reachable from (0, 0) is visited exactly once.
+   The mark-on-entry (Step 2) is what prevents infinite recursion —
+   the very NEXT time any other call tries to re-enter a marked cell,
+   the entry guard short-circuits and returns immediately.
+```
+
+---
+
+### Grid BFS — the canonical template
+
+**The contract:** *"Given a starting cell `(r, c)`, visit every reachable land cell **in order of distance from the start**, using a queue. Mark cells the moment you enqueue them — NEVER when you dequeue them."*
+
+**Steps in plain English:**
+
+1. **Mark the start as visited AND enqueue it** — both in the same breath. This is the mark-on-enqueue contract; see "BFS marking-discipline" callout earlier in this doc for why mark-on-poll is a bug.
+2. **While the queue is non-empty:** poll a cell, then for each of its 4 neighbors —
+   - Skip if out-of-bounds, water, or already visited.
+   - Otherwise **mark visited FIRST**, then enqueue.
+
+```java
+private void bfs(char[][] grid, int startR, int startC, int rows, int cols) {
+    Queue<int[]> queue = new ArrayDeque<>();
+    // Step 1 — mark start visited AND enqueue (same breath)
+    grid[startR][startC] = '0';                  // ← mark-on-enqueue
+    queue.offer(new int[]{startR, startC});
+
+    // Step 2 — process the queue layer by layer
+    while (!queue.isEmpty()) {
+        int[] cell = queue.poll();
+        int r = cell[0];
+        int c = cell[1];
+        for (int d = 0; d < 4; d++) {
+            int nr = r + DR[d];
+            int nc = c + DC[d];
+            // Combined guard: bounds + value-is-land.
+            // (Because we mark-on-enqueue, already-visited cells are '0' too —
+            //  so this check covers ALL three rejections in one expression.)
+            if (inBounds(nr, nc, rows, cols) && grid[nr][nc] == '1') {
+                grid[nr][nc] = '0';              // ← mark BEFORE enqueueing
+                queue.offer(new int[]{nr, nc});  // ← only enqueue once marked
+            }
+        }
+    }
+}
+```
+
+> **Why mark-on-enqueue is critical (not mark-on-poll):** if you wait until you `poll()` a cell to mark it visited, the SAME cell can be enqueued multiple times from multiple neighbors before its first poll. For a single component of `N` cells with average degree `4`, mark-on-poll can balloon the queue from `O(N)` to `O(4N) = O(N)` — same big-O but a constant-factor blow-up AND a real correctness bug in distance-tracking BFS where each enqueue carries `dist + 1` (you'd record the wrong distance). **Always mark the moment you enqueue.**
+
+### 🎨 Visual — BFS layer-by-layer on the same 2×2 island
+
+```
+Same grid, BFS from (0, 0). Annotated with the queue state after each step.
+
+
+Step 0: INITIAL                                   QUEUE: [(0,0)]
+                                                   marked: (0,0)
+  ┌───┬───┬───┐
+  │ 0 │ 1 │ 0 │      ← (0,0) marked '0' at enqueue
+  ├───┼───┼───┤
+  │ 1 │ 1 │ 0 │
+  ├───┼───┼───┤
+  │ 0 │ 0 │ 0 │
+  └───┴───┴───┘
+
+
+Step 1: POLL (0,0). Examine 4 neighbors:           QUEUE: [(0,1), (1,0)]
+   (-1, 0) ⊘ out of bounds                          marked: (0,0), (0,1), (1,0)
+   ( 0, 1) ✓ land → MARK + ENQUEUE
+   ( 1, 0) ✓ land → MARK + ENQUEUE
+   ( 0,-1) ⊘ out of bounds
+
+  ┌───┬───┬───┐
+  │ 0 │ 0 │ 0 │
+  ├───┼───┼───┤
+  │ 0 │ 1 │ 0 │
+  ├───┼───┼───┤
+  │ 0 │ 0 │ 0 │
+  └───┴───┴───┘
+
+
+Step 2: POLL (0,1). Examine 4 neighbors:           QUEUE: [(1,0), (1,1)]
+   (-1, 1) ⊘ out of bounds                          marked: (0,0), (0,1), (1,0), (1,1)
+   ( 0, 2) ⊘ water (already '0')
+   ( 1, 1) ✓ land → MARK + ENQUEUE
+   ( 0, 0) ⊘ already marked '0'
+
+  ┌───┬───┬───┐
+  │ 0 │ 0 │ 0 │
+  ├───┼───┼───┤
+  │ 0 │ 0 │ 0 │
+  ├───┼───┼───┤
+  │ 0 │ 0 │ 0 │
+  └───┴───┴───┘
+
+
+Step 3: POLL (1,0). All neighbors rejected:        QUEUE: [(1,1)]
+   ( 0, 0) ⊘ already marked
+   ( 1, 1) ⊘ already marked
+   ( 2, 0) ⊘ water
+   ( 1,-1) ⊘ out of bounds
+
+
+Step 4: POLL (1,1). All neighbors rejected:        QUEUE: []
+   ( 0, 1) ⊘ already marked
+   ( 1, 2) ⊘ water
+   ( 2, 1) ⊘ water
+   ( 1, 0) ⊘ already marked
+
+
+QUEUE EMPTY → BFS done. 4 cells visited.
+
+
+KEY INVARIANT:
+   Each cell is marked exactly ONCE — the moment it enters the queue.
+   That guarantees the queue holds at most O(N) cells total and each
+   cell is processed exactly once. If we'd marked at POLL time instead,
+   (1, 1) could have been enqueued TWICE (from (0,1) and (1,0)) before
+   being polled — wasted work and (in distance-tracking BFS) wrong answers.
+```
+
+---
+
+### 🧭 Marking strategy — in-place vs separate `boolean[][] visited`
+
+Both templates above use **in-place marking** (`grid[r][c] = '0'`). That's idiomatic for LC 200, but it's not the only valid choice. A separate `boolean[][] visited` array is equally accepted and sometimes the better engineering call. Here's the decision aid.
+
+**Two ways to track visited cells on a grid:**
+
+| Strategy | Extra space | Modifies input? | When to pick it |
+| --- | --- | --- | --- |
+| **In-place** (`grid[r][c] = '0'`) | O(1) | Yes — destroys input | LC editorial style; you own the grid and don't need it after |
+| **Separate `boolean[][] visited`** | O(rows × cols) | No — input untouched | Problem says "don't modify input" / grid is `final` / values aren't a clean binary / production-style code |
+
+**The asymptotic complexity is IDENTICAL either way** — the recursion stack (DFS) or queue (BFS) is already O(rows × cols) in the worst case, so adding a visited array doesn't change Big-O. Don't let "saves O(mn) space" pressure you into the in-place variant if you're not 100% confident with it.
+
+**🧠 Why in-place works:** the value `'0'` becomes overloaded — it means BOTH "originally water" AND "already-visited land." The entry guard `grid[r][c] != '1'` rejects both, which is exactly what we want: *"don't enter this cell, regardless of why."*
+
+**The visited-array variant** (drop-in replacement for the DFS template):
+
+```java
+private void dfs(char[][] grid, boolean[][] visited, int r, int c, int rows, int cols) {
+    // entry guard now has THREE checks: bounds, water, visited
+    if (!inBounds(r, c, rows, cols) || grid[r][c] != '1' || visited[r][c]) {
+        return;
+    }
+    visited[r][c] = true;                  // ← mark in the separate array, grid stays intact
+    for (int d = 0; d < 4; d++) {
+        dfs(grid, visited, r + DR[d], c + DC[d], rows, cols);
+    }
+}
+```
+
+Same shape, same logic — just one extra parameter and one extra check.
+
+**🎯 Interview recommendation (the part future-Kapil should re-read on the morning of an onsite):**
+
+1. **Pick the variant your hands are confident with.** A correct visited-array solution in 18 minutes BEATS a buggy in-place attempt at minute 22. Confidence under pressure > marginal elegance.
+2. **State the trade-off upfront.** That single sentence is what signals senior thinking — NOT which variant you actually pick:
+
+   > *"For visited tracking, I'll use a separate `boolean[][] visited` — I prefer not to mutate the caller's input, which matches production Java style. The in-place trick would save O(rows × cols) auxiliary space — happy to switch if you'd prefer that."*
+
+3. **If the interviewer pushes back on space:** that's a prompt, not a critique. Calmly switch to in-place marking on the spot — you've now demonstrated both, which is +1 not -1.
+
+**Framing matters as much as the choice:**
+
+| ❌ Junior framing | ✅ Senior framing (same choice!) |
+| --- | --- |
+| *"I'll use a visited array because I'm more comfortable with it."* | *"I'll use a visited array — backend Java code should avoid mutating caller inputs."* |
+| *"I think in-place is cleaner."* | *"I'll mark in place — saves O(mn) extra space, and the problem doesn't require preserving the input."* |
+
+Same code. Different signal. **Pick your words deliberately.**
+
+> **Lesson learned (May 2026):** Naming the trade-off explicitly is worth more interview points than picking the marginally more elegant variant. The interviewer is watching for *"did this candidate see the choice?"* — not *"did this candidate pick the same one I would?"*
+
+**🧾 TL;DR for this template choice:**
+
+- Both variants are valid. Same Big-O.
+- In-place = O(1) extra space, destructive. Idiomatic for LC.
+- Visited array = O(mn) extra space, non-destructive. Cleaner for production / backend code.
+- **In an interview: pick whichever you can write confidently AND verbalize the trade-off upfront.** Both choices are senior-grade if you name the trade-off; both are junior-grade if you don't.
+
+---
+
+### 🧭 Top-down vs bottom-up DFS — `visited[][]` works for both styles
+
+The DFS template above is **top-down**: state (the `visited[][]` array, `r`/`c`) flows DOWN through parameters; the method returns `void`; the "answer" lives in a class-level counter that the outer loop increments. Many grid problems instead need **bottom-up DFS** — where each call returns a *computed value* (an area, a max, a count) and parents combine children's returns.
+
+**The key insight: the `visited[][]` mechanism is BYTE-FOR-BYTE IDENTICAL in both styles.** You don't learn a new pattern — visited tracking is shared mutable state, and it propagates the same way regardless of whether the DFS returns void or a value.
+
+**Steps in plain English (bottom-up variant — LC 695 Max Area of Island):**
+
+1. **Entry guard** — same as top-down: out-of-bounds OR water OR already-visited → return **`0`** (nothing reachable from here).
+2. **Mark visited** — same as top-down, `visited[r][c] = true`.
+3. **Count THIS cell** as area `1`.
+4. **Recurse into 4 neighbors and ADD their returns** to the running area — this is the "bubble up" step.
+5. **Return** the accumulated area to the caller.
+
+```java
+public int dfs(int r, int c, char[][] grid, boolean[][] visited, int m, int n) {
+    // Step 1 — entry guard returns 0 (not void) for bottom-up
+    if (!inBound(r, c, m, n) || grid[r][c] == '0' || visited[r][c]) {
+        return 0;
+    }
+    // Step 2 — same visited mutation as top-down
+    visited[r][c] = true;
+    // Step 3 — count THIS cell
+    int area = 1;
+    // Step 4 — bubble up each child's return
+    for (int[] d : DIRS) {
+        area += dfs(r + d[0], c + d[1], grid, visited, m, n);
+    }
+    // Step 5 — return computed value
+    return area;
+}
+```
+
+Notice: lines 1–2 are identical to the top-down template. Only the `return` type and the accumulation logic changed.
+
+| Style | What flows DOWN as parameters | What flows UP via return | `visited[][]` handling | Typical problem |
+| --- | --- | --- | --- | --- |
+| **Top-down DFS** | `r`, `c`, `grid`, `visited` | nothing (`void`) — outer counter holds the answer | Mark on entry, never read return | LC 200 — count components |
+| **Bottom-up DFS** | `r`, `c`, `grid`, `visited` | the area / max / count reachable from this cell | Mark on entry, ADD children's returns | LC 695 — max island area |
+
+**🧠 Why does the SAME `visited[][]` work in both?** Because Java passes the array reference *by value* — every recursive call (top-down or bottom-up) sees the SAME underlying array on the heap, and mutations to its contents propagate to all callers/callees. **Full mechanics + the three strategies for opting out (defensive copy / deep copy / immutability) are covered in `../../JavaBackend/DeepDive/java-pass-by-value-semantics.md`** — that's a Java-language topic, not a grid topic, so it lives in its own deep dive.
+
+**Mental shortcut for picking the style:**
+
+| If the problem asks for... | Use... | Outer loop does... |
+| --- | --- | --- |
+| **Count of components / islands** | Top-down (`void`) + outer counter | `count++` on each discovery |
+| **Max / min / sum over components** | Bottom-up (returns `int`) | `max = Math.max(max, dfs(...))` |
+| **Existence ("is there a path")** | Bottom-up (returns `boolean`) | short-circuit on `true` |
+
+---
+
+### When to use DFS vs BFS on a grid
+
+| Use **DFS** when | Use **BFS** when |
+| --- | --- |
+| Counting components / islands (LC 200, LC 695) | Shortest path from a cell |
+| Flood fill / recolor (LC 733) | Multi-source spreading (LC 994 Rotten Oranges) |
+| Path / shape recording (LC 694 Distinct Islands) | Distance from nearest source (LC 542 01 Matrix) |
+| Stack depth is fine (small/medium grids) | Need strict level-by-level processing |
+| You don't care about distance from start | Distance matters |
+| Code is shorter (recursion implicit) | Need explicit queue for layer state |
+
+> **Default rule for grid problems:** if the problem asks for **distance / shortest path / "minimum minutes"** → **BFS**. If it asks for **existence / count / shape / fill** → **DFS** (usually cleaner code).
+>
+> **Stack-overflow caveat:** for grids larger than ~10⁶ cells (e.g., 1000×1000 worst case), recursive DFS can blow the JVM stack. If you hit `StackOverflowError`, switch to **iterative DFS with an explicit stack** (same template as iterative graph DFS, just `int[]` cells instead of `int` vertex IDs).
+
+---
+
+### 🐞 Common bugs hall of fame — grid DFS
+
+Before writing your first grid DFS from scratch, internalize these four traps. **Every one was discovered the hard way during the May 2026 LC 200 attempt.** They look trivial in hindsight, but each one will silently break your algorithm without crashing — meaning unit-test failure, not a clean compile error.
+
+| # | The bug | What it does | The fix |
+| --- | --- | --- | --- |
+| 1 | `int n = grid[1].length;` instead of `grid[0].length` | Crashes on 1-row grids — `grid[1]` is out of bounds when `m == 1` | Always `grid[0].length` (or guard `grid.length == 0` first) |
+| 2 | Outer guard checks only `!visited[i][j]`, forgets `grid[i][j] == '1'` | **Every water cell counted as its own island** — wildly wrong count, often passes small tests and fails larger ones | Guard MUST be `grid[i][j] == '1' && !visited[i][j]` — see the 🧠 two-loops mental model in Sub-Pattern 1 for why |
+| 3 | `dfs(r + dr, r + dc, ...)` — typo using `r` twice instead of `r` + `c` | Wrong adjacency / OOB crashes — algorithm visits cells that aren't 4-adjacent. Silent on small inputs, garbage on real ones | Every direction call MUST be `dfs(r + dr, c + dc, ...)` — eyeball it before submit |
+| 4 | Class field named `dr` AND local `int dr = d[0]` inside the loop | Variable shadowing — legal Java but confusing in interview review; the interviewer will pause and squint | Rename the class field to `DIRS` (or `dir`). Local row/col deltas stay as `dr`/`dc` |
+
+**The "verify before submit" checklist for every grid DFS / BFS:**
+
+1. **Dims:** `m = grid.length`, `n = grid[0].length`. Never `grid[1]`.
+2. **Outer guard:** `grid[i][j] == '1' && !visited[i][j]` — say out loud *"land AND unvisited."*
+3. **Direction call:** `dfs(r + dr, c + dc, ...)`. Eyeball it — BOTH prefixes must differ. Never `r+dr, r+dc` or `r+dr, r+dr`.
+4. **No shadowing:** Class field is `DIRS`. Local deltas are `dr`/`dc`.
+
+> **Lesson learned (May 2026):** Bug #3 (the `r + dc` typo) is the most insidious — it doesn't always crash, it just silently visits the wrong neighbors. LC's grader caught it on a 4×5 test case. A real production grid algorithm with this bug would produce garbage answers for some inputs and pass code review. Treat the direction-call line as **the single line that needs the most eyeball scrutiny in any grid DFS.**
+>
+> **Why these bugs cluster:** `dr`/`dc`/`r`/`c` are all 1-2 character symbols — your eyes glaze over them. Add `i`/`j` from the outer loop and you have six near-identical names interacting on the same line. The fix isn't "be more careful" — it's a structural checklist (above) you run mechanically before hitting submit.
+
+---
+
+> **🎯 You're now ready.** With the DFS and BFS templates above in muscle memory, every problem in the next 5 sub-patterns (Number of Islands, Multi-source BFS, Reverse-direction BFS, Flood Fill, Distinct Islands) is **one of these two templates with a small twist**. Go solve LC 200 first — when you're done, come back and read Sub-Pattern 1 to compare your solution to the canonical one.
 
 ---
 
@@ -597,6 +1296,35 @@ private boolean inBounds(int r, int c, int rows, int cols) {
 **Problems:** LC 200 Number of Islands (G-8), LC 547 Number of Provinces (G-7), LC 695 Max Area of Island.
 
 **Pattern:** for each unvisited "land" cell, run a BFS/DFS that floods the entire island, then increment the count.
+
+> **🧠 Mental model — two loops, two DIFFERENT questions.**
+>
+> The outer `for i, for j` and the inner DFS recursion look superficially similar (both touch cells, both consult `visited[][]`), but they're asking **fundamentally different questions** — and the required guards are different too. Most first-timer bugs in grid problems come from conflating the two.
+>
+> | Loop | Role | Question it asks | Required checks | Frequency |
+> | --- | --- | --- | --- | --- |
+> | **Outer double-`for`** | Discovery — find each island's entry point | *"Should I START a new DFS from this cell?"* | Cell must be **LAND** ✅ AND **unvisited** ✅ | One pass over every cell (O(rows × cols)) |
+> | **Inner DFS / BFS** | Consumption — swallow the whole island | *"Should I CONTINUE expanding into this neighbor?"* | Cell must be **in-bounds** ✅ AND **LAND** ✅ AND **unvisited** ✅ | Runs once *per island* |
+>
+> Together they guarantee each cell is touched exactly once across the whole algorithm → **O(rows × cols)** total.
+
+> **⚠️ The trap — water cells NEVER get marked visited.** Many first-timers write the outer guard as just `!visited[i][j]` thinking "the visited array tells me everything I need to skip." It doesn't. The DFS bails on water cells BEFORE reaching `visited[r][c] = true`, so the visited array **cannot distinguish water from unvisited land**. Only the grid value `'1'` vs `'0'` can.
+>
+> If the outer guard is just `!visited[i][j]`, every water cell becomes its own "island." Trace on a tiny grid:
+>
+> ```
+> grid = 1 0     Outer scan with WRONG guard (!visited only):
+>        0 0       (0,0) → is=1, DFS marks (0,0)
+>                  (0,1) → is=2  ❌  (water, but !visited is still true)
+>                  (1,0) → is=3  ❌
+>                  (1,1) → is=4  ❌
+>              
+>                Result: 4 islands. Correct answer: 1.
+> ```
+>
+> **The fix:** outer guard must be `grid[i][j] == '1' && !visited[i][j]`. Always both, never just one. Say out loud whenever you write the outer scan: *"Land **AND** unvisited — both required."*
+>
+> > **Lesson learned the hard way (May 2026):** Caught on the first LC 200 attempt with a separate visited array — got 4 islands on a 1×2 grid that had 1. The mistake doesn't happen with **in-place marking** (the `'0'` overload absorbs both "water" and "visited" into the single grid check), but the moment you use a separate `boolean[][] visited`, the outer guard MUST include the grid-value check. This is the #1 trap of the visited-array variant. See also: 🐞 *Common bugs hall of fame* in the Grid Templates section.
 
 **LC 200 — Steps in plain English:**
 
@@ -631,7 +1359,78 @@ private void dfs(char[][] grid, int r, int c, int rows, int cols) {
 }
 ```
 
+### 🎨 Visual — DFS sweeping one island, then the outer loop finding the next
+
+```
+Input grid (3 islands):                Vertex view of island A:
+
+  ┌───┬───┬───┬───┬───┐                   (0,0)── (0,1)
+  │ 1 │ 1 │ 0 │ 0 │ 1 │                    │
+  ├───┼───┼───┼───┼───┤                   (1,0)
+  │ 1 │ 0 │ 0 │ 1 │ 1 │
+  ├───┼───┼───┼───┼───┤                Vertex view of island B:
+  │ 0 │ 0 │ 0 │ 0 │ 0 │
+  ├───┼───┼───┼───┼───┤                   (0,4)
+  │ 0 │ 1 │ 0 │ 0 │ 0 │                    │
+  └───┴───┴───┴───┴───┘                   (1,4)── (1,3)
+
+
+─────────────────────────────────────────────────────────────────────
+OUTER LOOP starts: (r, c) = (0, 0)
+  grid[0][0] == '1' AND unvisited → RING THE BELL!
+  count becomes 1. Launch DFS from (0, 0).
+─────────────────────────────────────────────────────────────────────
+
+  DFS recursion tree for island A (starting from (0,0)):
+
+    dfs(0,0) ──── mark '0', try 4 neighbors
+      ├── dfs(-1, 0) ✗ out of bounds, return
+      ├── dfs( 0, 1) ──── mark '0', try 4 neighbors
+      │     ├── dfs(-1, 1) ✗ out of bounds
+      │     ├── dfs( 0, 2) ✗ value '0', return
+      │     ├── dfs( 1, 1) ✗ value '0', return
+      │     └── dfs( 0, 0) ✗ already '0' (marked!), return
+      ├── dfs( 1, 0) ──── mark '0', try 4 neighbors
+      │     ├── dfs( 0, 0) ✗ already '0'
+      │     ├── dfs( 1, 1) ✗ value '0'
+      │     ├── dfs( 2, 0) ✗ value '0'
+      │     └── dfs( 1,-1) ✗ out of bounds
+      └── dfs( 0,-1) ✗ out of bounds
+
+
+Grid AFTER island A's DFS completes:           ← island A erased
+  ┌───┬───┬───┬───┬───┐
+  │ 0 │ 0 │ 0 │ 0 │ 1 │   ← (0,4) still LAND (different island)
+  ├───┼───┼───┼───┼───┤
+  │ 0 │ 0 │ 0 │ 1 │ 1 │
+  ├───┼───┼───┼───┼───┤
+  │ 0 │ 0 │ 0 │ 0 │ 0 │
+  ├───┼───┼───┼───┼───┤
+  │ 0 │ 1 │ 0 │ 0 │ 0 │
+  └───┴───┴───┴───┴───┘
+
+─────────────────────────────────────────────────────────────────────
+OUTER LOOP continues at (0, 1), (0, 2), (0, 3) — all '0', skip.
+At (0, 4): grid[0][4] == '1' AND unvisited → count becomes 2.
+DFS swallows island B: (0,4), (1,4), (1,3) — all marked '0'.
+
+OUTER LOOP eventually reaches (3, 1) → count becomes 3.
+DFS marks (3,1). No reachable neighbors → returns immediately.
+─────────────────────────────────────────────────────────────────────
+
+
+FINAL ANSWER: count = 3.
+
+KEY INVARIANT:
+   The outer loop visits each cell exactly once. Whenever it spots
+   unvisited land, that cell MUST be the entry point of a NEW
+   island — because if it belonged to a previously-counted island,
+   the inner DFS would have already marked it.
+```
+
 > **In-place marking vs separate `visited` array:** marking the grid itself is fine **if you're allowed to mutate input**. If not (interviewer asks "don't mutate input"), use `boolean[][] visited`.
+
+> **A subtle elegance worth noticing:** the DFS doesn't track an explicit `visited[][]` array — it uses the cell value itself (`'1'` → `'0'`) as a visited marker. The bounds-and-value check at the top of the recursive function does triple duty: out-of-bounds guard, water-cell guard, AND already-visited guard. This is why grid DFS feels "shorter" than generic graph DFS.
 
 ---
 
@@ -640,6 +1439,96 @@ private void dfs(char[][] grid, int r, int c, int rows, int cols) {
 **Problems:** LC 994 Rotten Oranges, LC 542 0/1 Matrix (nearest zero), LC 1020 Number of Enclaves.
 
 **Pattern:** instead of starting BFS from one source, **enqueue ALL sources first**, then BFS outward. Each cell's "distance" becomes the minimum distance from ANY source.
+
+> **First-timer intuition — what does "multi-source" actually mean?**
+>
+> Picture **multiple pebbles dropped into a pond at the exact same instant.** Each pebble starts its own ripple. The ripples expand outward, and wherever two ripples meet, the cell was already reached by whichever pebble was closer. You don't care WHICH pebble reached a cell first — you only care about the **time of first arrival** (= shortest distance from the nearest source).
+>
+> Mechanically, this is **just standard BFS**, but the queue starts pre-loaded with ALL sources at distance 0 instead of one source. Everything else (mark-on-enqueue, layer-by-layer expansion, O(V + E) total work) is identical to single-source BFS.
+
+### 🎨 Visual — Multi-source BFS as concentric ripples
+
+```
+LC 994 Rotten Oranges. Initial grid (R = rotten, F = fresh, . = empty):
+
+         col 0  col 1  col 2  col 3
+       ┌──────┬──────┬──────┬──────┐
+  r=0  │  R   │  F   │  F   │  .   │
+       ├──────┼──────┼──────┼──────┤
+  r=1  │  F   │  F   │  F   │  R   │
+       ├──────┼──────┼──────┼──────┤
+  r=2  │  F   │  F   │  F   │  F   │
+       └──────┴──────┴──────┴──────┘
+
+Two rotten oranges at (0,0) and (1,3) → BOTH go in the queue with t=0.
+
+
+MINUTE 0  (initial state):           queue = [(0,0,t=0), (1,3,t=0)]
+
+  ┌────┬────┬────┬────┐
+  │ R0 │ F  │ F  │ .  │             KEY: cell label "Rk" means
+  ├────┼────┼────┼────┤                  "became rotten at minute k"
+  │ F  │ F  │ F  │ R0 │
+  ├────┼────┼────┼────┤
+  │ F  │ F  │ F  │ F  │
+  └────┴────┴────┴────┘
+
+MINUTE 1  (pop both t=0 oranges, infect their fresh neighbors):
+
+  ┌────┬────┬────┬────┐
+  │ R0 │ R1 │ F  │ .  │            (0,0) infects (0,1), (1,0)
+  ├────┼────┼────┼────┤            (1,3) infects (0,3 is '.'), (1,2), (2,3)
+  │ R1 │ F  │ R1 │ R0 │
+  ├────┼────┼────┼────┤
+  │ F  │ F  │ F  │ R1 │
+  └────┴────┴────┴────┘
+
+MINUTE 2  (pop all t=1 oranges, infect their fresh neighbors):
+
+  ┌────┬────┬────┬────┐
+  │ R0 │ R1 │ R2 │ .  │
+  ├────┼────┼────┼────┤
+  │ R1 │ R2 │ R1 │ R0 │
+  ├────┼────┼────┼────┤
+  │ R2 │ F  │ R2 │ R1 │
+  └────┴────┴────┴────┘
+                                    Notice (1,1) — TWO ripples could
+                                    reach it (from R1 at (0,1) and
+                                    R1 at (1,0) and R1 at (1,2)).
+                                    BFS marks it the FIRST time it's
+                                    seen; the other two attempts find
+                                    it already rotten and skip.
+
+MINUTE 3  (pop all t=2 oranges, infect remaining fresh):
+
+  ┌────┬────┬────┬────┐
+  │ R0 │ R1 │ R2 │ .  │
+  ├────┼────┼────┼────┤
+  │ R1 │ R2 │ R1 │ R0 │
+  ├────┼────┼────┼────┤
+  │ R2 │ R3 │ R2 │ R1 │
+  └────┴────┴────┴────┘            (2,1) infected from (2,0) or (2,2) at t=2.
+
+
+ANSWER: max minute = 3.
+
+
+KEY INVARIANT:
+   Because BFS expands layer by layer AND we marked every fresh
+   neighbor at minute t+1 the moment any rotten cell at minute t
+   reached it, every cell records the MINIMUM time to be infected
+   from the nearest source. Multiple sources don't break BFS — they
+   just give it a "head start" from multiple points.
+```
+
+> **Why multi-source BFS beats "BFS from every source, take the min":**
+>
+> | Approach | Time complexity | Why |
+> | --- | --- | --- |
+> | BFS from each of `S` sources separately | **O(S × (rows × cols))** | Each source re-explores the whole grid |
+> | Multi-source BFS (one BFS, queue pre-loaded) | **O(rows × cols)** | Each cell is dequeued exactly once across the entire BFS |
+>
+> Single-source BFS already computes "shortest distance from source." Multi-source BFS computes "shortest distance from **any** source" — for FREE, in the same O(V+E). This is one of those rare algorithmic wins where the generalization is strictly cheaper than the naïve "do it S times" approach.
 
 **LC 994 Rotten Oranges — Steps in plain English:**
 
@@ -695,6 +1584,58 @@ public int orangesRotting(int[][] grid) {
 
 **The trick:** instead of finding "regions that can't reach the boundary", find "regions that CAN reach the boundary" (start BFS from boundary cells), then everything NOT reached is the answer.
 
+> **First-timer intuition — the "complement trick":**
+>
+> Some questions phrase the answer as "**find the things that can't escape**." That's a hard set to characterize directly — you'd need to prove a negative for each region. The complement-trick says: *flip the question.* It's much easier to find "things that **can** escape" (just BFS/DFS from the boundary), and everything left over is your answer.
+>
+> | Phrasing in the problem | Hard way (direct) | Easy way (complement / reverse BFS) |
+> | --- | --- | --- |
+> | "Find regions surrounded by X" | Run BFS from every interior O and check whether it ever touches the boundary | BFS from every boundary O, mark "escapable." Everything still O afterward IS surrounded. |
+> | "Count cells that can't reach the boundary" (LC 1020) | Same painful per-region check | Same flip — BFS from boundary land, everything still land is enclaved |
+>
+> The complement-trick is a general algorithmic pattern, not a grid quirk. It also shows up in *"find rooms NOT reachable from any gate" → BFS from all gates,* and in *"unreachable nodes" → DFS from sources and complement.* Whenever you read **"the answer is what's left over,"** suspect this trick.
+
+### 🎨 Visual — LC 130 Surrounded Regions, the complement way
+
+```
+INPUT board:                          PHASE 1: mark every O that can
+                                      reach the boundary as '#'
+  ┌───┬───┬───┬───┐                   (start DFS from every boundary O).
+  │ X │ X │ X │ X │
+  ├───┼───┼───┼───┤                   ┌───┬───┬───┬───┐
+  │ X │ O │ O │ X │                   │ X │ X │ X │ X │
+  ├───┼───┼───┼───┤                   ├───┼───┼───┼───┤
+  │ X │ X │ O │ X │                   │ X │ O │ O │ X │   no boundary O
+  ├───┼───┼───┼───┤                   ├───┼───┼───┼───┤   touches these
+  │ X │ O │ X │ X │                   │ X │ X │ O │ X │
+  └───┴───┴───┴───┘                   ├───┼───┼───┼───┤
+                                      │ X │ # │ X │ X │ ← only this O is
+                                      └───┴───┴───┴───┘   on the boundary,
+                                                          and it has no
+                                                          O-neighbors to
+                                                          recurse into.
+
+
+PHASE 2: sweep one final pass:        FINAL board (PHASE 2 output):
+   • Remaining 'O' → flip to 'X'         ┌───┬───┬───┬───┐
+     (those were the surrounded ones)    │ X │ X │ X │ X │
+   • '#' → flip back to 'O'              ├───┼───┼───┼───┤
+     (those were the escapable ones)     │ X │ X │ X │ X │  ← surrounded
+                                         ├───┼───┼───┼───┤    interior O's
+                                         │ X │ X │ X │ X │    flipped to X
+                                         ├───┼───┼───┼───┤
+                                         │ X │ O │ X │ X │  ← restored O
+                                         └───┴───┴───┴───┘    (boundary O)
+
+
+KEY INVARIANT:
+   An interior O survives if and only if it CANNOT reach the boundary.
+   By marking the escapable Os first and processing the leftover Os last,
+   we never have to ask the hard "is this region surrounded?" question
+   for each region — the algorithm answers it implicitly via what's
+   left unmarked after the boundary sweep.
+```
+
 **LC 130 Surrounded Regions — Steps in plain English:**
 
 1. Run BFS/DFS from every `'O'` on the **boundary** (rows 0 and `rows-1`, cols 0 and `cols-1`), marking those as safe (e.g., temporary `'#'`).
@@ -748,9 +1689,98 @@ private void dfs(char[][] board, int r, int c, int rows, int cols) {
 
 ---
 
+#### Variant — LC 417 Pacific Atlantic Water Flow (dual-source reverse BFS/DFS)
+
+> **Why this one earns its own callout:** LC 130 has ONE source set (all border cells). LC 417 has **TWO disjoint source sets** (Pacific borders + Atlantic borders) and the answer is the **intersection** — cells reachable from BOTH oceans. Same reverse-thinking trick as LC 130, but with two parallel traversals.
+
+**The forward-thinking solution is brutal:** for each cell, run a BFS/DFS asking *"can water from this cell reach BOTH oceans?"* That's `O((m × n)²)` — TLE on real inputs.
+
+**The reverse trick:** flip the question. Instead of *"can this cell reach the ocean?"* ask *"which cells can the OCEAN reach if water flowed UPHILL?"* Then a cell is in the answer iff both oceans can reach it.
+
+**Steps in plain English:**
+
+1. **Two visited matrices** — `pacific[m][n]` and `atlantic[m][n]`. Each will be marked independently.
+2. **Seed Pacific from its borders** — top row + left column. Run reverse-DFS (uphill: `next.height >= curr.height`).
+3. **Seed Atlantic from its borders** — bottom row + right column. Same reverse-DFS into `atlantic[][]`.
+4. **Intersect** — any cell where BOTH `pacific[r][c]` AND `atlantic[r][c]` are true is in the answer.
+
+```java
+private static final int[][] DIRS = {
+    {-1, 0}, {1, 0}, {0, -1}, {0, 1}
+};
+
+public List<List<Integer>> pacificAtlantic(int[][] heights) {
+    int m = heights.length;
+    int n = heights[0].length;
+    boolean[][] pacific = new boolean[m][n];
+    boolean[][] atlantic = new boolean[m][n];
+
+    // Step 2 — seed Pacific from top row + left column
+    for (int j = 0; j < n; j++) {
+        dfs(heights, pacific, 0, j, m, n);
+    }
+    for (int i = 0; i < m; i++) {
+        dfs(heights, pacific, i, 0, m, n);
+    }
+
+    // Step 3 — seed Atlantic from bottom row + right column
+    for (int j = 0; j < n; j++) {
+        dfs(heights, atlantic, m - 1, j, m, n);
+    }
+    for (int i = 0; i < m; i++) {
+        dfs(heights, atlantic, i, n - 1, m, n);
+    }
+
+    // Step 4 — intersect
+    List<List<Integer>> result = new ArrayList<>();
+    for (int r = 0; r < m; r++) {
+        for (int c = 0; c < n; c++) {
+            if (pacific[r][c] && atlantic[r][c]) {
+                result.add(List.of(r, c));
+            }
+        }
+    }
+    return result;
+}
+
+private void dfs(int[][] heights, boolean[][] visited, int r, int c, int m, int n) {
+    // Already visited from THIS ocean's source set
+    if (visited[r][c]) {
+        return;
+    }
+    visited[r][c] = true;
+    // Recurse into 4 neighbors with the UPHILL constraint
+    for (int[] d : DIRS) {
+        int nr = r + d[0];
+        int nc = c + d[1];
+        if (nr < 0 || nr >= m || nc < 0 || nc >= n) {
+            continue;
+        }
+        // KEY: reverse flow means we move to cells HIGHER OR EQUAL — water flows from there to here in the original problem
+        if (heights[nr][nc] < heights[r][c]) {
+            continue;
+        }
+        dfs(heights, visited, nr, nc, m, n);
+    }
+}
+```
+
+> 🐞 **Where this one bites:**
+> - **Forgetting the corner cells go in BOTH seed loops** — `(0, 0)` and `(m-1, n-1)` get seeded twice. Harmless because of the visited guard, but worth knowing.
+> - **Wrong direction on the height comparison.** Reverse-flow means *current ≤ neighbor* (water flows from neighbor DOWN to current). Easy to flip and get wrong answers on small inputs that still look "almost right."
+> - **Using one shared `visited[][]`** instead of two — collapses the two ocean reachabilities into a single set, losing the intersection logic.
+
+**🏷️ Example problems:** LC 417 Pacific Atlantic Water Flow ⭐ (this one), LC 1020 Number of Enclaves (single-source reverse BFS, like LC 130).
+
+> **Mental hook (LC 417):** *"Two reverse floods, one intersection."* The reverse trick is the same as LC 130; the dual-source twist is what distinguishes this problem family.
+
+---
+
 ### Sub-Pattern 4: Flood Fill [G-9]
 
 **LC 733 — Steps in plain English:** standard DFS/BFS from `(sr, sc)`. Recolor every reachable same-color cell.
+
+> **First-timer mental hook:** flood fill is **literally** the MS Paint paint-bucket tool. You click a cell; every cell connected to it through same-color neighbors changes to the new color. The "graph" here is *"cells with the original color"* — exactly like Number of Islands, except the "land" is defined by matching the source's color instead of being '1'.
 
 ```java
 public int[][] floodFill(int[][] image, int sr, int sc, int newColor) {
@@ -782,6 +1812,8 @@ private void dfs(int[][] image, int r, int c, int oldColor, int newColor) {
 ### Sub-Pattern 5: Shape Canonicalization (Distinct Islands) [G-16]
 
 **LC 694 Distinct Islands — concept:** each island has a *shape*; count distinct shapes by canonicalizing each one as a string (path-from-start signature) and adding to a `Set<String>`.
+
+> **First-timer mental hook:** "shape" means *"if I picked this island up and slid it on top of another island (no rotation, just translation), would they perfectly overlap?"* If yes → same shape. If no → different shape. To compare shapes cheaply, we encode each island as a **string** built from the DFS traversal, then count how many distinct strings appear in a `Set<String>`.
 
 **The canonicalization trick:** during DFS, record the **relative direction taken** at each step (`U/D/L/R`) plus a special marker on return (e.g., `B` for backtrack). The resulting string uniquely identifies the shape.
 
@@ -818,6 +1850,56 @@ private void dfs(int[][] grid, int r, int c, int rows, int cols,
 ```
 
 > **Why the backtrack marker matters:** without `'B'`, two islands with different shapes can produce identical strings. The backtrack marker records the recursion structure.
+
+### 🎨 Visual — Why two genuinely-different islands collide without the 'B' marker
+
+```
+Two islands that LOOK different but encode IDENTICALLY without 'B':
+
+
+   ISLAND P (T-shape)           ISLAND Q (L-shape)
+
+     ┌───┬───┬───┐                ┌───┬───┐
+     │ ★ │   │   │                │ ★ │   │
+     ├───┼───┼───┤                ├───┼───┤
+     │   │ ● │   │                │   │ ● │
+     ├───┼───┼───┤                ├───┴───┘
+     │   │ ● │   │
+     └───┴───┴───┘                Path from ★:
+                                    ★ → R → D → D  (then nowhere to go)
+     Path from ★:
+       ★ → R → D → back → D
+                                  Shape WITHOUT 'B': "S" + "R" + "D" + "D"
+     Shape WITHOUT 'B':                                ─────────
+       "S" + "R" + "D" +
+       (no return marker) + "D"
+                                                          ↑↑↑
+                                            BOTH yield "SRDD" → COLLISION ❌
+
+
+WITH the 'B' (backtrack) marker, the recursion structure is captured:
+
+   ISLAND P:  "S R D B D B B B B B"      (notice the EARLY 'B' after the
+                  ↑              ↑        first D, encoding "we backed
+                  └─ first D     └─ trailing returns up the chain
+                     finished;       to start
+                     back to root)
+
+   ISLAND Q:  "S R D D B B B B"         (no early 'B' — the two D's are
+                  ↑    ↑                 in a continuous descent, then a
+                  └─ uninterrupted        run of returns)
+                     descent
+
+   Different strings → counted as distinct ✅
+
+
+KEY INVARIANT:
+   The 'B' marker is a fingerprint of the recursion TREE, not just the
+   set of cells visited. Two islands with the same cells but different
+   adjacency structure produce different trees, hence different fingerprints.
+   Without 'B', two shapes whose cell sequences collide on the DFS tour
+   become indistinguishable.
+```
 
 > 🧩 **Try these (Grid BFS/DFS — the full ladder):**
 > - ✅ **LC 200** Number of Islands (G-8) — start here
@@ -957,6 +2039,17 @@ if (visited[v] && v != parent) {
 ## ↔️ Bipartite Graph Check [Striver G-17, G-18]
 
 > A graph is **bipartite** if you can color every vertex with one of two colors such that no edge connects same-colored vertices. Equivalent: no odd-length cycle exists.
+
+> **First-timer analogy — "is this a two-team setup?":** imagine the vertices are people and the edges are "must-be-on-opposite-teams" constraints. The graph is **bipartite** iff you can split everyone into exactly **Team A** and **Team B** so that every edge connects an A-person to a B-person. *Bipartite = "two teams suffice."* Real-world bipartite examples:
+>
+> | Domain | Team A | Team B |
+> | --- | --- | --- |
+> | Job market | Job applicants | Open positions |
+> | Movies | Actors | Films |
+> | Recommendations | Users | Products |
+> | Course schedule pairing | Students | Course slots |
+>
+> The check itself is just **"try to 2-color via BFS/DFS; if you hit a conflict, it's not bipartite."**
 
 ### 🎨 Visual — Bipartite vs Not Bipartite
 
@@ -1274,6 +2367,10 @@ Example (cycle):
 
 ### Approach 1: DFS-Based Topo Sort [G-21]
 
+> **First-timer intuition — "stack of completion":** imagine a TODO list where you can't write a task down until **every task it depends on is already finished**. DFS naturally produces this order: when DFS at vertex `u` returns, every vertex reachable from `u` has already completed. So if we **push on completion** (i.e., after the for-loop, NOT before it), the stack ends up with the deepest dependencies at the bottom and the most "independent" vertices at the top. Pop the stack and you get a valid topological order.
+>
+> **Why post-order (not pre-order)?** Pre-order (push at entry) would put `u` on the stack BEFORE its dependencies completed — wrong. Post-order (push at exit) guarantees: *when you push `u`, every `v` that `u` depends on has already been pushed below it.* That's exactly the topo property: `u` ends up above its dependencies → pops out after them → satisfying "all dependencies first."
+
 **Steps in plain English:**
 
 1. DFS the graph. Use a `Deque<Integer>` as a stack.
@@ -1309,6 +2406,52 @@ private void dfs(int u, List<List<Integer>> adj,
 ```
 
 > **Why "push after all neighbors":** by the time you push `u`, every vertex reachable from `u` is already deeper in the stack. So popping gives them in dependency order.
+
+### 🎨 Visual — DFS Topo Sort on the same prerequisite DAG
+
+```
+Recall the DAG:                       DFS exploration order from vertex 0:
+
+      (0: Intro CS)                     DFS(0)
+       │       │                          DFS(1)
+       ▼       ▼                            DFS(3)
+   (1: Algos) (2: Data Struct)                DFS(4)
+       │       │                                no nbrs → push 4
+       └───┬───┘                              push 3   (4 already below)
+           ▼                                push 1     (3, 4 already below)
+      (3: ML)                              DFS(2)
+           │                                  DFS(3) → already visited, skip
+           ▼                                push 2
+      (4: Capstone)                       push 0       (1, 2, 3, 4 below)
+
+
+STACK EVOLUTION (push = top adds new entry):
+
+   []  →  [4]  →  [4, 3]  →  [4, 3, 1]  →  [4, 3, 1, 2]  →  [4, 3, 1, 2, 0]
+                                                                   ↑ TOP
+
+
+POP from top to produce the topo order:
+
+   pop 0 → pop 2 → pop 1 → pop 3 → pop 4
+
+   Final order: [0, 2, 1, 3, 4]    ← valid topological order ✅
+                ↑
+                Note: not the only valid order. [0, 1, 2, 3, 4] is also valid.
+                Topo sort is deterministic in algorithm but not unique in answer.
+
+
+KEY INVARIANT:
+   When we push 'u' onto the stack, every descendant of 'u' in the DFS
+   tree is already below it. Since edges go from u → v with v deeper,
+   popping LIFO gives: parents before children = dependencies before
+   dependents = valid topological order.
+
+WHY IT FAILS WITH PRE-ORDER:
+   If we pushed 'u' at ENTRY instead, then u would sit BELOW its
+   descendants. Popping would yield descendants first, parents last
+   — the REVERSE of a topo order. Hence: push at exit (post-order).
+```
 
 ### Approach 2: Kahn's Algorithm — BFS with In-Degree [G-22, G-23]
 
@@ -1415,7 +2558,44 @@ public boolean canFinish(int numCourses, int[][] prerequisites) {
 
 ---
 
-## 📏 Shortest Path Family [Striver G-27 to G-43]
+```
+═══════════════════════════════════════════════════════════════════
+              ✋  END OF MEDIUM-LEVEL INTERVIEW SCOPE
+═══════════════════════════════════════════════════════════════════
+
+   You've now covered Striver G-1 through G-26:
+
+   ✓ Graph representation         ✓ Cycle detection (both forms)
+   ✓ BFS + DFS templates          ✓ Bipartite check
+   ✓ Connected components         ✓ Topological Sort (DFS + Kahn's)
+   ✓ Grid BFS/DFS patterns        ✓ Course Schedule + Alien Dictionary
+
+   This alone covers ~80% of LC graph problems and almost
+   every SDE-2 / SDE-3 medium graph interview question.
+
+   STOP HERE IF:
+   - You have ≤ 3 weeks of prep time
+   - The target role is SDE-2 / mid-level
+   - You haven't yet solved Tier 1 + Tier 2 problems cold
+
+   CONTINUE BELOW IF:
+   - You're targeting L5+ / senior roles
+   - The role explicitly involves graph-heavy systems
+   - You've already mastered the medium core and want depth
+═══════════════════════════════════════════════════════════════════
+```
+
+> **What's below the divider** — three blocks of decreasing interview frequency:
+>
+> | Block | Topics | Striver | Interview reality |
+> | --- | --- | --- | --- |
+> | 🟡 **Senior likely** | BFS shortest path, DAG shortest path, Word Ladder, Dijkstra core | G-27 to G-35 | Commonly asked at L5+; rare at SDE-2 |
+> | 🔴 **Advanced** | Dijkstra apps, Bellman-Ford, Floyd-Warshall, MST, DSU | G-36 to G-53 | Senior roles, system-design-adjacent rounds |
+> | 🔴 **Rarely asked** | Kosaraju (SCC), Tarjan (Bridges), Articulation Points | G-54 to G-56 | Specialized / Staff+ roles |
+
+---
+
+## 📏 Shortest Path Family [Striver G-27 to G-43] 🟡 *Senior likely from here on*
 
 The shortest-path family has **four** main algorithms, picked by graph properties:
 
@@ -1840,7 +3020,7 @@ public int[][] floydWarshall(int V, int[][] edges, int n) {
 
 ---
 
-## 🌳 Minimum Spanning Tree (MST) [Striver G-44, G-45, G-47]
+## 🌳 Minimum Spanning Tree (MST) [Striver G-44, G-45, G-47] 🔴 *Advanced*
 
 > **What MST is:** a subset of edges that connects all vertices with **minimum total weight** and **no cycles**. Has exactly V-1 edges.
 
@@ -2003,7 +3183,7 @@ public int kruskalMST(int V, int[][] edges) {
 
 ---
 
-## 🔗 Disjoint Set Union (DSU / Union-Find) [Striver G-46 through G-53]
+## 🔗 Disjoint Set Union (DSU / Union-Find) [Striver G-46 through G-53] 🔴 *Advanced*
 
 > **What it is:** a data structure that efficiently tracks **set membership** and supports two operations:
 > - `find(x)` — return the representative of the set containing `x`
@@ -2924,3 +4104,13 @@ In a matrix, `r` is row (y-axis, top-to-bottom) and `c` is column (x-axis, left-
 | --- | --- |
 | May 2026 | Initial version. Curriculum aligned to Striver's Graph Series (56 videos, G-1 through G-56). Tiered practice plan (5 tiers) with explicit difficulty tags. Code rewritten in project style. Decision frameworks (5-question funnel + keyword signals) added as this doc's pedagogical contribution. |
 | May 2026 | **Visual reference pass.** Added 9 ASCII diagram blocks: graph types reference (undirected/directed/weighted/cyclic/DAG/tree/connected/disconnected/complete, self-loop, parallel edges); adjacency list vs matrix side-by-side; connected-components diagram; BFS level-by-level trace; DFS recursion-stack trace + BFS-vs-DFS comparison; undirected cycle detection (parent edge vs back edge); bipartite vs odd-cycle counter-example; directed cycle white/gray/black coloring; Kahn's topological sort step-by-step animation; Dijkstra's relaxation trace (with stale-entry handling); Prim vs Kruskal on the same graph; DSU forest visualization (initial → unions → path compression flattening). |
+| May 2026 | **BFS / DFS marking-discipline annotation pass.** Heavily annotated the canonical BFS template, the ❌/✅ mark-on-poll vs mark-on-offer comparison, the recursive DFS template, and the iterative DFS template with inline `← ` arrow comments pinpointing *why* `visited[]` is mutated at each line. Added "BFS-vs-DFS marking rule — one sentence." Added a compact "🧭 Interview default — recursive or iterative?" callout citing ~85% recursive in interview-prep ecosystem with a 3-trigger switch table. |
+| May 2026 | **Medium vs Advanced split.** Added "📍 Reading Roadmap" near the top showing what to read for SDE-2 vs senior+. Inserted a big visual `═══ ✋ END OF MEDIUM-LEVEL SCOPE ═══` divider after Topological Sort (G-26) — everything before it is the medium-level core (~80% of LC graph problems); everything after is senior+ territory. Tagged advanced section headers (Shortest Path, MST, DSU) with 🟡/🔴 markers so the tier is visible at a glance. |
+| May 2026 | **Grid + first-timer teaching pass.** Reader feedback: grid section was too dense for first-timers. Added: (1) "First-timer bridge" callout + 🎨 *"A grid IS a graph"* visual showing same matrix drawn two ways + "what's different from adjacency-list graphs" table; (2) 🎨 *"Why the direction arrays are paired that way"* compass-style visual replacing the cryptic memorize-it note; (3) "Two-loop mental model" table for Number of Islands explaining the outer-discovery / inner-consumption pattern + 🎨 full DFS island-sweep trace with recursion tree; (4) "Multiple pebbles in a pond" intuition + 🎨 concentric-ripple visual for Multi-Source BFS + complexity table showing why one BFS beats S separate BFS calls; (5) "Complement trick" mental model + table + 🎨 LC 130 phase-by-phase visual for Reverse-Direction BFS; (6) Paint-bucket analogy for Flood Fill; (7) "Shape = picked-up-and-slid" hook for Distinct Islands + 🎨 T-vs-L collision visual showing why the 'B' marker is essential. Strengthened DFS Topological Sort with "stack of completion" intuition + "why post-order not pre-order" explanation + 🎨 step-by-step stack-evolution visual on the prerequisite DAG. Added "two-team sports league" first-timer analogy to Bipartite section with real-world bipartite examples table. |
+| May 2026 | **Adjacency-matrix vs grid-matrix confusion patch.** Lesson learned the hard way: a first-timer reading "grid IS a graph" can wrongly conflate the grid-problem matrix with an adjacency matrix and ask *"why is grid[1][1] = 0 when a vertex always reaches itself?"* Added ⚠️ trap callout + 🎨 side-by-side visual contrasting the two matrices (indices, cell-value meaning, diagonal interpretation, how connectivity is determined). The shape of the array tells you nothing — you have to read whether it's encoding a relationship (adjacency) or a state (grid). |
+| May 2026 | **Self-consistency fix in the "grid IS a graph" visual + DR/DC memorization upgrade.** Reader feedback: the original graph-view drawing wrongly included `(0,2)` as a vertex even though `grid[0][2] = 0` (water). Fixed the drawing to show ONLY the 6 land cells as vertices, and explicitly labelled the resulting **two connected components**. Lesson: when drawing a graph derived from a matrix, validate cell-by-cell that every land cell appears and every water cell is absent. Also rewrote the DR/DC memorization section: replaced the bare "memorize these arrays" instruction with (a) Kapil's mnemonic *"DR changes row only; DC changes col only — exactly one is non-zero per move"*, (b) a fallback reconstruction recipe for when you forget the literals in an interview, and (c) an officially-recommended alternative pattern: a single 4×2 `DIRS[][]` array where each `{dr, dc}` pair sits together — many find this easier than two parallel 1-D arrays. The 8-directional case is shown in both styles, with the `DIRS8[][]` 3×3-punched-out-center layout highlighted as nearly unforgettable. |
+| May 2026 | **Compass-visual alignment fix.** The original compass in the DR/DC section had its vertical axis (UP/DOWN arrows, bars, CELL labels) at column 21 while the center cell dot `●` sat at column 29 — an 8-column drift that made the compass look skewed. Re-laid the entire compass so every vertical-axis element (`d = 0`, `(UP, r-1, c)`, `▲`, `│`, `●`, `CELL (r, c)`, `│`, `▼`, `(DOWN, r+1, c)`, `d = 2`) has its visually-central character on column 32. **Process lesson:** for any ASCII compass/diagram with a center point, count the column of each element BEFORE submitting — don't trust eyeballing in a fixed-width editor (it lies). New rule for this knowledge base: every centered ASCII diagram must include a "column verification" pass where the author tabulates each label's center column and confirms all rows agree. |
+| May 2026 | **Added problem-agnostic Grid DFS & BFS template section as a dedicated building block.** Reader feedback: the original grid section dove straight into LC 200 (Number of Islands) without first showing pure, problem-agnostic DFS / BFS templates — making it hard to separate the *template* from the *application*. New `## 🧱 Grid DFS and BFS Templates — your building blocks before any problem` section inserted right before Sub-Pattern 1, containing: (a) the canonical recursive grid-DFS template with inline `← ` comments explaining mark-on-entry as the DFS analog of mark-on-enqueue + implicit-base-case cross-ref to `recursion-fundamentals.md §3.4`; (b) the canonical grid-BFS template with mark-on-enqueue arrow comments + "why mark-on-poll is a correctness bug for distance-tracking BFS" callout; (c) 🎨 full DFS recursion-tree trace on a tiny 2×2 island showing every guard rejection (OOB, water, already-marked) explicitly; (d) 🎨 BFS layer-by-layer trace on the same 2×2 island with queue state after each step + KEY INVARIANT; (e) "Bounds-check first, value-check second" gotcha with the short-circuit-evaluation explanation; (f) "When to use DFS vs BFS on a grid" decision table; (g) stack-overflow caveat for huge grids → use iterative DFS. Both traces were validated cell-by-cell against the DR/DC ordering before submission. |
+| May 2026 | **Added "Marking strategy — in-place vs separate `boolean[][] visited`" decision-framework callout** inside the Grid DFS/BFS Templates section (between the BFS visual and the DFS-vs-BFS decision table). Captures the question that came up while prepping for LC 200: *"is mutating the grid actually correct, and what should I do in the interview?"* Includes (a) the trade-off table (in-place = O(1) extra space, destructive; visited array = O(mn) extra space, non-destructive) with the explicit note that **Big-O is identical** either way because recursion-stack / queue already dominates; (b) 🧠 *why in-place works* — the value `'0'` becomes overloaded ("originally water" OR "already-visited land"); (c) the visited-array drop-in variant of the DFS template; (d) the **interview-day recommendation** — pick the variant your hands are confident with, then verbalize the trade-off upfront with a senior-framing script (*"I prefer not to mutate the caller's input — matches production Java style"*) vs the junior-framing trap (*"I'm more comfortable with this"*); (e) ❌/✅ same-choice / different-framing table; (f) lesson-learned-the-hard-way callout: **naming the trade-off matters more than picking the elegant variant**; (g) 🧾 TL;DR. |
+| May 2026 | **Cross-reference added** in the "Top-down vs bottom-up DFS" callout pointing to `../../JavaBackend/DeepDive/java-pass-by-value-semantics.md` for the full mechanics of why `visited[][]` mutations propagate across recursive calls. The Java-language topic was extracted into its own deep dive (bootstrapping the JavaBackend subdomain) because it applies far beyond graphs — DP memo, DSU `parent[]`, BFS visited, backend DTO/JPA/Spring patterns — and didn't fit signal-densely into graphs-fundamentals.md. The graphs doc still names the *what* in one paragraph; the full *why* + the three strategies for opting out (defensive copy / deep copy / immutability) live in the JavaBackend deep dive. |
+| May 2026 | **Three-part LC 200 first-attempt pass — captured the actual bugs from a real solo attempt.** During the first solo run at LC 200 with a separate `visited[][]` array, four distinct bugs surfaced (`grid[1].length` typo, outer-guard missing `grid == '1'` check, `r + dc` typo for column delta, class-field/local-variable shadowing). All four had teaching value for **every** grid problem — so they got captured as three new sections inside the Grid DFS/BFS Templates region. (a) **🧭 Top-down vs bottom-up DFS — `visited[][]` works for both styles** — inserted right after the marking-strategy callout. Shows the bottom-up DFS template for LC 695 Max Area of Island as a drop-in variant of the top-down LC 200 template, with a side-by-side table making it explicit that visited handling is byte-for-byte identical regardless of return type, plus a "pick the style by what the problem asks for" decision table (count → top-down, max/sum → bottom-up, exists → bottom-up boolean). Forward-flags the upcoming Java-language deep dive on pass-by-value-of-reference. (b) **🐞 Common bugs hall of fame — grid DFS** — inserted between the "When to use DFS vs BFS" decision table and the "🎯 You're now ready" hand-off. Tabulates all four bugs with what-it-does / how-to-fix columns, plus a **"verify before submit" 4-item checklist** to run mechanically on every grid problem. Includes the structural insight: `dr`/`dc`/`r`/`c`/`i`/`j` are six near-identical 1-2 character symbols interacting on the same line, so "be more careful" isn't a fix — a checklist is. (c) **🧠 Upgraded "two loops, two questions" mental model in Sub-Pattern 1** — replaced the existing "discovery vs consumption" callout with a richer version that adds the *required-checks column* per loop (outer = LAND + unvisited; inner = in-bounds + LAND + unvisited), and a ⚠️ trap explanation of *why* water cells never get marked visited (the DFS bails before reaching the mark step) — which is precisely why the outer guard needs the grid-value check. Includes the tiny 1×0/0×0 trace showing how a `!visited` -only guard produces 4 islands instead of 1. Cross-references the 🐞 bugs hall of fame. |
