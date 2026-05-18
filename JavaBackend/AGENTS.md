@@ -36,6 +36,42 @@ JavaBackend/
 
 ---
 
+## 📁 Track-Style Sub-Folders
+
+For **multi-session learning tracks** (focused study of one topic across many days, with hands-on code), a self-contained sub-folder lives directly under `JavaBackend/`:
+
+```
+JavaBackend/
+├── Spring/                          ← First track — 10-hour Spring foundation
+│   ├── spring-prep-log.md           ← Track's context-preservation file (read FIRST to resume)
+│   ├── spring-10-hour-plan.md       ← Master plan (day-by-day arc)
+│   ├── DeepDive/                    ← Track-specific deep dives
+│   ├── Reference/                   ← Track-specific cheatsheets
+│   └── Practice/                    ← Runnable Java code (exercises + growing app)
+│       ├── README.md
+│       ├── exercises/
+│       └── growing-app/
+```
+
+**Decision rule — track sub-folder vs flat DeepDive/Reference/Patterns:**
+
+| Use a **track sub-folder** when | Use **flat folders** when |
+| --- | --- |
+| Topic spans many sessions with a planned arc | One-off concept note |
+| Includes hands-on runnable code | Pure conceptual / cheatsheet |
+| Needs a context-preservation log to survive chat windows | Single self-contained file |
+| Has its own prereqs and tooling setup | Plug into existing notes |
+
+**Example mapping:**
+- ✅ `JavaBackend/Spring/` → 10-day track, growing app, prep-log → **track sub-folder**
+- ✅ `JavaBackend/DeepDive/java-pass-by-value-semantics.md` → one-off Java concept → **flat folder**
+- (future) `JavaBackend/Concurrency/` → if it grows into a multi-day track with code → **track sub-folder**
+- (future) `JavaBackend/DeepDive/equals-and-hashcode-contract.md` → one-off → **flat folder**
+
+> Track sub-folders are **self-contained** — they have their own `prep-log` and plan. The root `JavaBackend/{DeepDive,Reference,Patterns}` folders remain for cross-cutting Java/JPA/JVM concept notes that don't belong to a specific track.
+
+---
+
 ## 🧭 The Three Note Types
 
 Mirrors the DSA structure for consistency across the knowledge base.
@@ -121,3 +157,4 @@ When the user asks for *"deep-dive on [Java/Spring concept]"* / *"a reference fo
 | Date | Change |
 | --- | --- |
 | May 2026 | **JavaBackend subdomain bootstrapped.** Created with `java-pass-by-value-semantics.md` as the first deep dive. Trigger: the LC 200 (Number of Islands) attempt in `DSA/DeepDive/graphs-fundamentals.md` raised the question *"is `visited[][]` passed by reference?"* — a Java-language question, not a DSA question, so it needed its own home. Folder structure mirrors DSA (DeepDive / Reference / Patterns) for cross-subdomain consistency. |
+| May 2026 | **Track-style sub-folders added.** Introduced the `Spring/` sub-track for the 10-hour Spring foundation course. Established the rule that multi-session topics with hands-on code get self-contained sub-folders (with prep-log + plan + Practice), while one-off concept notes stay in the flat `DeepDive/Reference/Patterns` folders. |

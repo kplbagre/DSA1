@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Minimal web.xml — the only purpose of this file is to enable annotation scanning
+  for the @WebServlet on HelloServlet. metadata-complete="false" tells the container
+  to scan classpath classes for servlet annotations in addition to anything declared here.
+
+  See the README for the equivalent XML-only registration (commented as a teaching
+  alternative — DO NOT enable both XML and @WebServlet on the same class or the
+  container will register the servlet twice).
+-->
+<web-app xmlns="https://jakarta.ee/xml/ns/jakartaee"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="https://jakarta.ee/xml/ns/jakartaee
+                             https://jakarta.ee/xml/ns/jakartaee/web-app_5_0.xsd"
+         version="5.0"
+         metadata-complete="false">
+
+    <display-name>01-servlet-hello</display-name>
+
+</web-app>
