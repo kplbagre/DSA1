@@ -1597,43 +1597,63 @@ public int orangesRotting(int[][] grid) {
 
 ### 🎨 Visual — LC 130 Surrounded Regions, the complement way
 
+The example uses a 5×6 board with **two disjoint O-regions** so you can see *both* outcomes in one picture:
+
+- **Region A** — 4 connected O's at `(0,2)─(1,2)─(1,3)─(2,3)`. Only the head cell `(0,2)` sits on the boundary; the other 3 are interior. The whole chain escapes because the head is the seed for a DFS that cascades through all four.
+- **Region B** — 2 connected O's at `(3,1)─(3,2)`. Both are interior, **neither touches any boundary**. No DFS ever reaches it → captured wholesale.
+
 ```
-INPUT board:                          PHASE 1: mark every O that can
-                                      reach the boundary as '#'
-  ┌───┬───┬───┬───┐                   (start DFS from every boundary O).
-  │ X │ X │ X │ X │
-  ├───┼───┼───┼───┤                   ┌───┬───┬───┬───┐
-  │ X │ O │ O │ X │                   │ X │ X │ X │ X │
-  ├───┼───┼───┼───┤                   ├───┼───┼───┼───┤
-  │ X │ X │ O │ X │                   │ X │ O │ O │ X │   no boundary O
-  ├───┼───┼───┼───┤                   ├───┼───┼───┼───┤   touches these
-  │ X │ O │ X │ X │                   │ X │ X │ O │ X │
-  └───┴───┴───┴───┘                   ├───┼───┼───┼───┤
-                                      │ X │ # │ X │ X │ ← only this O is
-                                      └───┴───┴───┴───┘   on the boundary,
-                                                          and it has no
-                                                          O-neighbors to
-                                                          recurse into.
+INPUT board (5×6):                       PHASE 1 — DFS from every boundary O,
+                                         mark each visited cell as '#'.
+  ┌───┬───┬───┬───┬───┬───┐
+  │ X │ X │ O │ X │ X │ X │              The ONLY boundary O is (0,2) at the
+  ├───┼───┼───┼───┼───┼───┤              top edge. DFS from there cascades
+  │ X │ X │ O │ O │ X │ X │  ← Region A  through Region A's whole chain:
+  ├───┼───┼───┼───┼───┼───┤                (0,2) → (1,2) → (1,3) → (2,3)
+  │ X │ X │ X │ O │ X │ X │              All 4 cells of Region A become '#'.
+  ├───┼───┼───┼───┼───┼───┤
+  │ X │ O │ O │ X │ X │ X │  ← Region B  Region B has NO boundary cell to
+  ├───┼───┼───┼───┼───┼───┤              seed from, so the multi-source DFS
+  │ X │ X │ X │ X │ X │ X │              never enters it. Both cells stay 'O'.
+  └───┴───┴───┴───┴───┴───┘
+                                           ┌───┬───┬───┬───┬───┬───┐
+Two disjoint O-regions:                    │ X │ X │ # │ X │ X │ X │
+  Region A — 4 cells, head at (0,2)        ├───┼───┼───┼───┼───┼───┤
+             touches the top boundary      │ X │ X │ # │ # │ X │ X │
+             so the whole chain escapes    ├───┼───┼───┼───┼───┼───┤
+  Region B — 2 cells, fully interior       │ X │ X │ X │ # │ X │ X │
+             no boundary contact at all    ├───┼───┼───┼───┼───┼───┤
+             → captured                    │ X │ O │ O │ X │ X │ X │ ← Region B
+                                           ├───┼───┼───┼───┼───┼───┤   untouched
+                                           │ X │ X │ X │ X │ X │ X │
+                                           └───┴───┴───┴───┴───┴───┘
 
 
-PHASE 2: sweep one final pass:        FINAL board (PHASE 2 output):
-   • Remaining 'O' → flip to 'X'         ┌───┬───┬───┬───┐
-     (those were the surrounded ones)    │ X │ X │ X │ X │
-   • '#' → flip back to 'O'              ├───┼───┼───┼───┤
-     (those were the escapable ones)     │ X │ X │ X │ X │  ← surrounded
-                                         ├───┼───┼───┼───┤    interior O's
-                                         │ X │ X │ X │ X │    flipped to X
-                                         ├───┼───┼───┼───┤
-                                         │ X │ O │ X │ X │  ← restored O
-                                         └───┴───┴───┴───┘    (boundary O)
+PHASE 2 — one final sweep:                FINAL board:
+   • '#' → flip back to 'O'
+     (Region A survives — it escaped)       ┌───┬───┬───┬───┬───┬───┐
+   • remaining 'O' → flip to 'X'            │ X │ X │ O │ X │ X │ X │
+     (Region B was surrounded)              ├───┼───┼───┼───┼───┼───┤
+                                            │ X │ X │ O │ O │ X │ X │ ← Region A
+                                            ├───┼───┼───┼───┼───┼───┤   restored
+                                            │ X │ X │ X │ O │ X │ X │   (4 saved
+                                            ├───┼───┼───┼───┼───┼───┤    by ONE
+                                            │ X │ X │ X │ X │ X │ X │   boundary
+                                            ├───┼───┼───┼───┼───┼───┤   seed)
+                                            │ X │ X │ X │ X │ X │ X │ ← Region B
+                                            └───┴───┴───┴───┴───┴───┘   captured
 
 
 KEY INVARIANT:
-   An interior O survives if and only if it CANNOT reach the boundary.
-   By marking the escapable Os first and processing the leftover Os last,
-   we never have to ask the hard "is this region surrounded?" question
-   for each region — the algorithm answers it implicitly via what's
-   left unmarked after the boundary sweep.
+   A region survives iff ANY one of its cells touches the boundary.
+   Region A → 4 cells saved by a single boundary seed (DFS follows the chain).
+   Region B → 0 boundary contact → captured wholesale.
+
+   The complement trick converts the hard "is this whole region surrounded?"
+   per-region check (which would need a separate flood + boundary test for
+   every connected component) into a single multi-source DFS sweep from the
+   boundary. The leftover O's ARE the answer — by exclusion, not by direct
+   detection.
 ```
 
 **LC 130 Surrounded Regions — Steps in plain English:**
@@ -1851,54 +1871,106 @@ private void dfs(int[][] grid, int r, int c, int rows, int cols,
 
 > **Why the backtrack marker matters:** without `'B'`, two islands with different shapes can produce identical strings. The backtrack marker records the recursion structure.
 
-### 🎨 Visual — Why two genuinely-different islands collide without the 'B' marker
+### 🎨 Visual — Why the 'B' (backtrack) marker is essential
 
 ```
-Two islands that LOOK different but encode IDENTICALLY without 'B':
+LEGEND — what each letter in the encoded string means:
+
+   S = the FIRST cell where DFS starts on this island (exactly one S)
+   U = "DFS moved UP    to enter this cell"   (row - 1)
+   D = "DFS moved DOWN  to enter this cell"   (row + 1)
+   L = "DFS moved LEFT  to enter this cell"   (col - 1)
+   R = "DFS moved RIGHT to enter this cell"   (col + 1)
+   B = "DFS is RETURNING from this cell"      (appended on recursion EXIT)
+
+So every cell contributes TWO letters to the string:
+   - one when DFS ENTERS it  (S, U, D, L, or R)
+   - one when DFS LEAVES it  (B)
+
+────────────────────────────────────────────────────────────────────
+
+TWO ISLANDS that look different but encode IDENTICALLY without 'B':
 
 
-   ISLAND P (T-shape)           ISLAND Q (L-shape)
+   ISLAND P  (⌐ corner, top row)        ISLAND Q  (¬ corner, bottom row)
 
-     ┌───┬───┬───┐                ┌───┬───┐
-     │ ★ │   │   │                │ ★ │   │
-     ├───┼───┼───┤                ├───┼───┤
-     │   │ ● │   │                │   │ ● │
-     ├───┼───┼───┤                ├───┴───┘
-     │   │ ● │   │
-     └───┴───┴───┘                Path from ★:
-                                    ★ → R → D → D  (then nowhere to go)
-     Path from ★:
-       ★ → R → D → back → D
-                                  Shape WITHOUT 'B': "S" + "R" + "D" + "D"
-     Shape WITHOUT 'B':                                ─────────
-       "S" + "R" + "D" +
-       (no return marker) + "D"
-                                                          ↑↑↑
-                                            BOTH yield "SRDD" → COLLISION ❌
+     col→  0   1                          col→  0   1
+   row    ┌───┬───┐                     row    ┌───┬───┐
+    0     │ ★ │ X │                      0     │ ★ │   │
+          ├───┼───┤                            ├───┼───┤
+    1     │ X │   │                      1     │ X │ X │
+          └───┴───┘                            └───┴───┘
+
+   Filled cells: (0,0) (0,1) (1,0)      Filled cells: (0,0) (1,0) (1,1)
+   ★ = DFS start                        ★ = DFS start
+
+────────────────────────────────────────────────────────────────────
+
+DFS TRACE FOR ISLAND P    (code tries U, D, L, R in that order)
+
+   step                              action            string so far
+   ─────────────────────────────────────────────────────────────────
+   1. enter (0,0)                    append S          "S"
+   2. try U → out of bounds          (nothing)         "S"
+   3. try D → enter (1,0)            append D          "SD"
+   4.   from (1,0): no new neighbors (nothing)         "SD"
+   5.   leave (1,0)                  append B          "SDB"
+   6. try L → out of bounds          (nothing)         "SDB"
+   7. try R → enter (0,1)            append R          "SDBR"
+   8.   from (0,1): no new neighbors (nothing)         "SDBR"
+   9.   leave (0,1)                  append B          "SDBRB"
+   10. leave (0,0)                   append B          "SDBRBB"
+
+   FULL encoding (with B):     "S D B R B B"
+   STRIPPED (drop every B):    "S D R"
 
 
-WITH the 'B' (backtrack) marker, the recursion structure is captured:
+DFS TRACE FOR ISLAND Q    (same code, same direction order)
 
-   ISLAND P:  "S R D B D B B B B B"      (notice the EARLY 'B' after the
-                  ↑              ↑        first D, encoding "we backed
-                  └─ first D     └─ trailing returns up the chain
-                     finished;       to start
-                     back to root)
+   step                              action            string so far
+   ─────────────────────────────────────────────────────────────────
+   1. enter (0,0)                    append S          "S"
+   2. try U → out of bounds          (nothing)         "S"
+   3. try D → enter (1,0)            append D          "SD"
+   4.   from (1,0): try R → (1,1)    append R          "SDR"
+   5.     from (1,1): no neighbors   (nothing)         "SDR"
+   6.     leave (1,1)                append B          "SDRB"
+   7.   leave (1,0)                  append B          "SDRBB"
+   8. try L → out of bounds          (nothing)         "SDRBB"
+   9. try R → (0,1) is empty cell    (nothing)         "SDRBB"
+   10. leave (0,0)                   append B          "SDRBBB"
 
-   ISLAND Q:  "S R D D B B B B"         (no early 'B' — the two D's are
-                  ↑    ↑                 in a continuous descent, then a
-                  └─ uninterrupted        run of returns)
-                     descent
+   FULL encoding (with B):     "S D R B B B"
+   STRIPPED (drop every B):    "S D R"
 
-   Different strings → counted as distinct ✅
+────────────────────────────────────────────────────────────────────
 
+SIDE-BY-SIDE COMPARISON
+
+   WITHOUT 'B':   P = "SDR"        ❌ SAME → falsely counted as 1 shape
+                  Q = "SDR"
+
+   WITH    'B':   P = "SDBRBB"     ✅ DIFFERENT → correctly counted as 2
+                  Q = "SDRBBB"
+
+   The difference is WHERE the first B falls:
+     - In P, B comes BETWEEN D and R  → "after D we backed up, THEN went R"
+     - In Q, B comes AFTER  D and R   → "we went D then immediately R deeper"
+
+   That single position of B encodes the recursion-tree shape — i.e.,
+   whether R was a SIBLING of D (top level, P) or a CHILD of D (one
+   level deeper, Q).
+
+────────────────────────────────────────────────────────────────────
 
 KEY INVARIANT:
-   The 'B' marker is a fingerprint of the recursion TREE, not just the
-   set of cells visited. Two islands with the same cells but different
-   adjacency structure produce different trees, hence different fingerprints.
-   Without 'B', two shapes whose cell sequences collide on the DFS tour
-   become indistinguishable.
+   The encoded string fingerprints the recursion TREE shape, not just
+   the sequence of cells visited. Two islands can visit cells in the
+   same direction-order yet have different parent-child structure in
+   their DFS call tree. The 'B' marker records EXIT events, which is
+   exactly the information needed to reconstruct that tree shape.
+   Without 'B', the tree collapses to a flat sequence and distinct
+   shapes collide.
 ```
 
 > 🧩 **Try these (Grid BFS/DFS — the full ladder):**
@@ -2555,6 +2627,43 @@ public boolean canFinish(int numCourses, int[][] prerequisites) {
 > - 🟡 **LC 802** Find Eventual Safe States via Kahn's (G-25)
 > - 🟡 **LC 269** Alien Dictionary (G-26)
 > - 🔴 LC 2115 Find All Possible Recipes from Given Supplies
+
+---
+
+## 🗺️ Where to Go Next in Graphs (per your 17-day plan)
+
+> **You are here:** topo sort done. The 17-day plan's Day 4 (the last graph day before DP starts) closes the remaining graph gaps before you pivot to DP for 10 days. Everything below is **already written in this file** — Day 4 is "solve these problems while reading these sections," not "create new notes."
+
+### ✅ Day 4 problems (the must-do four, before DP starts)
+
+| Problem | Pattern it teaches | Read first (this file) |
+| --- | --- | --- |
+| **LC 547** Number of Provinces ⭐ | Adjacency-matrix DFS + first DSU exposure | § "Disjoint Set Union (DSU)" (line ~3258) — full template + path compression + union-by-rank |
+| **LC 261** Graph Valid Tree | Undirected cycle + connectivity ("tree = connected ∧ E == V-1") | § "Cycle Detection — Undirected Graph" (line ~1989) |
+| **LC 127** Word Ladder ⭐ | BFS on an **implicit** graph (graph not given — you build neighbors lazily) | § "Word Ladder I, II" (line ~2766) |
+| LC 695 Max Area of Island (revisit) | Bottom-up grid DFS with a return value | § "Sub-Pattern 1: Counting Connected Components on a Grid" |
+
+> **Why this order:** LC 547 introduces DSU on a clean adjacency-matrix problem (no string-key indirection yet). LC 261 reinforces "tree-ness as a property of a graph." LC 127 is the **hardest of Day 4** — the lesson is *"see the graph where none is drawn"* (each word is a node, edges exist between words differing by one letter). Don't precompute the graph — build neighbors lazily inside BFS.
+
+### 🎯 What to LOOK FOR while solving Day 4
+
+1. **DSU template fits on one screen.** `parent[]`, `rank[]`, `find()` with path compression, `union()` with rank. If yours doesn't fit on one screen, you're overengineering.
+2. **The "is it a tree?" identity:** a graph is a tree iff (a) it's connected and (b) has exactly `V - 1` edges and (c) is acyclic. Any two of these imply the third in an undirected graph.
+3. **Word Ladder's neighbor generation:** for each of the 26 letter substitutions at each position, check the dictionary. **Don't** precompute an `O(N² · L)` adjacency map — that TLEs.
+
+### 🔄 Update the templates reference AFTER Day 4
+
+When all four problems are solved cold, open **`../Reference/bfs-dfs-templates-reference.md`** and add:
+- One row for **DSU** (signature: `parent[]`, `find` + path compression, `union` by rank — O(α(N)) per op)
+- One row for **implicit-graph BFS** (signature: BFS where neighbors are *generated* on the fly, not stored)
+
+This is the bridge that lets you spot these patterns months later.
+
+### 🚀 What's NEXT after Day 4 (Days 5-14 — the DP block)
+
+Once Day 4 is locked in, you're done with graphs for the prep cycle. The 17-day plan pivots to **DP foundations on Day 5** — `recursion → memo → tabulation → space-opt` as a four-stage drill applied to LC 509 / LC 70 / LC 198, kicking off the deliverable file **`DSA/DeepDive/dp-fundamentals.md`** which grows daily across Days 5-14.
+
+> **Senior likely topics** (below this divider — Shortest Path, MST, advanced DSU apps): **skip during this 17-day window.** They're 🟡 senior-level / specialized and not on the SDE-3 critical path. Revisit only after the DP + Greedy block is complete.
 
 ---
 
