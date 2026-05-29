@@ -4,6 +4,25 @@
 
 ---
 
+## ⚡ Imports — Write These First on a Blank Notepad
+
+```java
+import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.Comparator;
+import java.util.Collections;
+import java.util.stream.Collectors;
+```
+
+> **On LeetCode** these are pre-imported. On a **plain notepad / Google Doc / whiteboard**, write these first — they cover every pattern in this file.
+
+---
+
 ## 🎯 The Mental Model (10 Seconds)
 
 **Arrays have two spaces: index and value.** The most clever array tricks come from using ONE space as auxiliary storage for facts about the OTHER:

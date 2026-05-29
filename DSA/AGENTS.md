@@ -39,6 +39,12 @@ DSA/
 │   ├── code-style-for-dsa-reference.md
 │   └── dsa-collections-notes.md
 │
+├── Implementation/                        ← Implementation discipline (building blocks that prevent bugs)
+│   ├── java-coding-traps.md               ← 9 trap families (deep dive)
+│   ├── java-coding-traps-reference.md     ← Quick reference for traps
+│   ├── simulation-patterns.md             ← 7 building blocks for simulation problems (deep dive)
+│   └── simulation-patterns-reference.md   ← Quick reference for simulation
+│
 └── Patterns/                              ← Per-problem deep dives (one problem per file)
     ├── notes-standards-patterns.md        ← Detailed conventions for Pattern notes
     ├── group-anagrams-problem.md
@@ -53,9 +59,10 @@ DSA/
 | --- | --- | --- | --- | --- |
 | `DeepDive/` | **Deep dive (in-depth study)** | New topic not yet internalized; needs mental models + step-by-step explanations | 800–1500 lines | `DeepDive/notes-standards-deepdive.md` |
 | `Reference/` | **Reference (cheatsheet)** | Method syntax + DSA patterns for a known data structure / language feature | 300–700 lines | `Reference/notes-standards-reference.md` |
+| `Implementation/` | **Implementation discipline** | Building blocks that prevent coding bugs under pressure — Java traps, simulation templates, parsing patterns | Deep dive: 500–800 lines; Reference: 200–350 lines | (follows DeepDive + Reference conventions) |
 | `Patterns/` | **Pattern (per-problem dive)** | Single LeetCode problem walkthrough with multiple approaches (brute → optimal) | 250–400 lines | `Patterns/notes-standards-patterns.md` |
 
-> **Decision question:** *"Is this a topic Kapil is learning fresh (DeepDive), a syntax cheatsheet to revise daily (Reference), or one specific problem to fully understand (Pattern)?"*
+> **Decision question:** *"Is this a topic Kapil is learning fresh (DeepDive), a syntax cheatsheet to revise daily (Reference), a coding discipline / trap to drill into muscle memory (Implementation), or one specific problem to fully understand (Pattern)?"*
 
 ---
 
@@ -106,16 +113,57 @@ In addition to the universal palette in the root `../AGENTS.md`, DSA notes may u
 
 ---
 
+## 🧩 Inline Drill Convention
+
+> **Established May 2026** after Kapil identified that reading notes without practicing leads to the same interview mistakes. Drills force active recall — you write the safe version before moving on, not just read it.
+
+**The rule:**
+
+> Every deep dive and implementation note that introduces a **building block, template, or trap** must include an inline drill callout immediately after the section. The drill forces the reader to write the safe version from memory before reading the next section.
+
+**Format:**
+
+```markdown
+> 🧩 **Drill — do this NOW before reading further:**
+> On a blank notepad (no peeking), write:
+> 1. [specific thing to write from memory]
+> 2. [specific thing to write from memory]
+>
+> Then compare with the ✅ version above. [What to do if you got it wrong.]
+```
+
+**Rules for good drills:**
+
+| Rule | Why |
+| --- | --- |
+| **Specific** — "write safe midpoint of lo and hi" | Not "think about overflow" |
+| **Small** — 1-3 lines of code, takes 60 seconds | Not a full LeetCode problem |
+| **Testable** — reader can immediately compare with the answer above | No ambiguity about right/wrong |
+| **Covers the trap** — forces the reader to write the SAFE version | Not just the concept |
+
+**Where they go:**
+
+| Note type | Drill placement |
+| --- | --- |
+| Deep dive / Implementation deep dive | **Inline** — after each section / family / building block |
+| Reference / Implementation reference | **Consolidated** — one "🧩 Speed Drill" section near the end (before cross-references) |
+
+**Reference files use a consolidated drill** because their purpose is quick scanning — inline drills would break the flow. The speed drill should be timed (e.g., "3 minutes", "5 minutes") and have a scoring rubric.
+
+---
+
 ## 🧪 DSA-Specific Quality Checklist
 
 Extends the universal checklist in the root `../AGENTS.md`:
 
-- [ ] Folder is correct (DeepDive vs Reference vs Patterns)
+- [ ] Folder is correct (DeepDive vs Reference vs Patterns vs Implementation)
 - [ ] Folder-specific standards file (`notes-standards-*.md`) checklist passed
 - [ ] All embedded problem references include the `LC ###` number
 - [ ] All 🧩 "Try these" callouts have ✅ / 🟡 / 🔴 difficulty tags
 - [ ] Code blocks use Java idioms (no inline imports declared)
 - [ ] If introducing a pattern that's already covered elsewhere, cross-reference rather than duplicate
+- [ ] Deep dive / implementation notes have inline 🧩 drills after each section
+- [ ] Reference / implementation reference notes have a consolidated 🧩 Speed Drill before cross-references
 
 ---
 
@@ -142,3 +190,5 @@ If something needs to deviate from the standard for a specific topic, **call it 
 | May 2026 | **Initial DSA-specific AGENTS.md created.** Split out from the monolithic root AGENTS.md when the repo was migrated from Notion-paste workflow to GitHub. |
 | May 2026 | **English-steps-before-code rule** stays in the root universal AGENTS.md (applies across all subdomains). |
 | May 2026 | **Difficulty tagging legend** (✅ / 🟡 / 🔴) and **LeetCode numbering** rule live here (DSA-specific). |
+| May 2026 | **Implementation folder added.** New `Implementation/` folder for coding discipline notes (Java traps, simulation patterns). Folder structure and note type table updated. |
+| May 2026 | **Inline drill convention added.** Deep dives get inline 🧩 drills after each section; references get a consolidated Speed Drill at the end. Quality checklist updated with two new items. |

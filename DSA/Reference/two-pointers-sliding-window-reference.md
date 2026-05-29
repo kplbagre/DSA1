@@ -4,6 +4,18 @@
 
 ---
 
+## ⚡ Imports — Write These First on a Blank Notepad
+
+```java
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
+```
+
+> These three cover every template in this file. LC 76 (Min Window Substring) also uses `Character` — no import needed, it's `java.lang`.
+
+---
+
 ## 🎯 The Mental Model (10 Seconds)
 
 **Two pointers that move only forward.** The window `[left..right]` IS the candidate answer. Each element added once + removed at most once → O(n).

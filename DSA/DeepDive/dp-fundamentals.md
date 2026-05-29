@@ -654,6 +654,106 @@ Booleans force cleaner thinking and use 1/4 the memory of `int[][]`.
 
 ---
 
+### ⚠️ Three Rookie Mistakes — Lessons Learned the Hard Way (May 2026)
+
+These three mistakes came from actually solving Family 1 problems cold. They're not in any textbook — they're the traps you fall into when you first try writing DP recursion on your own.
+
+---
+
+#### Mistake 1: Carrying the result as a parameter (State vs Result confusion)
+
+> **Lesson learned the hard way (May 2026):** On LC 198 House Robber, I wrote `solve(sum, n, nums, i)` — carrying the accumulated money as a parameter. The recursion gave correct answers but **could never be memoized** because `sum` can be anything, making the state space `(i, sum)` instead of just `(i)`.
+
+**The rule — ask this one question before adding ANY parameter:**
+
+> *"If I'm standing at position i, do I need to know this value to make my decision?"*
+>
+> - **YES** → it's **STATE** (make it a parameter). Example: index `i`, remaining capacity `w`.
+> - **NO** → it's the **RESULT** (return it, don't pass it). Example: accumulated sum, path count.
+
+**The tell:** if a variable only INCREASES and never affects which CHOICES you can make, it's a result, not state. Money in House Robber never restricts whether you can rob a house — so it's a result.
+
+```java
+// ❌ Wrong — sum is luggage, not state
+public int solve(int sum, int[] nums, int i) {
+    if (i >= n) { return sum; }
+    int include = solve(sum + nums[i], nums, i + 2);
+    int notInclude = solve(sum, nums, i + 1);
+    return Math.max(include, notInclude);
+}
+// Can't memoize: same i reached with different sums
+
+// ✅ Right — solve(i) RETURNS the answer for its subproblem
+public int solve(int[] nums, int i) {
+    if (i >= nums.length) { return 0; }
+    int include = nums[i] + solve(nums, i + 2);
+    int notInclude = solve(nums, i + 1);
+    return Math.max(include, notInclude);
+}
+// Memoizable: memo[i] has exactly one answer
+```
+
+**The mantra:** *"My function RETURNS the answer for its subproblem. It doesn't need to know what happened before it — only where it's starting from."*
+
+---
+
+#### Mistake 2: Mixing recursion directions (forward vs backward)
+
+> **Lesson learned the hard way (May 2026):** On LC 746 Min Cost Climbing Stairs, I naturally think forward (0→n) but copied a backward (n→0) example. The code worked but the calling convention (`min(solve(n-1), solve(n-2))`) felt unnatural and I couldn't explain WHY it needed `min` of two calls.
+
+**The rule — pick ONE direction and use it for everything:**
+
+| | Forward (0→n) — recommended | Backward (n→0) |
+| --- | --- | --- |
+| `solve(i)` means | "best answer from index i **to the end**" | "best answer from start **to reach index i**" |
+| Moves toward | `i+1`, `i+2` (toward n) | `i-1`, `i-2` (toward 0) |
+| Base case | `i >= n → return 0` (past the end, nothing left) | `i < 0 → return 0` (before start) |
+
+**Why forward is easier:**
+
+1. **One base case** (`i >= n → 0`) vs two (`i < 0 → 0` AND `i == 0 → cost[0]`)
+2. **Calling convention reads from the problem statement** — "can start from step 0 or 1" → `min(solve(0), solve(1))`
+3. **Matches natural English** — "I'm standing here, what's the best I can do going forward?"
+
+```java
+// Forward House Robber:
+// solve(i) = "max money from house i to the end"
+// Call: solve(0)
+
+// Forward Min Cost Stairs:
+// solve(i) = "min cost to reach TOP from step i"
+// Call: min(solve(0), solve(1))
+
+// Forward Unique Paths:
+// solve(i, j) = "number of ways from cell (i,j) to bottom-right"
+// Call: solve(0, 0)
+```
+
+**Commit to forward (0→n). Use it for every family. Stop switching.**
+
+---
+
+#### Mistake 3: Not knowing WHY the calling convention needs `min` of two calls
+
+> **Lesson learned the hard way (May 2026):** On Min Cost Stairs, I didn't understand why the answer was `min(solve(n-1), solve(n-2))` (backward) or `min(solve(0), solve(1))` (forward). It felt like magic.
+
+**The rule — read the problem statement for the STARTING condition:**
+
+> *"Where can I START?"* → that determines the initial call.
+
+| Problem | Problem says... | Forward call |
+| --- | --- | --- |
+| House Robber | "rob from house 0 onward" | `solve(0)` — one starting point |
+| Min Cost Stairs | "start from step 0 **or** step 1" | `min(solve(0), solve(1))` — two starting points, try both |
+| Unique Paths | "start at top-left (0,0)" | `solve(0, 0)` — one starting point |
+| Frog Jump | "frog starts at stone 0" | `solve(0)` — one starting point |
+
+**The pattern:** If the problem gives you ONE starting point → one call. If it gives you MULTIPLE starting points → try each, take the best (`min` or `max`).
+
+Min Cost Stairs says "you can start from step 0 **or** step 1" — that's two options. You don't know which is cheaper until you try both. Hence `min(solve(0), solve(1))`.
+
+---
+
 > 📍 **You've now finished the foundations (Sections 1-9).** Before continuing, do the four-stage drill cold on Fibonacci. Don't read the next family section until you can write all 4 stages of `fib(n)` without peeking.
 
 ---
@@ -2495,6 +2595,7 @@ If 3+ signals fire → it's DP. Open with brute recursion, identify the family, 
 | May 2026 | **File created.** Combined Striver's four-stage drill (recursion → memo → tab → space-opt) with Aditya Verma's pattern-identification taxonomy (7 medium + 3 senior families). Medium-scope cutoff banner mirrors `graphs-fundamentals.md`. |
 | May 2026 | Added 5 worked walkthroughs (LC 198, LC 1143, LC 322, LC 72, LC 309) with all four stages each. |
 | May 2026 | Silent Bug Hall of Fame (§21) compiled from real practice mistakes. |
+| May 2026 | **Three Rookie Mistakes section added** after Style Habits. State vs Result confusion (carrying sum as parameter), forward vs backward direction (commit to 0→n), and calling convention intuition (read starting condition from problem). Triggered by real mistakes on LC 198 and LC 746. |
 
 ### 🔗 Companion files
 

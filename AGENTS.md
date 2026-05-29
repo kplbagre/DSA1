@@ -266,6 +266,61 @@ KEY INVARIANT:
 
 ---
 
+### 8. First-Use Term Gloss — Define Unfamiliar Words Inline
+
+> **Established May 2026** after Kapil flagged that words like *dispatch* were being used repeatedly without ever being explained. Future-Kapil reviewing a note under interview-prep pressure should never need to context-switch to look up a word.
+
+**The rule:**
+
+> When a doc introduces a technical term, jargon, or domain word the reader might not immediately recognize, provide a **one-line plain-English explanation in parentheses at the term's first appearance in that doc**.
+
+**Format:**
+
+```markdown
+The **DispatcherServlet** (Spring MVC's front-door servlet that routes every incoming HTTP request to the right controller method — like a receptionist deciding which department handles the call) is the entry point of every Spring web request.
+```
+
+**Specifics:**
+
+- **First use only.** Subsequent mentions of the same term in the same doc are bare. The gloss is a teaching aid, not a sticker.
+- **Keep it to one line.** ≤ 20 words. If a term needs more, it deserves its own paragraph or §Terminology row, not a parenthetical.
+- **Plain English, not formal definition.** A formal definition explains *what it is*; a gloss explains *what it does in the reader's head*. Lean on everyday analogies — "like a receptionist…", "like a phone directory…", "like a checkout queue at a grocery store…".
+- **Skip when redundant.**
+  - If the doc has a §Terminology table that defines the term earlier — no gloss needed.
+  - If the term is already universal vocabulary (loop, array, function, class, method) — no gloss.
+  - If the term is the doc's main subject (a note titled "BFS" doesn't gloss "BFS") — no gloss.
+- **When in doubt, gloss it.** The cost of a redundant parenthetical is 10 seconds of skim; the cost of an unexplained term is a derailed review session.
+
+**Examples (good vs bad):**
+
+✅ **Good:**
+
+```markdown
+A **bean** (a Java object that Spring creates, configures, and manages for you — instead of you calling `new` yourself) is registered in the application context.
+```
+
+❌ **Bad** (formal-definition style, too long, no everyday hook):
+
+```markdown
+A **bean** (an object that is instantiated, assembled, and managed by a Spring IoC container as defined by the Spring framework's dependency injection mechanism) is registered in the application context.
+```
+
+✅ **Good:**
+
+```markdown
+Spring uses **AOP** (aspect-oriented programming — a way to inject cross-cutting concerns like logging or transactions into your methods without writing the code inline) to wrap your transactional methods.
+```
+
+❌ **Bad** (no gloss at all on first use):
+
+```markdown
+Spring uses AOP to wrap your transactional methods.
+```
+
+> **Cross-reference:** This rule layers on top of the §Terminology table convention in `DSA/DeepDive/notes-standards-deepdive.md`. The terminology table handles foundational vocabulary; the first-use gloss handles incidental terms that crop up mid-explanation and shouldn't break flow.
+
+---
+
 ## 🧪 Universal Quality Checklist
 
 Run before delivering ANY note. Subdomain-specific checklists (in each folder's `AGENTS.md`) extend this one.
@@ -277,6 +332,7 @@ Run before delivering ANY note. Subdomain-specific checklists (in each folder's 
 - [ ] All cross-references use explicit relative paths
 - [ ] No emojis outside the universal palette + declared subdomain additions
 - [ ] Lesson-learned callouts have a date
+- [ ] Every potentially-unfamiliar term is glossed in parentheses at first use (Rule 8)
 - [ ] Subdomain-specific checklist passed (see subdomain `AGENTS.md`)
 - [ ] Note-type-specific checklist passed (see e.g. `DSA/DeepDive/notes-standards-deepdive.md`)
 
@@ -296,3 +352,4 @@ When a new convention emerges from a real conversation:
 | --- | --- |
 | May 2026 | **Repository created.** Migrated from local Notion-paste workflow to GitHub. Split monolithic AGENTS.md into universal (this file) + per-subdomain rules. |
 | May 2026 | **AI-agnostic phrasing.** Removed references to specific AI tools so any assistant cloning this repo can follow the conventions and produce the same quality of notes. |
+| May 2026 | **Rule 8 added — First-Use Term Gloss.** Every potentially-unfamiliar technical term must be glossed in parentheses at first use in a doc, with a one-line plain-English explanation. Triggered by Kapil flagging that words like *dispatch* were used repeatedly across notes without ever being explained. |

@@ -1,4 +1,26 @@
-## **HashMap**
+# HashMap — Reference
+
+> Compact revision file for HashMap-centric DSA patterns. Every pattern here is something you'd write on a plain notepad in an interview.
+
+---
+
+## ⚡ Imports — Write These First on a Blank Notepad
+
+```java
+import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.PriorityQueue;
+```
+
+> These cover every pattern in this file. `Integer`, `String`, `Character` are `java.lang` — no import needed.
+
+---
+
+## 🔹 HashMap Basics
 
 Backed by **hash table (array + LinkedList/Tree)**, average **O(1)** for put/get/remove.
 
