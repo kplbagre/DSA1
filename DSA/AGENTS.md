@@ -45,6 +45,23 @@ DSA/
 │   ├── simulation-patterns.md             ← 7 building blocks for simulation problems (deep dive)
 │   └── simulation-patterns-reference.md   ← Quick reference for simulation
 │
+├── Interview/                             ← Interview playbooks (pattern recognition + problem mapping)
+│   ├── notes-standards-interview.md       ← Detailed conventions for Interview notes
+│   ├── arrays-and-hashing.md
+│   ├── two-pointers-and-sliding-window.md
+│   ├── strings.md
+│   ├── linked-list.md
+│   ├── stacks-and-queues.md
+│   ├── trees-and-bfs-dfs.md
+│   ├── binary-search.md
+│   ├── heaps.md
+│   ├── backtracking.md
+│   ├── intervals.md
+│   ├── greedy.md
+│   ├── dp.md
+│   ├── graphs.md
+│   └── index.md                          ← Master decision tree (which file to open)
+│
 └── Patterns/                              ← Per-problem deep dives (one problem per file)
     ├── notes-standards-patterns.md        ← Detailed conventions for Pattern notes
     ├── group-anagrams-problem.md
@@ -53,16 +70,17 @@ DSA/
 
 ---
 
-## 🧭 The Three Note Types
+## 🧭 The Five Note Types
 
 | Folder | Type | When to use | Length target | Standards file |
 | --- | --- | --- | --- | --- |
 | `DeepDive/` | **Deep dive (in-depth study)** | New topic not yet internalized; needs mental models + step-by-step explanations | 800–1500 lines | `DeepDive/notes-standards-deepdive.md` |
 | `Reference/` | **Reference (cheatsheet)** | Method syntax + DSA patterns for a known data structure / language feature | 300–700 lines | `Reference/notes-standards-reference.md` |
 | `Implementation/` | **Implementation discipline** | Building blocks that prevent coding bugs under pressure — Java traps, simulation templates, parsing patterns | Deep dive: 500–800 lines; Reference: 200–350 lines | (follows DeepDive + Reference conventions) |
+| `Interview/` | **Interview playbook** | Pattern recognition + problem mapping — "I see this problem, which pattern do I use?" | 400–600 lines | `Interview/notes-standards-interview.md` |
 | `Patterns/` | **Pattern (per-problem dive)** | Single LeetCode problem walkthrough with multiple approaches (brute → optimal) | 250–400 lines | `Patterns/notes-standards-patterns.md` |
 
-> **Decision question:** *"Is this a topic Kapil is learning fresh (DeepDive), a syntax cheatsheet to revise daily (Reference), a coding discipline / trap to drill into muscle memory (Implementation), or one specific problem to fully understand (Pattern)?"*
+> **Decision question:** *"Is this a topic Kapil is learning fresh (DeepDive), a syntax cheatsheet to revise daily (Reference), a coding discipline / trap to drill into muscle memory (Implementation), a pattern-to-problem bridge for interview prep (Interview), or one specific problem to fully understand (Pattern)?"*
 
 ---
 
@@ -192,3 +210,5 @@ If something needs to deviate from the standard for a specific topic, **call it 
 | May 2026 | **Difficulty tagging legend** (✅ / 🟡 / 🔴) and **LeetCode numbering** rule live here (DSA-specific). |
 | May 2026 | **Implementation folder added.** New `Implementation/` folder for coding discipline notes (Java traps, simulation patterns). Folder structure and note type table updated. |
 | May 2026 | **Inline drill convention added.** Deep dives get inline 🧩 drills after each section; references get a consolidated Speed Drill at the end. Quality checklist updated with two new items. |
+| May 2026 | **Interview folder added.** New `Interview/` folder for interview playbook notes — pattern recognition + problem mapping. A fifth note type bridging Reference (syntax) and problem-solving. 6 topic files: arrays-and-hashing, two-pointers-and-sliding-window, strings, linked-list, stacks-and-queues, trees-and-bfs-dfs. Note type table updated to "Five Note Types." |
+| May 2026 | **Interview folder expanded.** Added 5 new topic files (binary-search, heaps, backtracking, intervals, greedy) + master index. Added 🔧 Essential Methods sections to all 13 Interview Playbook files. Total: 13 topic files + 1 standards + 1 index = 15 files in Interview/. |
