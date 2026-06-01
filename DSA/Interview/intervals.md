@@ -15,6 +15,51 @@ After reading this file, you should be able to:
 
 ---
 
+## 📖 What Is `int[][]` — The Interval Data Type
+
+Before anything else — understand the data structure. Every interval problem gives you a **2D int array**:
+
+```
+int[][] intervals = {{1,3}, {2,6}, {8,10}, {15,18}};
+
+intervals is an array of arrays. Each inner array is ONE interval:
+
+   intervals[0] = [1, 3]      start=1,  end=3
+   intervals[1] = [2, 6]      start=2,  end=6
+   intervals[2] = [8, 10]     start=8,  end=10
+   intervals[3] = [15, 18]    start=15, end=18
+
+So in the comparator (a, b) -> a[0] - b[0]:
+   a = one int[] (one interval, e.g., [2, 6])
+   b = another int[] (another interval, e.g., [1, 3])
+   a[0] = start of interval a = 2
+   a[1] = end of interval a = 6
+   a[0] - b[0] = "sort by start time ascending"
+```
+
+**Why you need a comparator:** Java knows how to sort `int[]` (a 1D array). But `int[][]` is an array of arrays — Java doesn't know which element of the inner array to sort by. You tell it: *"compare by index 0 (start time)."*
+
+### Three forms intervals can appear in
+
+```
+Form 1 — int[][] (most common in LeetCode)
+   int[][] intervals = {{1,3}, {2,6}, {8,10}};
+   Sort: Arrays.sort(intervals, (a, b) -> a[0] - b[0]);
+
+Form 2 — List<int[]> (when building result dynamically)
+   List<int[]> result = new ArrayList<>();
+   result.add(new int[]{1, 3});
+   Sort: result.sort((a, b) -> a[0] - b[0]);
+
+Form 3 — Two separate arrays (start[] and end[])
+   int[] starts = {1, 2, 8, 15};
+   int[] ends   = {3, 6, 10, 18};
+   Sort each independently: Arrays.sort(starts); Arrays.sort(ends);
+   Used in Meeting Rooms II sweep-line approach (Pattern 3, Approach B)
+```
+
+---
+
 ## 🔧 Essential Methods — Know These Cold
 
 | Method / Idiom | What it does | Used in |

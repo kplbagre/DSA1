@@ -16,7 +16,7 @@ You already know what DFS and BFS are. What you need is: **"I see this tree prob
 | --- | --- | --- |
 | `node.left` / `node.right` | Access children | All DFS patterns |
 | `node.val` | Access node value | All patterns |
-| `Queue<TreeNode> queue = new LinkedList<>()` | BFS queue | Pattern 3 |
+| `Queue<TreeNode> queue = new ArrayDeque<>()` | BFS queue (ArrayDeque faster than LinkedList) | Pattern 3 |
 | `queue.offer(node)` / `queue.poll()` | Add/remove from BFS queue — O(1) | Pattern 3 |
 | `queue.size()` | Snapshot level size before inner loop | Pattern 3 |
 | `new ArrayList<>()` / `list.add(element)` | Build level lists or result lists | Patterns 1, 3 |
@@ -282,7 +282,7 @@ public List<List<Integer>> levelOrder(TreeNode root) {
     }
 
     // Step 1 — initialize queue
-    Queue<TreeNode> queue = new LinkedList<>();
+    Queue<TreeNode> queue = new ArrayDeque<>();
     queue.offer(root);
 
     while (!queue.isEmpty()) {
@@ -319,7 +319,7 @@ public List<Integer> rightSideView(TreeNode root) {
         return result;
     }
 
-    Queue<TreeNode> queue = new LinkedList<>();
+    Queue<TreeNode> queue = new ArrayDeque<>();
     queue.offer(root);
 
     while (!queue.isEmpty()) {

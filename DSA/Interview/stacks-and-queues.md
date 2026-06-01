@@ -19,7 +19,7 @@ Stack and queue problems are deceptive. The problem never says "use a stack." It
 | `stack.pop()` | Remove and return top — O(1) | All stack patterns |
 | `stack.peek()` | View top without removing — O(1) | Patterns 2, 3 |
 | `stack.isEmpty()` | Check if empty — O(1) | All stack patterns |
-| `Queue<E> queue = new LinkedList<>()` | Create a queue | Pattern 5 (design) |
+| `Queue<E> queue = new ArrayDeque<>()` | Create a queue (ArrayDeque faster than LinkedList) | Pattern 5 (design) |
 | `queue.offer(e)` | Add to back — O(1) | Pattern 5 |
 | `queue.poll()` | Remove from front — O(1) | Pattern 5 |
 | `queue.peek()` | View front — O(1) | Pattern 5 |
@@ -777,7 +777,7 @@ for (int a : asteroids) {
 > **Approach:** One-queue approach: on `push`, add to queue then rotate all previous elements to the back (so newest is at front).
 
 ```java
-Queue<Integer> queue = new LinkedList<>();
+Queue<Integer> queue = new ArrayDeque<>();
 public void push(int x) {
     queue.offer(x);
     // Rotate all previous elements behind the new one — newest ends up at front (LIFO)

@@ -18,7 +18,7 @@ Graph problems look intimidating but interview-level graphs fall into just 5 pat
 | --- | --- | --- |
 | `List<List<Integer>> adj = new ArrayList<>()` | Adjacency list representation | Patterns 2, 3 |
 | `adj.get(node).add(neighbor)` | Add edge to adjacency list | Patterns 2, 3 |
-| `Queue<int[]> queue = new LinkedList<>()` | BFS queue (holds `[row, col]` or node) | Patterns 1, 2 |
+| `Queue<int[]> queue = new ArrayDeque<>()` | BFS queue (ArrayDeque faster than LinkedList) | Patterns 1, 2 |
 | `queue.offer(item)` / `queue.poll()` | BFS add/remove — O(1) | Patterns 1, 2 |
 | `boolean[] visited` / `boolean[][] visited` | Track visited nodes/cells | All patterns |
 | `int[][] dirs = {{0,1},{0,-1},{1,0},{-1,0}}` | 4-directional movement on grids | Pattern 1 |
@@ -136,7 +136,7 @@ Add ALL rotten oranges to the queue at the start. BFS level = one minute of spre
 
 ```java
 public int orangesRotting(int[][] grid) {
-    Queue<int[]> queue = new LinkedList<>();
+    Queue<int[]> queue = new ArrayDeque<>();
     int fresh = 0;
 
     // Enqueue all initially rotten oranges
@@ -207,7 +207,7 @@ public boolean canFinish(int numCourses, int[][] prerequisites) {
     }
 
     // Step 2 — enqueue zero in-degree nodes
-    Queue<Integer> queue = new LinkedList<>();
+    Queue<Integer> queue = new ArrayDeque<>();
     for (int i = 0; i < numCourses; i++) {
         if (inDegree[i] == 0) {
             queue.offer(i);
@@ -253,7 +253,7 @@ public Node cloneGraph(Node node) {
     }
 
     Map<Node, Node> map = new HashMap<>();
-    Queue<Node> queue = new LinkedList<>();
+    Queue<Node> queue = new ArrayDeque<>();
     map.put(node, new Node(node.val));
     queue.offer(node);
 

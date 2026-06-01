@@ -651,6 +651,75 @@ public int[] topKFrequent(int[] nums, int k) {
 | **Code difficulty** | Easy — 4 lines | Medium — 10 lines |
 | **When to use** | Interviewer says "n log n is fine" | Interviewer pushes for optimal |
 
+---
+
+### Generalized: HashMap Sorting Toolkit
+
+**Sort by keys** — when you need alphabetical / numerical order of keys:
+
+```java
+// Option A — TreeMap (auto-sorts keys on insertion)
+Map<String, Integer> sorted = new TreeMap<>(originalMap);
+// TreeMap: a red-black tree that keeps keys in natural sorted order.
+// Lookups are O(log n) instead of O(1) — pay that cost only when you NEED sorted keys.
+
+// Option B — Sort the key list manually
+List<String> keys = new ArrayList<>(map.keySet());
+Collections.sort(keys);
+for (String key : keys) {
+    // Access in sorted key order
+    int value = map.get(key);
+}
+```
+
+**Sort by values** — when you need to rank by count / frequency / score:
+
+```java
+List<Map.Entry<String, Integer>> entries = new ArrayList<>(map.entrySet());
+// Sort descending by value
+entries.sort((a, b) -> b.getValue() - a.getValue());
+// 🔄 Fallback (no lambda):
+// entries.sort(new Comparator<Map.Entry<String, Integer>>() {
+//     public int compare(Map.Entry<String, Integer> a, Map.Entry<String, Integer> b) {
+//         return b.getValue() - a.getValue();
+//     }
+// });
+
+// Collect into LinkedHashMap if you need a sorted map (preserves insertion order)
+Map<String, Integer> sortedByValue = new LinkedHashMap<>();
+for (Map.Entry<String, Integer> e : entries) {
+    sortedByValue.put(e.getKey(), e.getValue());
+}
+```
+
+**Decision tree — which approach to use:**
+
+```
+"Top K / Most frequent / Rank by count"
+│
+├── Is K close to N (or need ALL sorted)?
+│   └── YES → Sort entries by value → O(n log n)
+│       Simple, easy to code, fine for most interviews.
+│
+├── Is K small relative to N? (e.g., top 5 out of 10,000)
+│   └── YES → Min-Heap of size K → O(n log k)
+│       PriorityQueue keeps only K elements. Smallest freq
+│       on top → gets evicted first → heap holds K largest.
+│       See heaps.md Pattern 1.
+│
+└── Interviewer pushes for O(n)?
+    └── Bucket Sort → O(n)
+        Frequency as array index, no comparisons.
+        See Approach 2 above.
+```
+
+| Approach | Time | Space | Best when |
+| --- | --- | --- | --- |
+| Sort entries by value | O(n log n) | O(n) | Simple, K close to N, interviewer says "n log n is fine" |
+| Min-Heap of size K | O(n log k) | O(k) | K is small (top 5 out of 10,000) |
+| Bucket Sort | O(n) | O(n) | Need guaranteed linear time, interviewer pushes for optimal |
+| TreeMap (sort by keys) | O(n log n) | O(n) | Need keys in sorted order (alphabetical, numerical) |
+
 **🏷️ Problems:** LC 347 (Top K Frequent Elements), LC 451 (Sort Characters By Frequency), LC 692 (Top K Frequent Words — need heap for lexicographic tie-breaking).
 
 ---

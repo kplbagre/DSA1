@@ -24,6 +24,7 @@ String problems are rarely "pure string" problems. They're usually an **array pa
 | `Arrays.sort(charArray)` | Sort characters (for canonical key) | Pattern 1 |
 | `Character.isLetter(ch)` / `Character.toLowerCase(ch)` | Char classification and normalization | Pattern 2 |
 | `map.computeIfAbsent(key, k -> new ArrayList<>())` | Get-or-create list for grouping (see fallback below) | Canonical (Group Anagrams) |
+| `s.trim().split("\\s+")` | Strip leading/trailing spaces + split on one-or-more whitespace (see fallback below) | Pattern 3 (Reverse Words) |
 
 > **Full reference:** `../Reference/string-operations-reference.md`
 
@@ -46,6 +47,40 @@ if (!groups.containsKey(key)) {
     groups.put(key, new ArrayList<>());
 }
 groups.get(key).add(s);
+```
+
+**`s.trim().split("\\s+")` — Split string into words handling messy whitespace**
+
+```java
+// What it does (two steps chained):
+//   trim()     → removes leading and trailing spaces
+//                "  hello world  " → "hello world"
+//   split("\\s+") → splits on ONE OR MORE whitespace characters
+//                "hello   world" → ["hello", "world"]  (NOT ["hello", "", "", "world"])
+//
+// \\s  = regex for any whitespace character (space, tab, newline)
+// +    = "one or more" — so consecutive spaces count as ONE split point
+// Without the + : "hello   world".split("\\s") → ["hello", "", "", "world"] (empty strings!)
+String[] words = s.trim().split("\\s+");
+
+// 🔄 Fallback — if you forget the regex, split manually:
+List<String> words = new ArrayList<>();
+int i = 0;
+while (i < s.length()) {
+    // Skip whitespace
+    while (i < s.length() && s.charAt(i) == ' ') {
+        i++;
+    }
+    if (i >= s.length()) {
+        break;
+    }
+    // Collect word characters
+    int start = i;
+    while (i < s.length() && s.charAt(i) != ' ') {
+        i++;
+    }
+    words.add(s.substring(start, i));
+}
 ```
 
 ---
@@ -261,6 +296,8 @@ public void reverseString(char[] s) {
 
 ```java
 public String reverseWords(String s) {
+    // trim() strips leading/trailing spaces; split("\\s+") splits on 1+ whitespace (regex)
+    // 🔄 Fallback: manually iterate with two while-loops (see Lambda section above)
     String[] words = s.trim().split("\\s+");
     StringBuilder sb = new StringBuilder();
     for (int i = words.length - 1; i >= 0; i--) {
@@ -662,13 +699,16 @@ while (lo < hi) {
 > **Approach:** Split by whitespace, filter empties, reverse the list, join with single space. Or: reverse entire string, then reverse each word individually.
 
 ```java
-// trim + split on whitespace handles leading/trailing/multiple spaces
+// trim() strips edge spaces; split("\\s+") splits on 1+ whitespace (\\s = whitespace, + = one-or-more)
+// 🔄 Fallback: manually iterate with two while-loops (see Lambda section at top of file)
 String[] words = s.trim().split("\\s+");
 StringBuilder sb = new StringBuilder();
 // Walk words in reverse to reverse their order
 for (int i = words.length - 1; i >= 0; i--) {
     sb.append(words[i]);
-    if (i > 0) sb.append(" ");
+    if (i > 0) {
+        sb.append(" ");
+    }
 }
 return sb.toString();
 ```
