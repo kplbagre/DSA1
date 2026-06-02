@@ -184,26 +184,69 @@ public int orangesRotting(int[][] grid) {
 - "Alien dictionary" (determine character ordering)
 - Any DAG (directed acyclic graph) ordering problem
 
+### ⚠️ Edge Direction — The #1 Topo Sort Confusion
+
+```
+prerequisites[i] = [a, b] means "b must come before a"
+
+Think "UNLOCKS", not "depends on":
+   b UNLOCKS a  →  edge goes  b → a
+
+   [1, 0] → "0 before 1" → edge 0 → 1
+   [3, 1] → "1 before 3" → edge 1 → 3
+
+Code: adj.get(pre[1]).add(pre[0]);   // pre[1] unlocks pre[0]
+      inDegree[pre[0]]++;            // pre[0] gains a prerequisite
+
+Why this direction? Topo sort starts with in-degree 0 (no prereqs).
+If edges pointed backwards, in-degree would be inverted — you'd
+start with the LAST courses instead of the FIRST ones.
+```
+
 **The template — Kahn's Algorithm (BFS-based):**
 
 **Steps in plain English:**
 
-1. **Build adjacency list + in-degree array** from the edges.
-2. **Enqueue** all nodes with in-degree 0 (no prerequisites).
+1. **Build adjacency list + in-degree array** — edge goes from prerequisite TO dependent course (prereq "unlocks" the next course).
+2. **Enqueue** all nodes with in-degree 0 (no prerequisites — these are starting points).
 3. **BFS** — poll node, add to result, decrement neighbors' in-degrees. If a neighbor hits 0, enqueue it.
 4. **Check** — if result has all nodes, ordering exists. If not, there's a cycle.
 
+### Building the adjacency list from prerequisites
+
+The `prerequisites` array IS your edge list — just convert it:
+
+```
+Input: numCourses = 4, prerequisites = [[1,0], [2,0], [3,1], [3,2]]
+
+After init:  adj = [ [], [], [], [] ]
+                     0   1   2   3
+
+Process [1,0]: adj.get(0).add(1)  →  adj = [ [1], [],  [],  [] ]
+Process [2,0]: adj.get(0).add(2)  →  adj = [ [1,2], [], [], [] ]
+Process [3,1]: adj.get(1).add(3)  →  adj = [ [1,2], [3], [], [] ]
+Process [3,2]: adj.get(2).add(3)  →  adj = [ [1,2], [3], [3], [] ]
+
+Reading: "0 unlocks 1, 2"  "1 unlocks 3"  "2 unlocks 3"  "3 unlocks nothing"
+
+inDegree after same loop: [0, 1, 1, 2]
+   Course 0: 0 prereqs → starts in queue
+   Course 3: 2 prereqs → processed last
+```
+
 ```java
 public boolean canFinish(int numCourses, int[][] prerequisites) {
-    // Step 1 — build graph + in-degree
+    // Step 1 — build adjacency list + in-degree in ONE loop
+    // Edge direction: pre[1] → pre[0] ("pre[1] unlocks pre[0]")
     List<List<Integer>> adj = new ArrayList<>();
     int[] inDegree = new int[numCourses];
     for (int i = 0; i < numCourses; i++) {
-        adj.add(new ArrayList<>());
+        adj.add(new ArrayList<>());   // one empty list per course
     }
     for (int[] pre : prerequisites) {
-        adj.get(pre[1]).add(pre[0]);
-        inDegree[pre[0]]++;
+        // pre = [course, prereq] → prereq UNLOCKS course
+        adj.get(pre[1]).add(pre[0]);  // prereq's list gains the dependent course
+        inDegree[pre[0]]++;           // dependent course gains one prerequisite
     }
 
     // Step 2 — enqueue zero in-degree nodes

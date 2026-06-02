@@ -2525,6 +2525,29 @@ WHY IT FAILS WITH PRE-ORDER:
    — the REVERSE of a topo order. Hence: push at exit (post-order).
 ```
 
+### ⚠️ Edge Direction — The #1 Topo Sort Confusion
+
+When a problem says `prerequisites[i] = [a, b]` meaning "b before a", think **"UNLOCKS"**:
+
+```
+❌ Wrong instinct: "a depends on b, so edge a → b"
+✅ Correct:        "b unlocks a,     so edge b → a"
+
+   [1, 0] → "0 before 1" → edge 0 → 1    (0 unlocks 1)
+   [3, 1] → "1 before 3" → edge 1 → 3    (1 unlocks 3)
+   [3, 2] → "2 before 3" → edge 2 → 3    (2 unlocks 3)
+
+Code:  adj.get(pre[1]).add(pre[0]);   // prereq unlocks dependent
+       inDegree[pre[0]]++;            // dependent gains a prereq
+
+Why this direction works:
+  - In-degree 0 = no prerequisites = safe to take first
+  - Edges point FORWARD in time (past → future)
+  - Kahn's peels off the "ready now" nodes, then updates who's next
+```
+
+> **Lesson learned the hard way (June 2026):** Kapil built the adjacency list backwards on the first attempt at LC 207 — edges pointed from dependent TO prerequisite. In-degree was inverted: the final course (most prerequisites) had in-degree 0 and got processed first. The code ran without errors but produced the wrong answer. **Mnemonic: "prerequisite UNLOCKS dependent" — arrow follows time.**
+
 ### Approach 2: Kahn's Algorithm — BFS with In-Degree [G-22, G-23]
 
 **The intuition:** repeatedly pluck out a vertex with **in-degree 0** (no dependencies left) and "remove" it from the graph (decrementing in-degrees of its neighbors).
@@ -2565,6 +2588,40 @@ public List<Integer> kahnsTopoSort(int V, List<List<Integer>> adj) {
     }
     return order;
 }
+```
+
+### Building the Adjacency List from Prerequisites (LC 207 / LC 210)
+
+When the input is `prerequisites = [[1,0], [2,0], [3,1], [3,2]]`, the `prerequisites` array IS your edge list. Convert it:
+
+```java
+List<List<Integer>> adj = new ArrayList<>();
+int[] inDegree = new int[numCourses];
+for (int i = 0; i < numCourses; i++) {
+    adj.add(new ArrayList<>());   // one empty list per course
+}
+for (int[] pre : prerequisites) {
+    // pre = [course, prereq] → prereq UNLOCKS course → edge prereq → course
+    adj.get(pre[1]).add(pre[0]);  // prereq's list gains the dependent course
+    inDegree[pre[0]]++;           // dependent course gains one prerequisite
+}
+```
+
+```
+Trace: numCourses = 4, prerequisites = [[1,0], [2,0], [3,1], [3,2]]
+
+After init:  adj = [ [], [], [], [] ]       inDegree = [0, 0, 0, 0]
+
+Process [1,0]: adj.get(0).add(1)  →  [1]      inDegree[1]++ → [0, 1, 0, 0]
+Process [2,0]: adj.get(0).add(2)  →  [1,2]    inDegree[2]++ → [0, 1, 1, 0]
+Process [3,1]: adj.get(1).add(3)  →  [3]      inDegree[3]++ → [0, 1, 1, 1]
+Process [3,2]: adj.get(2).add(3)  →  [3]      inDegree[3]++ → [0, 1, 1, 2]
+
+Final:  adj = [ [1,2], [3], [3], [] ]    inDegree = [0, 1, 1, 2]
+              "0 unlocks 1,2"  "1→3"  "2→3"  "3→nothing"
+
+Course 0: in-degree 0 → starts in queue (no prereqs)
+Course 3: in-degree 2 → processed last (needs both 1 and 2)
 ```
 
 ### Cycle Detection via Kahn's [G-23]
