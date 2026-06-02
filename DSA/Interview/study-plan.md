@@ -219,6 +219,8 @@ If all boxes are checked → you're ready. 💪
 | 12 | `greedy.md` | Jump/Reach, Circular, Interval Schedule, Partition, Consecutive Groups |
 | 13 | `linked-list.md` | Floyd's Slow/Fast, Reversal, Merge, Gap Pointer, Dummy Node |
 | ⚠️ | `common-bugs-checklist.md` | 15 silent bugs across Grid/Graph/Tree/DP + 30-second pre-submit checklist |
+| ⚡ | `graph-dp-crash-course.md` | 23 problems: Graph (9) + Tree (6) + DP (8) — trigger → steps → snippet → tweaks |
+| ⚡ | `remaining-topics-crash-course.md` | 16 problems: Two Pointers (4) + Binary Search (3) + Stacks (3) + Heaps (3) + Backtracking (3) |
 
 ---
 
