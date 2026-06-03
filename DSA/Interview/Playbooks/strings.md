@@ -864,8 +864,8 @@ Write, from memory:
 | Topic | File |
 | --- | --- |
 | String operations reference (method syntax) | `DSA/Reference/string-operations-reference.md` |
-| Sliding window patterns for substrings | `DSA/Interview/two-pointers-and-sliding-window.md` |
-| Stack patterns for parentheses | `DSA/Interview/stacks-and-queues.md` |
+| Sliding window patterns for substrings | `DSA/Interview/Playbooks/two-pointers-and-sliding-window.md` |
+| Stack patterns for parentheses | `DSA/Interview/Playbooks/stacks-and-queues.md` |
 | HashMap/HashSet syntax | `DSA/Reference/hashmap-section-updated.md` |
 | Java coding traps (String ==, charAt, substring) | `DSA/Implementation/java-coding-traps.md` |
 

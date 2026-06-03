@@ -614,7 +614,7 @@ From memory, write the recurrence for House Robber with space optimization (prev
 | --- | --- |
 | DP deep dive (full theory, all families) | `DSA/DeepDive/dp-fundamentals.md` |
 | Three rookie mistakes (State vs Result) | `DSA/DeepDive/dp-fundamentals.md` — "Three Rookie Mistakes" section |
-| Grid traversal (BFS/DFS) | `DSA/Interview/graphs.md` |
+| Grid traversal (BFS/DFS) | `DSA/Interview/Playbooks/graphs.md` |
 | Recursion fundamentals | `DSA/DeepDive/recursion-fundamentals.md` |
 
 ---

@@ -857,7 +857,7 @@ For Valid Parentheses, write the 3 push lines and the else-if check line. Why is
 | Topic | File |
 | --- | --- |
 | ArrayDeque + Queue syntax reference | `DSA/Reference/arraydeque-and-queue-reference.md` |
-| BFS (queue-based) patterns | `DSA/Interview/trees-and-bfs-dfs.md` |
+| BFS (queue-based) patterns | `DSA/Interview/Playbooks/trees-and-bfs-dfs.md` |
 | String operations (for decode/path problems) | `DSA/Reference/string-operations-reference.md` |
 | Java coding traps (Stack vs ArrayDeque) | `DSA/Implementation/java-coding-traps.md` |
 

@@ -1388,7 +1388,7 @@ How would you modify the Subarray Sum = K template for LC 525 (Contiguous Array 
 | Arrays reference (method syntax + all 14 patterns) | `DSA/Reference/arrays-reference.md` |
 | HashMap method syntax | `DSA/Reference/hashmap-section-updated.md` |
 | HashSet method syntax | `DSA/Reference/set-section-updated.md` |
-| Two pointers + sliding window patterns | `DSA/Interview/two-pointers-and-sliding-window.md` |
+| Two pointers + sliding window patterns | `DSA/Interview/Playbooks/two-pointers-and-sliding-window.md` |
 | Java coding traps (equality, overflow, autoboxing) | `DSA/Implementation/java-coding-traps.md` |
 | Integer overflow deep dive | `DSA/DeepDive/integer-overflow-and-limits.md` |
 

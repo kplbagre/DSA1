@@ -1,4 +1,4 @@
-# Common Bugs Checklist — Graph, Tree, Grid & DP
+# Common Bugs Checklist — Graph, Tree, Grid, DP & HashMap
 
 > **Read this file when:** You've written a solution and want to catch silent bugs before submitting. These are not edge cases — they're **structural mistakes** that compile fine, pass small tests, and fail on real inputs. Every bug here was hit during actual practice (May–June 2026).
 
@@ -297,6 +297,44 @@ int dfs(int r, int c, int[][] matrix, int[][] memo) {
 
 ---
 
+## 🐞 HashMap / HashSet Bugs
+
+### Bug 16 — Pre-loading all elements before scanning (self-pairing)
+
+```java
+// ❌ WRONG — number can pair with ITSELF
+Set<Double> set = new HashSet<>();
+for (double num : nums) {
+    set.add(num);   // all loaded upfront
+}
+for (double b : nums) {
+    double a = b / (b - 1);
+    if (set.contains(a)) {
+        // WRONG: if a == b (e.g. b=2 → a=2), finds itself!
+    }
+}
+
+// ✅ FIX — check THEN add (only previously seen elements)
+Set<Double> seen = new HashSet<>();
+for (double b : nums) {
+    double a = b / (b - 1);
+    if (seen.contains(a)) {
+        // CORRECT: a was seen BEFORE b → real pair
+    }
+    seen.add(b);  // add AFTER checking
+}
+```
+
+**Hit on:** Salesforce SMTS R1 interview (June 2026). Problem: "find pair where sum == product." Derived the math correctly (`a = b/(b-1)`), but pre-loaded the HashSet → a number paired with itself. Could not produce working code.
+
+> **Lesson learned the hard way (June 2026):** The "check-then-add" discipline is the #1 HashMap/HashSet rule for ANY pair-finding problem. You know it from Two Sum. Under interview pressure, your brain shortcut to "I need fast lookup → put everything in first." A 30-second trace on a small example would have caught this instantly.
+
+**Problems this bug appears in:** LC 1 (Two Sum), LC 15 (3Sum inner loop), LC 560 (Subarray Sum), any "find pair with property X" problem.
+
+**Rule:** For pair-finding problems, ALWAYS: **check the map/set → THEN add current element.** Never pre-load.
+
+---
+
 ## ⚡ The 30-Second Pre-Submit Checklist
 
 Before hitting submit on ANY DFS/BFS/DP solution, scan these:
@@ -321,6 +359,10 @@ DP:
   □ Array size: dp[n] needed? → size = n + 1
   □ Init: min problem? → Arrays.fill(dp, Integer.MAX_VALUE)
   □ Memo: check memo[i] FIRST, before computing
+
+HASHMAP / PAIR-FINDING:
+  □ Check map/set FIRST, then add current element (never pre-load)
+  □ Edge cases: division by zero? (b=1 in b/(b-1)), negative zero?
 ```
 
 ---
@@ -331,9 +373,9 @@ DP:
 | --- | --- |
 | Grid DFS bugs (full hall of fame) | `DSA/DeepDive/graphs-fundamentals.md` — "Common bugs hall of fame — grid DFS" |
 | BFS mark-on-enqueue vs mark-on-poll | `DSA/DeepDive/graphs-fundamentals.md` — BFS marking discipline |
-| Directed vs undirected cycle detection | `DSA/Interview/graphs.md` — Patterns 1, 2 gotchas |
-| DP state vs result confusion | `DSA/Interview/dp.md` — "State vs Result Rule" |
-| Backtracking snapshot bug | `DSA/Interview/backtracking.md` — Pattern 1 gotchas |
+| Directed vs undirected cycle detection | `DSA/Interview/Playbooks/graphs.md` — Patterns 1, 2 gotchas |
+| DP state vs result confusion | `DSA/Interview/Playbooks/dp.md` — "State vs Result Rule" |
+| Backtracking snapshot bug | `DSA/Interview/Playbooks/backtracking.md` — Pattern 1 gotchas |
 
 ---
 
@@ -342,3 +384,4 @@ DP:
 | Date | Change |
 | --- | --- |
 | June 2026 | **File created.** 15 bugs across Grid, Graph, Tree, and DP — sourced from actual practice bugs (LC 1559, LC 329, LC 200, LC 207) and DeepDive gotchas. Includes 30-second pre-submit checklist. |
+| June 2026 | **Bug 16 added — HashMap pre-load bug.** Sourced from Salesforce SMTS R1 interview failure. Added HashMap/HashSet section + updated pre-submit checklist. |

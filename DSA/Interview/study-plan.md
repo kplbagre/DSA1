@@ -203,24 +203,32 @@ If all boxes are checked → you're ready. 💪
 
 ## 🔗 Quick Access — All Files
 
+**Playbooks/** (deep study — 13 topic files):
+
 | # | File | Patterns covered |
 | --- | --- | --- |
-| 1 | `arrays-and-hashing.md` | HashMap Lookup, Canonical Key, Prefix Sum, Kadane's, Freq+Bucket, HashSet |
-| 2 | `two-pointers-and-sliding-window.md` | Converging, Same-Direction, Fixed Window, Variable Window, atMost(K) |
-| 3 | `trees-and-bfs-dfs.md` | Top-Down DFS, Bottom-Up DFS, BFS Level Order, BST Inorder, LCA |
-| 4 | `binary-search.md` | Classic, Bisect Left/Right, Rotated Array, Answer Space, Matrix |
-| 5 | `strings.md` | Frequency Array, Palindrome, Reversal, StringBuilder, Subsequence |
-| 6 | `dp.md` | Linear, Grid, String, 0/1 Knapsack, Counting |
-| 7 | `stacks-and-queues.md` | Bracket Matching, Monotonic Stack, Expression Eval, History/Undo, Design |
-| 8 | `graphs.md` | Grid BFS/DFS, Topological Sort, Clone Graph, Union-Find, Dijkstra |
-| 9 | `heaps.md` | Top-K, Kth Element, Merge K Sorted, Two Heaps, Greedy+Heap |
-| 10 | `backtracking.md` | Subsets, Permutations, Constraint Satisfaction, Partitioning |
-| 11 | `intervals.md` | Merge, Insert, Overlap Count, Greedy Scheduling |
-| 12 | `greedy.md` | Jump/Reach, Circular, Interval Schedule, Partition, Consecutive Groups |
-| 13 | `linked-list.md` | Floyd's Slow/Fast, Reversal, Merge, Gap Pointer, Dummy Node |
-| ⚠️ | `common-bugs-checklist.md` | 15 silent bugs across Grid/Graph/Tree/DP + 30-second pre-submit checklist |
-| ⚡ | `graph-dp-crash-course.md` | 23 problems: Graph (9) + Tree (6) + DP (8) — trigger → steps → snippet → tweaks |
-| ⚡ | `remaining-topics-crash-course.md` | 16 problems: Two Pointers (4) + Binary Search (3) + Stacks (3) + Heaps (3) + Backtracking (3) |
+| 1 | `Playbooks/arrays-and-hashing.md` | HashMap Lookup, Canonical Key, Prefix Sum, Kadane's, Freq+Bucket, HashSet |
+| 2 | `Playbooks/two-pointers-and-sliding-window.md` | Converging, Same-Direction, Fixed Window, Variable Window, atMost(K) |
+| 3 | `Playbooks/trees-and-bfs-dfs.md` | Top-Down DFS, Bottom-Up DFS, BFS Level Order, BST Inorder, LCA |
+| 4 | `Playbooks/binary-search.md` | Classic, Bisect Left/Right, Rotated Array, Answer Space, Matrix |
+| 5 | `Playbooks/strings.md` | Frequency Array, Palindrome, Reversal, StringBuilder, Subsequence |
+| 6 | `Playbooks/dp.md` | Linear, Grid, String, 0/1 Knapsack, Counting |
+| 7 | `Playbooks/stacks-and-queues.md` | Bracket Matching, Monotonic Stack, Expression Eval, History/Undo, Design |
+| 8 | `Playbooks/graphs.md` | Grid BFS/DFS, Topological Sort, Clone Graph, Union-Find, Dijkstra |
+| 9 | `Playbooks/heaps.md` | Top-K, Kth Element, Merge K Sorted, Two Heaps, Greedy+Heap |
+| 10 | `Playbooks/backtracking.md` | Subsets, Permutations, Constraint Satisfaction, Partitioning |
+| 11 | `Playbooks/intervals.md` | Merge, Insert, Overlap Count, Greedy Scheduling |
+| 12 | `Playbooks/greedy.md` | Jump/Reach, Circular, Interval Schedule, Partition, Consecutive Groups |
+| 13 | `Playbooks/linked-list.md` | Floyd's Slow/Fast, Reversal, Merge, Gap Pointer, Dummy Node |
+
+**QuickRef/** (grab-and-go before interview):
+
+| # | File | What |
+| --- | --- | --- |
+| ⚡ | `QuickRef/graph-dp-crash-course.md` | 23 problems: Graph (9) + Tree (6) + DP (8) — trigger → steps → snippet → tweaks |
+| ⚡ | `QuickRef/remaining-topics-crash-course.md` | 16 problems: Two Pointers (4) + Binary Search (3) + Stacks (3) + Heaps (3) + Backtracking (3) |
+| ⚠️ | `QuickRef/common-bugs-checklist.md` | 16 silent bugs across Grid/Graph/Tree/DP/HashMap + 30-second pre-submit checklist |
+| ⚠️ | `QuickRef/interview-execution-process.md` | 5-Minute Wall, Check-Then-Add discipline, 25-Minute Drill, pre-interview warm-up |
 
 ---
 

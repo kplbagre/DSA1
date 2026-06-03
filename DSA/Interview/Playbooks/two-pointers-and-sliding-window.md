@@ -891,7 +891,7 @@ What is different about LC 76 (Minimum Window Substring) vs LC 3 (Longest Substr
 | --- | --- |
 | Two Pointers + Sliding Window deep dive | `DSA/DeepDive/two-pointers-sliding-window-fundamentals.md` |
 | Two Pointers + Sliding Window reference (syntax) | `DSA/Reference/two-pointers-sliding-window-reference.md` |
-| Prefix Sum + HashMap (when window doesn't work) | `DSA/Interview/arrays-and-hashing.md` — Pattern 3 |
+| Prefix Sum + HashMap (when window doesn't work) | `DSA/Interview/Playbooks/arrays-and-hashing.md` — Pattern 3 |
 | String operations reference | `DSA/Reference/string-operations-reference.md` |
 | Java coding traps | `DSA/Implementation/java-coding-traps.md` |
 

@@ -739,13 +739,13 @@ BACKTRACKING — Subsets or Permutations?
 
 | Need more? | File |
 | --- | --- |
-| Graph + Tree + DP crash course | `DSA/Interview/graph-dp-crash-course.md` |
-| Full two-pointer templates | `DSA/Interview/two-pointers-and-sliding-window.md` |
-| Full binary search templates | `DSA/Interview/binary-search.md` |
-| Full stacks templates | `DSA/Interview/stacks-and-queues.md` |
-| Full heaps templates | `DSA/Interview/heaps.md` |
-| Full backtracking templates | `DSA/Interview/backtracking.md` |
-| Pre-submit bug checklist | `DSA/Interview/common-bugs-checklist.md` |
+| Graph + Tree + DP crash course | `DSA/Interview/QuickRef/graph-dp-crash-course.md` |
+| Full two-pointer templates | `DSA/Interview/Playbooks/two-pointers-and-sliding-window.md` |
+| Full binary search templates | `DSA/Interview/Playbooks/binary-search.md` |
+| Full stacks templates | `DSA/Interview/Playbooks/stacks-and-queues.md` |
+| Full heaps templates | `DSA/Interview/Playbooks/heaps.md` |
+| Full backtracking templates | `DSA/Interview/Playbooks/backtracking.md` |
+| Pre-submit bug checklist | `DSA/Interview/QuickRef/common-bugs-checklist.md` |
 
 ---
 

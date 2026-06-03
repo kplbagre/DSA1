@@ -1159,10 +1159,10 @@ DP — Which family?
 
 | Need more? | File |
 | --- | --- |
-| Full graph templates + all problems | `DSA/Interview/graphs.md` |
-| Full DP templates + all problems | `DSA/Interview/dp.md` |
-| Pre-submit bug checklist | `DSA/Interview/common-bugs-checklist.md` |
-| Edge direction for topo sort | `DSA/Interview/graphs.md` — Pattern 2 |
+| Full graph templates + all problems | `DSA/Interview/Playbooks/graphs.md` |
+| Full DP templates + all problems | `DSA/Interview/Playbooks/dp.md` |
+| Pre-submit bug checklist | `DSA/Interview/QuickRef/common-bugs-checklist.md` |
+| Edge direction for topo sort | `DSA/Interview/Playbooks/graphs.md` — Pattern 2 |
 
 ---
 

@@ -696,7 +696,7 @@ For Rotting Oranges, explain in one sentence: why do you add ALL rotten oranges 
 | --- | --- |
 | Graphs deep dive (adjacency list, BFS/DFS theory) | `DSA/DeepDive/graphs-fundamentals.md` |
 | BFS/DFS templates reference | `DSA/Reference/bfs-dfs-templates-reference.md` |
-| Trees (tree-specific BFS/DFS) | `DSA/Interview/trees-and-bfs-dfs.md` |
+| Trees (tree-specific BFS/DFS) | `DSA/Interview/Playbooks/trees-and-bfs-dfs.md` |
 | Simulation patterns (grid traversal) | `DSA/Implementation/simulation-patterns.md` |
 | Rotting Oranges problem deep dive | `DSA/Patterns/rotting-oranges-problem.md` |
 
