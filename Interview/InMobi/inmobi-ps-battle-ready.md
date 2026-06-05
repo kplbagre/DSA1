@@ -9,12 +9,83 @@
 > 2. **System Constraints** — recognize scale, model solution accordingly
 > 3. **Trade-off Analysis** — compare approaches, explain pros/cons, pick and justify
 >
+> **Signal from today's LLD round:** They asked you to build a **click deduplication system** — not a generic parking lot. This confirms the PS round will also likely be **iDSP-flavored**. Problems B, C, QF-1 through QF-4 are your best prep.
+>
 > **Problem sources:**
 > - A (MySQL→MongoDB) — from their **official rubric PDF**
 > - B (Daily spend cap) — **iDSP-flavored** (matches their domain)
 > - C (Frequency capping) — **iDSP-flavored** (matches their domain)
 > - D (Feature deprecation rollout) — **real InMobi SDE2 question** (LeetCode, 2022)
 > - E (Master-slave debugging) — **real InMobi SDE2 question** (LeetCode, 2022)
+> - QF-1 to QF-4 — Budget pacing, Top-K, Reconciliation, Rate limiting
+
+---
+
+## What is iDSP? (Read this FIRST — 2 minutes)
+
+**iDSP = InMobi's Demand-Side Platform.** It's the system that buys ad space on behalf of advertisers.
+
+```
+The ad-tech flow in 30 seconds:
+
+  You open an app (say, a news app)
+       |
+       v
+  The app has an ad slot to fill
+       |
+       v
+  The app's ad exchange sends a "bid request" to multiple DSPs
+  (InMobi's iDSP is one of them)
+       |
+       v
+  ┌─────────────────────────────────────────────┐
+  │  iDSP receives the bid request               │
+  │  Has <100ms to answer:                       │
+  │    1. Should I bid? (targeting/eligibility)  │
+  │    2. For which advertiser? (campaign match) │
+  │    3. How much? (bid valuation + pacing)     │
+  │    4. Which ad creative? (format selection)  │
+  └─────────────────────────────────────────────┘
+       |
+       v
+  Exchange picks the highest bid → user sees that ad
+       |
+       v
+  User may click → click event tracked → advertiser charged
+```
+
+**The 5 engines inside iDSP (name-drop these):**
+
+| # | Engine | What it does |
+|---|---|---|
+| 1 | **Real-Time Bidder** | Computes bid value per advertiser objectives |
+| 2 | **Targeting Engine** | Finds, filters, scores relevant users per campaign |
+| 3 | **Creatives Engine** | Selects the right ad format (banner, video, native) |
+| 4 | **Supply Quality Engine** | Filters low-quality ad placements |
+| 5 | **Fraud Control Engine** | Filters suspicious/fraudulent requests |
+
+**Scale numbers to remember:**
+- Millions of bid requests per second (QPS)
+- <100ms response time (exchange deadline)
+- TBs of data per hour
+- All engines are **ML-driven** — "ML works well at scale" (their words)
+
+**Tech stack:** Java/Scala, Spring Boot, **Aerospike** ("we love Aerospike"), Kafka, Apache Flink, Spark, ClickHouse, Triton/TF-serving for ML inference
+
+**How iDSP maps to YOUR experience (MCSE):**
+
+| Your System (MCSE) | iDSP Equivalent |
+|---|---|
+| "Which warehouse ships this item?" | "Which advertiser gets this ad slot?" |
+| 700K RPM, sub-100ms p95 | Millions QPS, <100ms |
+| Pre-Scatter → Orchestrator → Gather | Targeting → Bid Evaluation → Creative Selection |
+| Hollow in-memory caches | Aerospike + local LRU caches |
+| Kafka → Cassandra ingestion | Kafka → Aerospike event streams |
+| Multi-market (US, MX, CA) | Multi-exchange (different SSPs) |
+
+**One sentence to drop in the PS round:**
+
+> *"This is essentially the same constraint as the bidding path — the hot path can't touch a database synchronously at millions QPS, so we keep state in-memory and sync asynchronously."*
 
 ---
 
@@ -734,16 +805,16 @@ Say this:
 
 Don't dump all 8 randomly. Drop them at the RIGHT moment:
 
-| Concept | Drop it when you're discussing... | Exact line |
-|---|---|---|
-| **Idempotency** | Write path / retries | *"I'll make writes idempotent — upsert on a deterministic key — so retries are safe."* |
-| **CDC** | Data migration / sync | *"Debezium tailing the binlog into Kafka captures every in-flight write."* |
-| **Outbox pattern** | Dual-write risks | *"Dual-write is risky. Outbox: write to DB + outbox in one TX, relay publishes."* |
-| **Consistent hashing** | Sharding / partitioning | *"Shard by user_id with consistent hashing — adding nodes reshuffles only a fraction."* |
-| **Backpressure** | Producer-consumer lag | *"Bounded queues + either drop, sample, or backpressure upstream."* |
-| **Bloom filter** | "Have we seen this?" checks | *"Bloom filter cuts the cache miss rate; HyperLogLog for unique counts."* |
-| **Token bucket** | Rate limiting | *"Token bucket gives bursty tolerance; sliding window is smoother."* |
-| **Sharded counters** | High-QPS counters | *"Shard counter in-process per bidder, sync to Redis every N seconds."* |
+| Concept | What it is (plain English) | Drop it when discussing... | Exact line |
+|---|---|---|---|
+| **Idempotency** | Doing the same operation twice gives the same result. Like an elevator button — pressing it 5 times doesn't call 5 elevators. You achieve this by using upsert on a deterministic key so duplicate writes are harmless. | Write path / retries | *"I'll make writes idempotent — upsert on a deterministic key — so retries are safe."* |
+| **CDC** | Change Data Capture — instead of polling a database for changes, you tail its internal log (MySQL binlog, Postgres WAL). Every insert/update/delete is captured as an event in real-time. Debezium is the standard tool for this. | Data migration / sync | *"Debezium tailing the binlog into Kafka captures every in-flight write."* |
+| **Outbox pattern** | When you need to write to a DB AND publish to Kafka, doing both separately can fail halfway (dual-write problem). Instead, write your data + an "outbox" row in ONE database transaction. A separate relay reads the outbox and publishes to Kafka. | Dual-write risks | *"Dual-write is risky. Outbox: write to DB + outbox in one TX, relay publishes."* |
+| **Consistent hashing** | A way to distribute data across N nodes so that when you add or remove a node, only ~1/N of the keys move — not all of them. Think of it like seats on a circular table; adding a chair only displaces your immediate neighbors. | Sharding / partitioning | *"Shard by user_id with consistent hashing — adding nodes reshuffles only a fraction."* |
+| **Backpressure** | When the consumer is slower than the producer, you need a strategy. Options: bounded queue (reject when full), drop/sample messages, or slow down the producer. Without this, you get OOM or unbounded latency. | Producer-consumer lag | *"Bounded queues + either drop, sample, or backpressure upstream."* |
+| **Bloom filter** | A space-efficient data structure that answers "have I seen this before?" with either "definitely no" or "probably yes." Uses multiple hash functions on a bit array. Small false-positive rate, zero false negatives. Much cheaper than storing every key. | "Have we seen this?" checks | *"Bloom filter cuts the cache miss rate; HyperLogLog for unique counts."* |
+| **Token bucket** | Rate limiter that allows bursts. Imagine a bucket that fills with tokens at a steady rate (e.g., 10/sec). Each request takes one token. If the bucket is full, requests burst through; if empty, they wait. Sliding window is the smoother alternative — counts requests in a rolling time window, no bursts. | Rate limiting | *"Token bucket gives bursty tolerance; sliding window is smoother."* |
+| **Sharded counters** | At millions of QPS, a single Redis counter becomes a bottleneck. Instead, keep N counters in local JVM memory (one per thread/shard), increment them lock-free, and sync the sum to Redis every few seconds. Trades perfect accuracy for speed. | High-QPS counters | *"Shard counter in-process per bidder, sync to Redis every N seconds."* |
 
 ## The Decision Framework — Which Concept for Which Problem Shape
 
@@ -849,62 +920,126 @@ Minute 20+:   HANDLE FOLLOW-UPS
 
 > If they ask something you haven't seen, DON'T PANIC. Map it to one of these shapes:
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│     PROBLEM SHAPE RECOGNIZER                                  │
-│                                                              │
-│  "Move data from X to Y"                                     │
-│    → Shape: MIGRATION                                        │
-│    → Reach for: CDC, bulk snapshot, idempotent writes        │
-│    → Example: Problem A (MySQL → MongoDB)                    │
-│                                                              │
-│  "Limit/cap/throttle something at scale"                     │
-│    → Shape: DISTRIBUTED COUNTER                              │
-│    → Reach for: sharded local counters, async sync           │
-│    → Examples: Problem B (spend cap), Problem C (freq cap)   │
-│                                                              │
-│  "Process a stream of events reliably"                       │
-│    → Shape: STREAM PROCESSING                                │
-│    → Reach for: Kafka, partitioned consumers, DLQ            │
-│    → Concepts: ordering, at-least-once, idempotency          │
-│                                                              │
-│  "Detect/prevent duplicates at scale"                        │
-│    → Shape: DEDUPLICATION                                    │
-│    → Reach for: Bloom filter (approx), HashSet (exact)       │
-│    → Local cache + central store with TTL                    │
-│                                                              │
-│  "Schedule/delay/retry operations"                           │
-│    → Shape: JOB SCHEDULING                                   │
-│    → Reach for: priority queue, delayed queue, cron + DB     │
-│    → Concepts: idempotency, at-least-once, dead-letter       │
-│                                                              │
-│  "Aggregate/rank/sort data in real-time"                     │
-│    → Shape: REAL-TIME ANALYTICS                              │
-│    → Reach for: pre-aggregated counters, OLAP (ClickHouse)  │
-│    → Concepts: batch vs stream, pre-compute vs on-demand     │
-│                                                              │
-│  "Replace/deprecate a feature for existing users"            │
-│    → Shape: FEATURE ROLLOUT / API MIGRATION                  │
-│    → Reach for: feature flags, shadow traffic, canary %      │
-│    → Concepts: adapter pattern, 4-phase rollout              │
-│    → Example: Problem D (deprecate feature + roll out new)   │
-│                                                              │
-│  "Debug failures in a distributed process"                   │
-│    → Shape: DISTRIBUTED DEBUGGING / OPERATIONAL              │
-│    → Reach for: metrics + alerting, fencing tokens,          │
-│      idempotent tasks, reaper threads, at-least-once         │
-│    → Think in 3 failure axes: WHO is master? Was task DONE?  │
-│      Did someone DO it?                                      │
-│    → Example: Problem E (master-slave debugging)             │
-│                                                              │
-│  UNIVERSAL RESPONSE when you don't recognize the shape:      │
-│    1. Restate                                                │
-│    2. Ask 5 questions (scale, latency, consistency,          │
-│       failure, scope)                                        │
-│    3. Brute force → name the bottleneck                      │
-│    4. The framework ALWAYS works. Trust it.                   │
-└──────────────────────────────────────────────────────────────┘
-```
+| If the problem sounds like... | Shape name | What it really means | Reach for these tools | Example |
+|---|---|---|---|---|
+| "Move data from X to Y" | **MIGRATION** | You have data in one store and need it in another — without losing in-flight writes during the move. The hard part isn't the bulk copy, it's the writes that happen *during* the copy. | CDC (tail the source DB's change log), bulk snapshot for historical data, idempotent writes at the destination so replaying is safe | Problem A (MySQL → MongoDB) |
+| "Limit / cap / throttle something at scale" | **DISTRIBUTED COUNTER** | You need to count or enforce a limit (money spent, ads shown, API calls) across millions of requests per second. A single counter becomes a bottleneck, so you shard it. | Sharded local counters (count in-memory per JVM, sync to central store periodically), async sync to Redis/DB every N seconds | Problem B (spend cap), Problem C (freq cap) |
+| "Process a stream of events reliably" | **STREAM PROCESSING** | Events arrive continuously (clicks, bids, logs). You need to process each one at least once, in order within a partition, and handle failures without losing data. | Kafka with partitioned consumers, DLQ (dead-letter queue) for poison pills, idempotent processing so redelivery is safe | — |
+| "Detect / prevent duplicates at scale" | **DEDUPLICATION** | Given a huge stream, you need to answer "have I seen this before?" cheaply. Exact dedup needs memory; approximate dedup (Bloom filter) trades a tiny false-positive rate for massive memory savings. | Bloom filter (probabilistic, space-efficient), HashSet (exact but memory-heavy), local cache + central store with TTL for time-bounded dedup | LLD round click dedup |
+| "Schedule / delay / retry operations" | **JOB SCHEDULING** | You need to run tasks later — retries after N minutes, scheduled campaigns, delayed notifications. The core challenge: what if the scheduler crashes mid-job? Answer: idempotent tasks + at-least-once delivery. | Priority queue or delayed queue (Redis sorted set by fire-time), cron + DB-backed job table, dead-letter for permanently failed jobs | — |
+| "Aggregate / rank / sort data in real-time" | **REAL-TIME ANALYTICS** | You want live dashboards — top advertisers, trending items, revenue per region — updated every few seconds. You can't scan all raw events each time, so you pre-aggregate into counters as events arrive. | Pre-aggregated counters (increment on each event), OLAP stores like ClickHouse for ad-hoc queries, choose between batch (high latency, exact) vs stream (low latency, approximate) | QF-2 (Top-K advertisers) |
+| "Replace / deprecate a feature for existing users" | **FEATURE ROLLOUT / API MIGRATION** | You need to swap an old feature or API for a new one without breaking existing users. The trick is doing it gradually — not a big-bang switch. You run old and new in parallel, ramp traffic slowly, and compare outcomes before cutting over. | Feature flags (toggle per user/cohort), shadow traffic (run new path silently, compare results), canary % ramp (1% → 10% → 100%), adapter pattern to keep old interface working while new logic runs underneath | Problem D (deprecate feature) |
+| "Debug failures in a distributed process" | **DISTRIBUTED DEBUGGING / OPERATIONAL** | A system with multiple services, a master node, and worker nodes is misbehaving. The question is really about *how you think about failures*. Break it into 3 axes: (1) WHO is the master right now? (leader election, split-brain), (2) Was the task COMPLETED? (check idempotency keys, completion flags), (3) Did someone DUPLICATE it? (fencing tokens prevent stale workers from acting). | Metrics + alerting, fencing tokens (a monotonic ID that proves "I'm the current leader"), idempotent tasks, reaper threads (background cleanup of stuck/orphaned jobs), at-least-once + dedup | Problem E (master-slave debugging) |
+
+**UNIVERSAL FALLBACK — when you don't recognize ANY shape above:**
+
+1. **Restate** the problem in one sentence
+2. **Ask 5 questions:** scale, latency, consistency, failure mode, scope
+3. **Brute force** → name the bottleneck → optimise from there
+4. The 8-step framework ALWAYS works. Trust it.
+
+---
+
+---
+
+# PART 8 — 4 More Problem Shapes They Could Ask (Quick-Fire)
+
+> These aren't full scripts — just enough to recognize the shape and know your approach. Use the 8-step framework on any of them.
+
+## QF-1: Budget Pacing — "Spread $10K evenly across 24 hours, don't front-load"
+
+**Different from Problem B (spend cap).** Cap = "stop when exhausted". Pacing = "spend evenly so ads show throughout the day, not just in the first hour."
+
+**Clarify:** Hard-even or best-effort? Per-hour or per-minute granularity? What if traffic is low in off-peak?
+
+**Brute force:** Divide budget by 24 hours, hard-stop at each hourly cap. Fails: traffic is uneven — 60% comes in peak hours, so off-peak hours go unspent.
+
+**Optimized approach:**
+- Split budget into hourly budgets proportional to **predicted traffic distribution** (historical QPS curve per hour)
+- Each bidder tracks local spend against its share of the hourly budget (same sharded-counter pattern as Problem B)
+- Every 15 min, re-compute remaining budget / remaining hours → adjust pacing rate
+- If under-pacing (underspent), increase bid frequency for remaining hours
+- If over-pacing, throttle bid rate
+
+**Data structures:** `ConcurrentHashMap<advertiserId, PacingState>` where `PacingState` = `{hourlyBudget, spentSoFar, trafficPrediction[]}`
+
+**Trade-off:** Smooth pacing (even distribution) vs aggressive pacing (spend as fast as possible for max impressions). Pick based on advertiser objective — brand campaigns want smooth, performance campaigns want aggressive.
+
+**iDSP hook:** *"This is literally what iDSP does — the bidder's pacing engine decides not just IF to bid but HOW AGGRESSIVELY to bid, based on remaining budget and time."*
+
+---
+
+## QF-2: Real-Time Top-K Advertisers by Spend (Sliding Window)
+
+**Prompt:** "Find the top 10 advertisers by spend in the last 1 hour, updated every minute."
+
+**Clarify:** Exact or approximate? Sliding or tumbling window? How many advertisers total?
+
+**Brute force:** Every minute, scan all spend records for the last hour, sort, return top 10. Fails at 50K advertisers × millions of transactions.
+
+**Optimized approach:**
+- **Min-heap of size K** (10) — always holds the current top-K
+- **Per-advertiser counter** with sliding window (circular buffer of per-minute buckets)
+- Every minute: expire the oldest bucket, add new bucket, recalculate advertiser's 1-hour total
+- If recalculated total > heap minimum → replace in heap
+
+**Data structures:** `PriorityQueue<AdvertiserSpend>` (min-heap, size K) + `HashMap<advertiserId, CircularBuffer<60>>` (60 one-minute buckets)
+
+**Complexity:** O(N log K) per recalculation where N = active advertisers, K = 10. Very fast.
+
+**Trade-off:** Exact (scan all every minute — O(N log N)) vs approximate (heap — O(N log K), slightly stale). At scale, approximate wins.
+
+**iDSP hook:** *"This feeds the reporting dashboard — advertisers want real-time spend visibility. The pacing engine also uses it to detect overspend hotspots."*
+
+---
+
+## QF-3: Reconciliation — "Two Systems Disagree on Counts"
+
+**Prompt:** "Our bidding system says advertiser X spent $5000 today. The billing system says $4800. How do you find and fix discrepancies?"
+
+**This is a VERY likely PS question.** It's a "small business problem" with data modelling + logic — exactly what their PDF describes.
+
+**Clarify:** How often do we reconcile? What causes the discrepancy? Which system is source of truth? Acceptable error margin?
+
+**Brute force:** Dump both systems, diff every record. Fails: billions of events, can't diff in memory.
+
+**Optimized approach:**
+- **Step 1: Aggregate-level check** — compare hourly/daily spend totals per advertiser. If within tolerance (e.g., 0.1%) → pass. Most advertisers pass here.
+- **Step 2: Narrow to mismatched hours** — for failing advertisers, compare per-hour totals to find WHICH hour diverged
+- **Step 3: Record-level diff** — for mismatched hours only, pull individual events from both systems, key by `impression_id`, find: events in A not in B (lost events), events in B not in A (phantom events), events with different amounts (corruption)
+- **Step 4: Root cause** — lost events → check Kafka lag/DLQ; phantom events → check dedup; amount mismatch → check currency/rounding
+
+**Data structures:** `HashMap<impression_id, Amount>` for the record-level diff (fits in memory for one hour of one advertiser)
+
+**Trade-off:** Real-time reconciliation (expensive, catches issues fast) vs batch overnight (cheap, delayed detection). Pick batch for billing + real-time alerts for outlier detection.
+
+**iDSP hook:** *"At iDSP this is the advertiser trust problem. If billing is wrong, advertisers leave. The reconciliation pipeline is probably as important as the bidder itself."*
+
+---
+
+## QF-4: Rate Limiting per API Client (Classic)
+
+**Prompt:** "Enforce 100 requests/minute per API client across a distributed fleet."
+
+**From their HLD rubric (page 7-8) but could appear as a PS problem too.** The PDF uses this as the HLD example — but for SDE2 there's no HLD round, so they might repurpose it as PS.
+
+**Clarify:** Hard limit or soft? Per-client or per-endpoint? Single region or multi-region? What happens on limit exceeded — reject or queue?
+
+**Brute force:** Redis INCR + EXPIRE per client key. `client:1234 → count`. If count > 100, reject. Works but adds 2-5ms Redis round-trip per request.
+
+**Optimized approach (same pattern as Problem B!):**
+- **Local in-memory counter** per client per pod (ConcurrentHashMap + AtomicInteger)
+- **Sync to Redis** every N seconds (push local count, pull global count)
+- **Decision on hot path** is pure in-memory — no network call
+- Accept ~1-2% over-limit in worst case (sync lag window)
+
+**Two algorithms to name:**
+- **Token bucket** — capacity N tokens, refill at rate R/sec. Allows bursts up to N. Good for APIs where short bursts are OK.
+- **Sliding window** — count requests in rolling window. Smoother enforcement. Better for strict rate limits.
+
+**Trade-off:** Token bucket (burst-tolerant, simpler) vs sliding window (stricter, slightly more state). Pick based on use case.
+
+**iDSP hook:** *"iDSP rate-limits inbound bid requests from exchanges. Token bucket fits because exchanges send bursty traffic — a single ad page loads trigger 5-10 bid requests simultaneously."*
 
 ---
 
