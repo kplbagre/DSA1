@@ -8,10 +8,10 @@
 
 ## Phase 0 — Research First (DO THIS BEFORE WRITING ANY NOTES)
 
-- [ ] Search and collect highly-rated resources for each concept (YouTube channels, blog posts, GitHub repos people recommend on Reddit/LeetCode/Blind)
-- [ ] Shortlist 1-2 best resources per concept (prefer: visual explainers, real-world examples, not academic papers)
-- [ ] Create a `resources.md` file in this folder with the curated list
-- [ ] Skim the top resources to calibrate depth — we want SDE-2/3 interview level, not PhD level
+- [x] Search what topics are asked for 5-7 year Java backend engineers — DONE (June 2026)
+- [x] Find top-rated resources (5 web searches, cross-referenced) — DONE (June 2026)
+- [x] Create `resources.md` — DONE (June 2026)
+- [ ] Skim the top resources to calibrate depth before writing each note
 
 **Good resource hunters to check:**
 - r/ExperiencedDevs, r/cscareerquestions — "best system design resources" threads
@@ -34,16 +34,20 @@ One note per concept. Medium depth. Each note should cover:
 - One concrete example (real company / real system)
 - Common interview questions where this concept is the answer
 
-| # | Concept | Status | Priority |
-|---|---|---|---|
-| 1 | Idempotency | [ ] Not started | ⭐ Critical — asked everywhere |
-| 2 | CDC (Change Data Capture) | [ ] Not started | ⭐ Critical — migration questions |
-| 3 | Outbox Pattern | [ ] Not started | ⭐ Critical — dual-write questions |
-| 4 | Consistent Hashing | [ ] Not started | ⭐ Critical — sharding questions |
-| 5 | Backpressure | [ ] Not started | High |
-| 6 | Bloom Filter | [ ] Not started | High |
-| 7 | Token Bucket vs Sliding Window | [ ] Not started | ⭐ Critical — rate limiting questions |
-| 8 | Sharded Counters | [ ] Not started | High |
+> **Writing order based on interview frequency research (June 2026)** — see `resources.md` for source.
+
+| Write Order | # | Concept | File | Status | Frequency |
+|---|---|---|---|---|---|
+| 1st | 9 | **Optimistic + Pessimistic Locking** | `01-optimistic-pessimistic-locking.md` | [ ] In progress | ⭐ Critical — InMobi gap + universal |
+| 2nd | 10 | **Rate Limiting** (token bucket, sliding window) | `02-rate-limiting.md` | [ ] Not started | ⭐ Critical — asked at every company |
+| 3rd | 3 | **Caching** (LRU, TTL, eviction, Redis) | `03-caching.md` | [ ] Not started | ⭐ Critical — every design question |
+| 4th | 1 | **Idempotency** | `04-idempotency.md` | [ ] Not started | ⭐ Critical — payments, retries, Kafka |
+| 5th | 4 | **Consistent Hashing** | `05-consistent-hashing.md` | [ ] Not started | ⭐ Critical — sharding questions |
+| 6th | 11 | **Distributed Locking** (Redis SETNX, Redlock) | `06-distributed-locking.md` | [ ] Not started | High |
+| 7th | 2 | **CDC + Outbox Pattern** | `07-cdc-outbox.md` | [ ] Not started | High — migration + dual-write |
+| 8th | 6 | **Bloom Filter** | `08-bloom-filter.md` | [ ] Not started | Medium |
+| 9th | 8 | **Sharded Counters** | `09-sharded-counters.md` | [ ] Not started | Medium |
+| 10th | 5 | **Backpressure** | `10-backpressure.md` | [ ] Not started | Medium |
 
 ---
 
@@ -64,6 +68,20 @@ One note per shape. Each note: problem description, naive approach, optimized ap
 
 ---
 
+## Phase 2.5 — Added from InMobi PS Round (June 2026)
+
+Gaps identified in real interview — add these to Phase 1:
+
+| # | Concept | Why it's needed | Priority |
+|---|---|---|---|
+| 9 | **Optimistic Locking (version-based CAS)** | Inventory overselling — A=10, B=25, total=30. DB-level concurrency without locks. | ⭐ Critical |
+| 10 | **Pessimistic Locking (SELECT FOR UPDATE)** | When to use vs optimistic. Deadlock risks, when contention is high. | High |
+| 11 | **Inventory Management pattern** | Booking systems, e-commerce stock, ticket systems — decrement with safety. | ⭐ Critical |
+
+> Source: `Interview/InMobi/inmobi-ps-round-debrief.md`
+
+---
+
 ## Phase 3 — Bonus Concepts (add only if Phase 1-2 are done)
 
 These come up in HLD rounds more than PS, but worth having:
@@ -75,6 +93,22 @@ These come up in HLD rounds more than PS, but worth having:
 - [ ] Circuit Breaker + Bulkhead
 - [ ] Database Isolation Levels (Read Committed, Repeatable Read, Serializable)
 - [ ] Optimistic vs Pessimistic Locking
+
+---
+
+## Phase 4 — AI Integration Track (Thin, Interview-Aware Only)
+
+> **Why:** Swiggy, PhonePe, Meesho job descriptions now include RAG as a baseline. Won't be asked in DSA/LLD/PS rounds but WILL come up in project depth / bar raiser. Keep thin — enough to answer "are you familiar with AI integration in Java?" confidently.
+
+| # | Topic | Depth needed | Priority |
+|---|---|---|---|
+| 1 | **What is RAG** (Retrieval Augmented Generation) | Conceptual — what it is, why it exists, when you'd use it | High |
+| 2 | **Vector Databases** (pgvector, Pinecone, Weaviate) | Conceptual — how they differ from relational/NoSQL DBs | High |
+| 3 | **Spring AI / LangChain4j** | Awareness — what they do, which to pick for Spring Boot projects | Medium |
+| 4 | **Agentic AI basics** | Conceptual — what an agent is, orchestrator vs LLM, tool use | Medium |
+| 5 | **AI integration patterns in Java services** | One code example — RAG call or LLM API call in a Spring Boot service | Medium |
+
+> **Do Phase 1-2-3 first. Phase 4 is the polish layer.**
 
 ---
 
