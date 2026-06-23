@@ -165,7 +165,7 @@ Recite out loud:
 
 ## 🔗 Companion files
 
-- **DeepDive:** `../../DeepDive/02-servlet-api.md`
+- **DeepDive:** `../../DeepDive/01-web-servlet-foundation.md` (Part C)
 - **Reference:** `../../Reference/02-servlet-api-reference.md`
 - **Sibling exercise:** `../../exercises/01-servlet-hello/` (even simpler, single-endpoint demo)
 - **Future v2 (Day 6):** `../v2-spring-mvc/` (NOT YET WRITTEN)

@@ -1,6 +1,6 @@
 # Exercise 01 — Hello-world servlet on embedded Jetty
 
-> **Day 2.** Companion to `../../../DeepDive/02-servlet-api.md`. Smallest possible servlet that exercises the full lifecycle: `init` → `service` (via `doGet`) → `destroy`.
+> **Chapter 1.** Companion to `../../../DeepDive/01-web-servlet-foundation.md` (Part C). Smallest possible servlet that exercises the full lifecycle: `init` → `service` (via `doGet`) → `destroy`.
 
 ---
 
@@ -196,6 +196,6 @@ If that sentence flows without pause, Day 2 is internalized.
 
 ## 🔗 Companion files
 
-- **DeepDive (full mental model):** `../../../DeepDive/02-servlet-api.md`
+- **DeepDive (full mental model):** `../../../DeepDive/01-web-servlet-foundation.md` (Part C)
 - **Reference (cheatsheet):** `../../../Reference/02-servlet-api-reference.md`
 - **Growing app v1 (the `/orders/{id}` endpoint):** `../../growing-app/v1-servlet/`

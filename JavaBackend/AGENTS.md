@@ -42,16 +42,22 @@ For **multi-session learning tracks** (focused study of one topic across many da
 
 ```
 JavaBackend/
-├── Spring/                          ← First track — 10-hour Spring foundation
+├── Spring/                          ← First track — 4-chapter Spring foundation
 │   ├── spring-prep-log.md           ← Track's context-preservation file (read FIRST to resume)
-│   ├── spring-10-hour-plan.md       ← Master plan (day-by-day arc)
-│   ├── DeepDive/                    ← Track-specific deep dives
-│   ├── Reference/                   ← Track-specific cheatsheets
+│   ├── spring-10-hour-plan.md       ← Master plan + per-chapter format standards
+│   ├── DeepDive/                    ← 4-chapter deep dives (restructured June 2026)
+│   │   ├── 01-web-servlet-foundation.md  ← HTTP, TCP, servlet container, Servlet API
+│   │   ├── 02-spring-core.md             ← IoC container, DI, bean scopes, AOP, proxies
+│   │   ├── 03-spring-mvc-boot.md         ← DispatcherServlet, MVC, Boot, profiles (planned)
+│   │   └── 04-jpa-transactions.md        ← JPA, Hibernate, transactions, lazy loading (planned)
+│   ├── Reference/                   ← Track-specific cheatsheets (planned)
 │   └── Practice/                    ← Runnable Java code (exercises + growing app)
 │       ├── README.md
 │       ├── exercises/
 │       └── growing-app/
 ```
+
+> **Per-chapter format standard:** each DeepDive chapter follows the 8-section arc defined in `spring-10-hour-plan.md` — Prerequisites → Mental model → Build-up → Common mistakes → Visual → Where you've seen this → Interview Q&A → TL;DR. The plan file is the source of truth for format rules; do not create a separate standards file.
 
 **Decision rule — track sub-folder vs flat DeepDive/Reference/Patterns:**
 
@@ -158,3 +164,4 @@ When the user asks for *"deep-dive on [Java/Spring concept]"* / *"a reference fo
 | --- | --- |
 | May 2026 | **JavaBackend subdomain bootstrapped.** Created with `java-pass-by-value-semantics.md` as the first deep dive. Trigger: the LC 200 (Number of Islands) attempt in `DSA/DeepDive/graphs-fundamentals.md` raised the question *"is `visited[][]` passed by reference?"* — a Java-language question, not a DSA question, so it needed its own home. Folder structure mirrors DSA (DeepDive / Reference / Patterns) for cross-subdomain consistency. |
 | May 2026 | **Track-style sub-folders added.** Introduced the `Spring/` sub-track for the 10-hour Spring foundation course. Established the rule that multi-session topics with hands-on code get self-contained sub-folders (with prep-log + plan + Practice), while one-off concept notes stay in the flat `DeepDive/Reference/Patterns` folders. |
+| June 2026 | **Spring track restructured from 10-day files to 4-chapter format.** Original plan had one file per day (10 files). Replaced with 4 themed chapters: `01-web-servlet-foundation.md` (HTTP + TCP + Servlet API — merged original Days 1+2), `02-spring-core.md` (IoC + DI + AOP + proxies), `03-spring-mvc-boot.md` (MVC + Boot + Profiles), `04-jpa-transactions.md` (JPA + Hibernate + Transactions). Motivation: 10 separate files had too much navigation overhead for interview prep; 4 longer chapters keep related concepts co-located. Per-chapter format standard (8-section arc) lives in `spring-10-hour-plan.md`. |

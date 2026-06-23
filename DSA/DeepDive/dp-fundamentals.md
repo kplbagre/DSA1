@@ -1066,6 +1066,76 @@ KEY INVARIANT:
 - **Transition:** `dp[i][w] = max(skip, take)` (or just `skip` if take is infeasible)
 - **Base cases:** `dp[0][w] = 0` for all `w` (no items → no value)
 
+**Stage 1 — Brute recursion (O(2^n) time, O(n) stack):**
+
+**Before writing code — picture the take/skip tree:**
+
+```
+items = [(wt=1,val=1), (wt=3,val=4), (wt=4,val=5)],  W = 4
+Call: knap(3, W=4) — consider all 3 items, capacity 4
+
+knap(3, W=4)
+├── TAKE item 3 (wt=4 ≤ 4): 5 + knap(2, 0) = 5 + 0 = 5
+└── SKIP item 3:   knap(2, W=4)
+                   ├── TAKE item 2 (wt=3 ≤ 4): 4 + knap(1, 1)
+                   │         knap(1, 1): TAKE item 1 (wt=1 ≤ 1): 1 + 0 = 1
+                   │         = 4 + 1 = 5
+                   └── SKIP item 2: knap(1, W=4) = 1  (item 1 alone)
+                   = max(5, 1) = 5
+= max(5, 5) = 5  ✓  (take item 3 alone OR take items 1+2 — both give 5)
+
+Why O(2^n)? At each of n items: exactly 2 choices (take / skip).
+Binary branching over n levels → 2^n leaves.
+```
+
+```java
+// Brute force recursion — O(2^n) time, O(n) stack
+private int knap(int[] wt, int[] val, int i, int W) {
+    // Base: no items left to consider, or no capacity remaining
+    if (i == 0 || W == 0) {
+        return 0;
+    }
+    // SKIP item i-1 — move to previous item, capacity unchanged
+    int skip = knap(wt, val, i - 1, W);
+    // TAKE item i-1 — only if it fits; move to previous item, reduce capacity
+    int take = 0;
+    if (wt[i - 1] <= W) {
+        take = val[i - 1] + knap(wt, val, i - 1, W - wt[i - 1]);
+    }
+    return Math.max(skip, take);
+}
+// Call: knap(wt, val, n, W)
+```
+
+**Stage 2 — Memoization (O(n×W) time, O(n×W) space):**
+
+State is `(i, W)` — two-dimensional. Use `Integer[n+1][W+1]` (null = uncomputed slot, same sizing rules as tabulation — needs indices 0 through n and 0 through W).
+
+```java
+// Memoization — O(n×W) time, O(n×W) space
+private int knapMemo(int[] wt, int[] val, int i, int W, Integer[][] memo) {
+    // Base: no items or no capacity
+    if (i == 0 || W == 0) {
+        return 0;
+    }
+    // Cache hit — same (i, W) reached before
+    if (memo[i][W] != null) {
+        return memo[i][W];
+    }
+    // Exact same logic as Stage 1 — nothing changes except the cache check
+    int skip = knapMemo(wt, val, i - 1, W, memo);
+    int take = 0;
+    if (wt[i - 1] <= W) {
+        take = val[i - 1] + knapMemo(wt, val, i - 1, W - wt[i - 1], memo);
+    }
+    memo[i][W] = Math.max(skip, take);
+    return memo[i][W];
+}
+// Call: knapMemo(wt, val, n, W, new Integer[n + 1][W + 1])
+```
+
+**Why memoization eliminates the exponential:** In the brute tree, `knap(1, 1)` appears in multiple branches. With `memo[1][1]`, the second time it's a cache hit — O(1) instead of a full subtree. Total unique states = n × W.
+
 **Stage 3 — Tabulation:**
 
 **Steps in plain English:**
@@ -1207,6 +1277,105 @@ KEY INVARIANT:
   - **Take (still allow reuse):** answer is `1 + dp[i][w - coins[i-1]]` ← note **`dp[i]` not `dp[i-1]`** — we STAY on row `i` because we can reuse item `i`
 - **Transition:** `dp[i][w] = min(skip, take)`
 - **Base cases:** `dp[0][0] = 0` (zero coins make zero amount); `dp[0][w > 0] = INF` (no coins can't make positive amount)
+
+---
+
+### 🎨 Visual — Unbounded Knapsack decision tree (before any DP)
+
+Example: `coins = [1, 2]`, `amount = 3` → **answer = 2** (one 1-coin + one 2-coin)
+
+```
+solve(i=2, w=3)   ← "minimum coins for amount=3 using coins[0..1]={1,2}"
+│
+├── SKIP coin 2:  solve(i=1, w=3)
+│   │
+│   ├── SKIP coin 1:  solve(i=0, w=3) = INF  ← no coins left, amount still > 0
+│   │
+│   └── TAKE coin 1 (STAY at i=1, reuse allowed):  1 + solve(i=1, w=2)
+│       ├── SKIP coin 1:  solve(i=0, w=2) = INF
+│       └── TAKE coin 1 (STAY at i=1):  1 + solve(i=1, w=1)
+│           ├── SKIP coin 1:  solve(i=0, w=1) = INF
+│           └── TAKE coin 1 (STAY at i=1):  1 + solve(i=1, w=0) = 1+0 = 1
+│           → min(INF, 1+1) = 2              ← solve(i=1, w=2)
+│       → min(INF, 1+2) = 3                  ← solve(i=1, w=3)
+│
+└── TAKE coin 2 (STAY at i=2, reuse allowed):  1 + solve(i=2, w=1)
+    ├── SKIP coin 2:  solve(i=1, w=1) = 1     ← (computed in left branch above)
+    └── TAKE coin 2:  w=1 < coin=2, impossible
+    → min(1, INF) = 1                          ← solve(i=2, w=1)
+
+→ min(3, 1+1) = 2  ✓
+
+KEY INVARIANT:
+   When we TAKE in Unbounded Knapsack, we STAY at the same item index i
+   (not i-1 like 0/1 Knapsack) — this one switch enables unlimited reuse
+   and is the ONLY structural difference between the two families.
+```
+
+> **Notice the repeated subproblems:** `solve(i=1, w=2)` and `solve(i=1, w=1)` would be recomputed multiple times in a larger tree. Memoization cuts O(2^(n+amount)) to O(n·amount).
+
+---
+
+**Stage 1 — Brute Recursion:** O(2^(n+amount)) time, O(n+amount) stack
+
+```java
+private int coinBrute(int[] coins, int i, int w) {
+    // Base — amount reached: zero coins needed
+    if (w == 0) {
+        return 0;
+    }
+    // Base — no coins left but amount > 0: impossible
+    if (i == 0) {
+        // MAX_VALUE / 2 prevents overflow when caller does  1 + coinBrute(...)
+        return Integer.MAX_VALUE / 2;
+    }
+    // Choice 1 — skip coin i (move to i-1, same amount)
+    int skip = coinBrute(coins, i - 1, w);
+    // Choice 2 — take coin i (STAY at i, reduce amount — reuse allowed)
+    int take = Integer.MAX_VALUE / 2;
+    if (coins[i - 1] <= w) {
+        take = 1 + coinBrute(coins, i, w - coins[i - 1]);
+    }
+    return Math.min(skip, take);
+}
+// Call: int ans = coinBrute(coins, coins.length, amount);
+//       return ans >= Integer.MAX_VALUE / 2 ? -1 : ans;
+```
+
+> **Why `Integer.MAX_VALUE / 2` not `Integer.MAX_VALUE`?** Because the caller does `1 + coinBrute(...)`. If the return is `MAX_VALUE`, adding 1 overflows to a negative — a silent wrong answer. Halving makes overflow impossible.
+
+**Stage 2 — Memoization (top-down):** O(n·amount) time, O(n·amount) space
+
+```java
+private int coinMemo(int[] coins, int i, int w, Integer[][] memo) {
+    // Base cases — same as brute
+    if (w == 0) {
+        return 0;
+    }
+    if (i == 0) {
+        return Integer.MAX_VALUE / 2;
+    }
+    // Cache hit
+    if (memo[i][w] != null) {
+        return memo[i][w];
+    }
+    // Same choices as brute
+    int skip = coinMemo(coins, i - 1, w, memo);
+    int take = Integer.MAX_VALUE / 2;
+    if (coins[i - 1] <= w) {
+        take = 1 + coinMemo(coins, i, w - coins[i - 1], memo);
+    }
+    memo[i][w] = Math.min(skip, take);
+    return memo[i][w];
+}
+// Call: Integer[][] memo = new Integer[coins.length + 1][amount + 1];
+//       int ans = coinMemo(coins, coins.length, amount, memo);
+//       return ans >= Integer.MAX_VALUE / 2 ? -1 : ans;
+```
+
+> **Memo sizing:** `Integer[n+1][amount+1]` — i goes 0..n (inclusive), w goes 0..amount (inclusive). Uses `Integer` (not `int`) so `null` serves as the "not yet computed" sentinel.
+
+---
 
 **Stage 3 — Tabulation:**
 
@@ -1361,6 +1530,84 @@ KEY INVARIANT:
   - **Else (no match):** `dp[i][j] = max(dp[i-1][j], dp[i][j-1])` — drop one char from either string
 - **Base cases:** `dp[0][j] = 0` and `dp[i][0] = 0` — empty string has LCS 0 with anything
 
+---
+
+### 🎨 Visual — LCS decision tree (before any DP)
+
+Example: `s1 = "abc"`, `s2 = "ac"` → **answer = 2** (common subsequence "ac")
+
+```
+solve(i=3, j=2)  [s1[2]='c', s2[1]='c']  → MATCH
+└── 1 + solve(i=2, j=1)  [s1[1]='b', s2[0]='a']  → NO MATCH
+    ├── skip from s1:  solve(i=1, j=1)  [s1[0]='a', s2[0]='a']  → MATCH
+    │   └── 1 + solve(i=0, j=0)  ← base: i==0 → return 0
+    │   → returns 1
+    └── skip from s2:  solve(i=2, j=0)  ← base: j==0 → return 0
+        → returns 0
+    → max(1, 0) = 1
+→ 1 + 1 = 2  ✓
+
+KEY INVARIANT:
+   MATCH    → diagonal move (i-1, j-1): both chars consumed, count +1
+   NO MATCH → two branches: skip one char from s1 (i-1, j) OR skip one
+              from s2 (i, j-1); take the max of the two sub-answers
+```
+
+> **Notice the branching:** every mismatch splits into 2 calls. Strings of length m and n can have up to m+n mismatches → O(2^(m+n)) calls in the worst case. Memoization stores O(m·n) unique states and cuts it to O(m·n).
+
+---
+
+**Stage 1 — Brute Recursion:** O(2^(m+n)) time, O(m+n) stack
+
+```java
+private int lcsBrute(String s1, String s2, int i, int j) {
+    // Base — one string exhausted: no common characters left
+    if (i == 0 || j == 0) {
+        return 0;
+    }
+    // MATCH — consume both characters, count this match
+    if (s1.charAt(i - 1) == s2.charAt(j - 1)) {
+        return 1 + lcsBrute(s1, s2, i - 1, j - 1);
+    }
+    // NO MATCH — try dropping one char from either string, take the better result
+    int skipS1 = lcsBrute(s1, s2, i - 1, j);
+    int skipS2 = lcsBrute(s1, s2, i, j - 1);
+    return Math.max(skipS1, skipS2);
+}
+// Call: lcsBrute(s1, s2, s1.length(), s2.length())
+```
+
+**Stage 2 — Memoization (top-down):** O(m·n) time, O(m·n) space
+
+```java
+private int lcsMemo(String s1, String s2, int i, int j, Integer[][] memo) {
+    // Base — same as brute
+    if (i == 0 || j == 0) {
+        return 0;
+    }
+    // Cache hit
+    if (memo[i][j] != null) {
+        return memo[i][j];
+    }
+    // MATCH
+    if (s1.charAt(i - 1) == s2.charAt(j - 1)) {
+        memo[i][j] = 1 + lcsMemo(s1, s2, i - 1, j - 1, memo);
+        return memo[i][j];
+    }
+    // NO MATCH
+    int skipS1 = lcsMemo(s1, s2, i - 1, j, memo);
+    int skipS2 = lcsMemo(s1, s2, i, j - 1, memo);
+    memo[i][j] = Math.max(skipS1, skipS2);
+    return memo[i][j];
+}
+// Call: Integer[][] memo = new Integer[s1.length() + 1][s2.length() + 1];
+//       lcsMemo(s1, s2, s1.length(), s2.length(), memo)
+```
+
+> **Memo sizing:** `Integer[m+1][n+1]` — `i` goes 0..m and `j` goes 0..n (both inclusive). `Integer` not `int` so `null` acts as the "not yet computed" sentinel.
+
+---
+
 **Stage 3 — Tabulation:**
 
 **Steps in plain English:**
@@ -1480,6 +1727,14 @@ Full walkthrough comes in the "🔬 Worked Walkthroughs" section. For now, recog
 ---
 
 ## 🚶 Family 6 — Longest Increasing Subsequence (LIS)
+
+> ⚠️ **TODO — Stage 1 + Stage 2 not yet added for this family.**
+> Before studying the tabulation below, come back and add:
+> - A concrete example (e.g., `nums = [10, 9, 2, 5, 3, 7, 101, 18]`) with a small decision tree showing TAKE vs SKIP branching
+> - Stage 1 brute recursion: `lis(i, prev)` — `O(2^n)` time
+> - Stage 2 memoization: `Integer[n][n+1]` table (i × prevIdx offset by 1) — `O(n²)` time
+> - Note explaining why `prev` is needed as a parameter (to enforce the "increasing" constraint)
+> Follow the same format as Families 3, 4, 5 above.
 
 > **Striver videos:** DP 41-47 (LIS memoization, LIS tabulation, LIS binary search, Largest Divisible Subset, Longest String Chain, Bitonic, Number of LIS)
 > **Aditya Verma:** does not have an LIS section — get from Striver.
@@ -1642,6 +1897,14 @@ KEY INVARIANT:
 ---
 
 ## 🚶 Family 7 — State Machine DP (Stocks)
+
+> ⚠️ **TODO — Stage 1 + Stage 2 not yet added for this family.**
+> Before studying the tabulation below, come back and add:
+> - A concrete example (e.g., `prices = [3, 2, 6, 5, 0, 3]` for unlimited transactions) with a small tree showing the state transitions (HOLD vs NOT-HOLDING)
+> - Stage 1 brute recursion: `solve(i, holding)` — `O(2^n)` time
+> - Stage 2 memoization: `Integer[n][2]` table (day × holding flag) — `O(n)` time
+> - Note explaining why `holding` is the key state variable (it restricts which choices are legal)
+> Follow the same format as Families 3, 4, 5 above.
 
 > **Striver videos:** DP 35-40 (Best Time to Buy and Sell Stock I-V, Cooldown, Transaction Fee)
 > **Aditya Verma:** not in his playlist — Striver is the source.

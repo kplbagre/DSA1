@@ -81,11 +81,17 @@ Graph problem
 
 ## 🧭 Pattern 1: Grid BFS/DFS (Flood Fill / Islands) ⭐
 
+**What this solves:** Problems on a 2D grid where you need to count, mark, or spread across connected regions. The grid IS the implicit graph — cells are nodes, adjacent cells are edges. Classic triggers: counting islands, flood fill, spreading rot/fire, shortest binary-grid path.
+
 **Recognition cues — reach for this when:**
 - "Number of islands" (count connected 1-regions in a grid)
 - "Flood fill" (change color of connected region)
 - "Rotting oranges" (spread from multiple sources)
 - "Shortest path in binary matrix"
+
+**Brute force:** For each unvisited land cell, scan the entire grid to find all connected cells. O(m² × n²) time — O(m × n) anchor cells, each triggering a potentially full-grid scan.
+
+**Key insight:** Marking each visited cell immediately (sink to `'0'` or flip a `visited` flag) ensures every cell is processed at most once. Total work is O(m × n) regardless of island count or shape.
 
 **The template — DFS on grid:**
 
@@ -174,15 +180,23 @@ public int orangesRotting(int[][] grid) {
 }
 ```
 
+**Complexity (optimal):** O(m × n) time, O(m × n) space for recursion stack (DFS) or queue (BFS).
+
 ---
 
 ## 🧭 Pattern 2: Topological Sort ⭐
+
+**What this solves:** Problems where items have directed dependencies ("A requires B first") and you need a valid processing order or to detect if a cycle makes ordering impossible. Only valid for DAGs (directed acyclic graphs — graphs with no cycles).
 
 **Recognition cues — reach for this when:**
 - "Can I finish all courses with prerequisites?"
 - "Order tasks with dependencies"
 - "Alien dictionary" (determine character ordering)
 - Any DAG (directed acyclic graph) ordering problem
+
+**Brute force:** Generate all n! permutations of nodes and check each against all prerequisite constraints. O(n! × E) time.
+
+**Key insight:** A node with zero in-degree (no remaining prerequisites) is always safe to process first. Kahn's algorithm greedily picks such nodes — O(V + E) by consuming the graph layer by layer.
 
 ### ⚠️ Edge Direction — The #1 Topo Sort Confusion
 
@@ -275,14 +289,22 @@ public boolean canFinish(int numCourses, int[][] prerequisites) {
 }
 ```
 
+**Complexity (optimal):** O(V + E) time, O(V + E) space.
+
 ---
 
 ## 🧭 Pattern 3: Graph Traversal + Cloning
+
+**What this solves:** Problems requiring traversal while simultaneously building a deep copy of a graph. Core challenge: cycles — without tracking already-cloned nodes, DFS will loop infinitely revisiting the same node.
 
 **Recognition cues — reach for this when:**
 - "Clone graph" (deep copy)
 - "Copy list with random pointer"
 - Any "traverse and build a copy" problem
+
+**Brute force:** Recursively clone without a visited map. O(V²) time on cyclic graphs — infinite revisiting and re-cloning without a cycle guard.
+
+**Key insight:** A HashMap from `original → clone` serves double duty: cycle guard (already visited?) and lookup table for wiring clone neighbor lists. One BFS pass, O(V + E).
 
 **Steps in plain English:**
 
@@ -314,15 +336,23 @@ public Node cloneGraph(Node node) {
 }
 ```
 
+**Complexity (optimal):** O(V + E) time, O(V) space.
+
 ---
 
 ## 🧭 Pattern 4: Union-Find (Disjoint Set Union)
+
+**What this solves:** Dynamic connectivity — quickly answer "are A and B in the same group?" or "how many groups exist?" Classic triggers: connected components, redundant edge detection, merging accounts by shared identifier.
 
 **Recognition cues — reach for this when:**
 - "Number of connected components"
 - "Redundant connection" (find the edge that creates a cycle)
 - "Accounts merge" (group by shared emails)
 - Any problem about grouping/merging dynamically
+
+**Brute force:** For each connectivity query, run BFS/DFS from one node and check if the other is reachable. O(V + E) per query — O(Q × (V + E)) for many queries.
+
+**Key insight:** Path compression (flatten tree on `find`) + union by rank (attach shorter tree under taller) together amortize each operation to O(α(n)) — the inverse Ackermann function, effectively O(1).
 
 **The template:**
 
@@ -368,14 +398,22 @@ class UnionFind {
 }
 ```
 
+**Complexity (optimal):** O(α(n)) per union/find operation, O(n) space — α(n) is the inverse Ackermann function, effectively O(1).
+
 ---
 
 ## 🧭 Pattern 5: Shortest Path (Dijkstra)
+
+**What this solves:** Shortest path from a single source to all nodes in a weighted graph with non-negative edge weights. Triggers: "network delay," "minimum cost to reach all nodes," "cheapest path from A to B."
 
 **Recognition cues — reach for this when:**
 - "Network delay time" (shortest time to reach all nodes)
 - "Cheapest flights within K stops"
 - Weighted graph + shortest path
+
+**Brute force:** DFS from source exploring all paths and tracking running cost. O(V^E) time — exponential path explosion on dense graphs.
+
+**Key insight:** Once a node is popped from the min-heap, its distance is finalized — non-negative weights guarantee no future path can improve it. Each node finalized exactly once — O((V + E) log V).
 
 ```java
 public int networkDelayTime(int[][] times, int n, int k) {
@@ -424,6 +462,8 @@ public int networkDelayTime(int[][] times, int n, int k) {
     return maxDist == Integer.MAX_VALUE ? -1 : maxDist;
 }
 ```
+
+**Complexity (optimal):** O((V + E) log V) time, O(V + E) space.
 
 ---
 
@@ -482,6 +522,8 @@ private void dfs(char[][] grid, int r, int c) {
 
 > **Problem:** Grid of `'1'` (land) and `'0'` (water). Count connected land regions (horizontally/vertically adjacent).
 
+> **Brute force:** For each `'1'` cell, scan the full grid to find all connected cells. O(m² × n²) time.
+> **Key insight:** Sink each visited land cell to `'0'` immediately — every cell is touched at most once, giving O(m × n) total.
 > **Approach:** Walk every cell. On finding `'1'`, count++ and DFS/BFS to sink the entire island.
 
 ```java
@@ -492,12 +534,16 @@ if (grid[r][c] == '1') {
 }
 ```
 
+**Complexity (optimal):** O(m × n) time, O(m × n) space.
+
 ---
 
 ### LC 733: Flood Fill
 
 > **Problem:** Given an image (grid of ints), a starting pixel `(sr, sc)`, and a new color, change the color of the starting pixel and all connected pixels with the same original color.
 
+> **Brute force:** BFS/DFS but re-check every cell on each step. O(m² × n²) time without proper visited marking.
+> **Key insight:** Painting to the new color IS the visited marker — no separate `visited` array needed (unless `newColor == oldColor`, which needs a special early-return check).
 > **Approach:** DFS from `(sr, sc)`. Only visit cells matching the original color. Change to new color.
 
 ```java
@@ -511,12 +557,16 @@ private void dfs(int[][] image, int r, int c, int oldColor, int newColor) {
 }
 ```
 
+**Complexity (optimal):** O(m × n) time, O(m × n) space.
+
 ---
 
 ### LC 994: Rotting Oranges
 
 > **Problem:** Grid with 0 (empty), 1 (fresh orange), 2 (rotten). Each minute, fresh oranges adjacent to rotten ones become rotten. Return minimum minutes until no fresh orange remains, or -1 if impossible.
 
+> **Brute force:** Simulate minute by minute with a full grid scan each pass. O((m × n)²) time.
+> **Key insight:** Multi-source BFS — seed the queue with ALL rotten oranges simultaneously so they spread in parallel. Each BFS level = exactly one minute.
 > **Approach:** Multi-source BFS — enqueue ALL rotten oranges at start. Each BFS level = one minute. Track fresh count.
 
 ```java
@@ -528,12 +578,16 @@ while (!queue.isEmpty() && fresh > 0) {
 return fresh == 0 ? minutes : -1;
 ```
 
+**Complexity (optimal):** O(m × n) time, O(m × n) space.
+
 ---
 
 ### LC 207: Course Schedule
 
 > **Problem:** There are `n` courses labeled `0..n-1`. Prerequisites given as pairs `[a, b]` meaning "to take a, you must first take b." Determine if you can finish all courses (no circular dependency).
 
+> **Brute force:** Try all n! orderings and check each against prerequisite constraints. O(n! × E) time.
+> **Key insight:** Kahn's BFS: start with in-degree-0 nodes (no prereqs), peel layers off the graph. If any node remains after BFS, it's in a cycle.
 > **Approach:** Topological sort (Kahn's). Build in-degree array. If BFS processes all nodes → no cycle → possible.
 
 ```java
@@ -541,12 +595,16 @@ return fresh == 0 ? minutes : -1;
 return count == numCourses;
 ```
 
+**Complexity (optimal):** O(V + E) time, O(V + E) space.
+
 ---
 
 ### LC 210: Course Schedule II
 
 > **Problem:** Same as Course Schedule, but return a valid ordering of courses (not just true/false).
 
+> **Brute force:** Try all n! orderings and verify against constraints. O(n! × E) time.
+> **Key insight:** Same as LC 207 — Kahn's naturally produces one valid topological order. Collect the BFS poll order into a result array.
 > **Approach:** Same Kahn's algorithm, but collect the BFS order into a result array.
 
 ```java
@@ -556,12 +614,16 @@ return idx == numCourses ? order : new int[]{};
 // If idx < numCourses, a cycle exists — return empty array
 ```
 
+**Complexity (optimal):** O(V + E) time, O(V + E) space.
+
 ---
 
 ### LC 133: Clone Graph
 
 > **Problem:** Given a reference to a node in a connected undirected graph, return a deep copy. Each node has a value and a list of neighbors.
 
+> **Brute force:** Recursive DFS without a visited map — infinite loop on cycles.
+> **Key insight:** HashMap `original → clone` is both the cycle guard and the lookup table for wiring neighbor lists. One BFS pass, O(V + E).
 > **Approach:** BFS + HashMap mapping original → clone. For each neighbor, clone if not seen, then link.
 
 ```java
@@ -570,12 +632,16 @@ map.put(node, new Node(node.val));
 // BFS: for each neighbor, clone if unseen, then wire clone's neighbor list
 ```
 
+**Complexity (optimal):** O(V + E) time, O(V) space.
+
 ---
 
 ### LC 323: Number of Connected Components
 
 > **Problem:** Given `n` nodes and edges in an undirected graph, return the number of connected components.
 
+> **Brute force:** BFS/DFS from each unvisited node to count components. O(V + E) time — valid but slower per query than Union-Find when built incrementally.
+> **Key insight:** Union-Find counts components by starting at n (all isolated) and decrementing each time two previously separate groups are merged.
 > **Approach:** Union-Find. Start with `n` components. Each successful `union()` decreases count by 1.
 
 ```java
@@ -588,12 +654,16 @@ for (int[] edge : edges) {
 return uf.components;
 ```
 
+**Complexity (optimal):** O(E × α(n)) time, O(n) space.
+
 ---
 
 ### LC 684: Redundant Connection
 
 > **Problem:** An undirected graph with `n` nodes (tree + one extra edge). Find the edge that, if removed, makes the graph a tree.
 
+> **Brute force:** Try removing each edge one by one and check if the remaining graph is a tree. O(E × (V + E)) time.
+> **Key insight:** Union-Find processes edges in order — the first edge whose two endpoints are already in the same component closes a cycle; that's the redundant edge.
 > **Approach:** Union-Find. Process edges one by one. The first edge where `union()` returns false (both nodes already connected) is the redundant one.
 
 ```java
@@ -605,12 +675,16 @@ for (int[] edge : edges) {
 }
 ```
 
+**Complexity (optimal):** O(E × α(n)) time, O(n) space.
+
 ---
 
 ### LC 743: Network Delay Time
 
 > **Problem:** Given a directed weighted graph of `n` nodes, send a signal from node `k`. Return the time it takes for ALL nodes to receive the signal. Return -1 if impossible.
 
+> **Brute force:** DFS/BFS exploring all paths from `k`, tracking minimum time to each node. O(V^E) time on dense graphs.
+> **Key insight:** Dijkstra from `k` finds shortest time to every node. The answer is the maximum of those times — the bottleneck node.
 > **Approach:** Dijkstra's algorithm from source `k`. Answer = max distance across all nodes.
 
 ```java
@@ -618,12 +692,16 @@ for (int[] edge : edges) {
 return maxDist == Integer.MAX_VALUE ? -1 : maxDist;
 ```
 
+**Complexity (optimal):** O((V + E) log V) time, O(V + E) space.
+
 ---
 
 ### LC 417: Pacific Atlantic Water Flow
 
 > **Problem:** Grid of heights. Water can flow to adjacent cells with equal or lower height. Pacific ocean touches top and left edges, Atlantic touches bottom and right edges. Find cells that can flow to BOTH oceans.
 
+> **Brute force:** For every cell, BFS/DFS forward (downhill) and check if both oceans are reachable. O((m × n)²) time.
+> **Key insight:** Reverse the flow direction — start BFS from ocean edges and travel UPHILL. Cells reachable uphill from Pacific AND Atlantic are the answer. Two passes instead of m × n passes.
 > **Approach:** Reverse BFS/DFS — start from ocean edges and flow UPHILL. Cells reachable from both oceans are the answer.
 
 ```java
@@ -631,6 +709,8 @@ return maxDist == Integer.MAX_VALUE ? -1 : maxDist;
 // DFS from all Atlantic edge cells → mark reachable
 // Intersection of both sets = answer
 ```
+
+**Complexity (optimal):** O(m × n) time, O(m × n) space.
 
 ---
 
@@ -690,6 +770,76 @@ For Rotting Oranges, explain in one sentence: why do you add ALL rotten oranges 
 
 ---
 
+## 🗺️ FAANG Gaps — Study These Next
+
+> Work through the 5 core patterns above first. Each entry below is self-contained — problem statement, what's new, and where it's asked.
+
+---
+
+**LC 127 — Word Ladder** | 🟡 | Google, Amazon
+
+*What it asks:* Given a `beginWord`, an `endWord`, and a word list, find the **shortest sequence** of one-letter transformations from begin → end where every intermediate word must exist in the list. Return the length; 0 if impossible.
+
+*New twist:* BFS on an **implicit graph** — no adjacency list is given. You construct edges on the fly: for each word in the queue, try swapping every character to every letter a–z and check if the result is in the word list. The graph is never stored; BFS discovers it.
+
+---
+
+**LC 787 — Cheapest Flights Within K Stops** | 🟡 | Amazon, Meta
+
+*What it asks:* Given a weighted directed graph of flight routes, find the **cheapest price** from `src` to `dst` using **at most k stops** (not k edges — one stop = one intermediate city).
+
+*New twist:* Standard Dijkstra only tracks `(cost, node)`. Here you must track `(cost, node, stops_used)` as state — a node can be visited multiple times via different stop-counts. The cheapest path may NOT be the fewest-stops path, so you can't prune on visited alone.
+
+---
+
+**LC 269 — Alien Dictionary** | 🟡 | Google
+
+*What it asks:* Given a list of words sorted in an alien language's alphabetical order, **deduce the character ordering** of that alphabet. Return any valid ordering string; return `""` if a contradiction exists.
+
+*New twist:* Topological sort, but **you must first build the graph** — there's no adjacency list given. Compare adjacent words character-by-character; the first differing character gives you a directed edge (`char_in_word_i → char_in_word_j`). The topo sort itself is standard Kahn's after that.
+
+---
+
+**LC 785 — Is Graph Bipartite** | ✅ | Google, Meta
+
+*What it asks:* Given an undirected graph (as adjacency list), determine if it can be **2-colored** such that no two adjacent nodes share the same color. Equivalently: can you split nodes into two groups where all edges go between groups, never within?
+
+*New twist:* BFS/DFS with a `color[]` array (0 or 1). When visiting a neighbor: if uncolored → assign opposite color; if already colored → check it's the opposite. If same color as current node → return false. Handle disconnected components by iterating all nodes.
+
+---
+
+**LC 1584 — Min Cost to Connect All Points** | 🟡 | Meta, Amazon
+
+*What it asks:* Given `n` points on a 2D plane, find the **minimum cost to connect all points** (like laying cables), where cost between two points = Manhattan distance `|x1-x2| + |y1-y2|`. Every point must be reachable.
+
+*New twist:* This is **Minimum Spanning Tree (MST)** — a new algorithm family not covered in the 5 core patterns. Use Prim's: start from any node, always add the cheapest edge connecting a visited node to an unvisited node (min-heap). Kruskal's (sort all edges, Union-Find) also works but Prim's is easier to implement for dense graphs.
+
+---
+
+**LC 1192 — Critical Connections in a Network** | 🔴 | Meta
+
+*What it asks:* Given `n` servers and a list of undirected connections, find all **critical connections** — edges whose removal would disconnect at least one server from the rest (bridge edges in graph theory).
+
+*New twist:* Requires **Tarjan's bridge-finding algorithm** — a DFS that tracks two values per node: `disc[]` (discovery time — when DFS first visited this node) and `low[]` (lowest discovery time reachable from this node's subtree via back-edges). An edge `(u, v)` is a bridge if `low[v] > disc[u]` — meaning v's subtree cannot reach back above u without using the u→v edge. Hard; Senior+ territory.
+
+---
+
+**LC 721 — Accounts Merge** | 🟡 | Google, Amazon
+
+*What it asks:* Given a list of accounts where each entry is `[name, email1, email2, ...]`, **merge accounts that share at least one email** (same email = same person). Return merged accounts with emails sorted, each prefixed by the account name.
+
+*New twist:* Union-Find on **strings**, not integers. Map each email to an ID, run Union-Find on IDs to group connected emails, then reconstruct groups. The DSU mechanics are identical to LC 684 (Redundant Connection) — the difficulty is the string-mapping wrapper and the grouping + sorting step at the end.
+
+---
+
+**Sequence-ordered traversal (non-LC)** | ✅ | Google, Meta
+
+*What it asks:* Given a graph of cities and a required visit sequence `[c1, c2, c3, ..., cn]`, find a valid path that visits the cities **in sequence order** — you must reach `c1` before `c2`, `c2` before `c3`, etc. Twist: cities that appear **later** in the sequence are **forbidden** until you've visited their predecessors.
+
+*New twist:* BFS with a **forbidden-nodes set that updates per step**. Before BFS from `c_i` to `c_{i+1}`, add `{c_{i+2}, c_{i+3}, ..., c_n}` to a forbidden set. In BFS, add one line: `if (forbidden.contains(next)) continue;`. After reaching `c_{i+1}`, remove it from forbidden for the next leg. Standard BFS otherwise.
+
+---
+
 ## 🔗 Cross-References
 
 | Topic | File |
@@ -708,3 +858,5 @@ For Rotting Oranges, explain in one sentence: why do you add ALL rotten oranges 
 | --- | --- |
 | May 2026 | **File created.** Interview Playbook for Graphs. 5 patterns: grid BFS/DFS, topological sort, graph cloning, Union-Find, Dijkstra. Canonical walkthrough (LC 200 Number of Islands), expanded problem bank with 10 problems. |
 | May 2026 | **Lambda & Fallback pass.** Added 🔄 Lambda section with PQ comparator explanation + overflow warning. Added inline English comment + 🔄 Fallback at Dijkstra PQ usage (Pattern 5). |
+| June 2026 | **Brute force / Key insight pass.** Added `**What this solves**`, `**Brute force**`, `**Key insight**`, `**Complexity (optimal)**` to all 5 patterns and all 10 problem bank entries. Format matches `binary-search.md` and `heaps.md`. |
+| June 2026 | **FAANG Gaps section added.** 8 graph problems not covered in the 5 core patterns. Each entry has: problem statement (what it asks), new twist (what's different), companies, priority tag. Problems: Word Ladder, Cheapest Flights K Stops, Alien Dictionary, Bipartite, MST, Critical Connections, Accounts Merge, Sequence-ordered traversal. |

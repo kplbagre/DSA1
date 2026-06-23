@@ -1,0 +1,427 @@
+# Document & Blob Storage
+
+---
+
+## 🎯 Why This Matters
+
+Every system that handles files — PDFs, images, contracts, videos — eventually hits the same wall: a relational database is the wrong place to store raw binary content. Blob storage (binary large object storage) is the pattern that separates where you store the file (cheap, durable, scalable object storage) from where you store the metadata about the file (fast, queryable database). This appears in any interview for a document management system, photo service, contract platform, or anything DocuSign-adjacent. A senior engineer is expected to know not just "use S3" but the full pattern: metadata DB + blob store, versioning strategy, pre-signed URLs, compliance, and soft delete.
+
+---
+
+## 🧠 The Mental Model
+
+Imagine a **national archive building** — the kind that stores physical government records. The building has two parts:
+
+**Part 1 — the archive hall:** row upon row of shelves holding boxes. Each box is identified by a unique reference code stamped on the outside (the S3 key). You cannot search inside the boxes — you can only retrieve a box by its code. The boxes are sealed, tamper-evident, and can hold anything — a single page, a thousand pages, a map, a photo. Storage is cheap; retrieval is by code only.
+
+**Part 2 — the library catalog:** a small filing cabinet at the entrance. Each card says: "Document ID 5821 is in Box `docs/2026/06/5821.pdf`. Owner: Alice. Filed: June 23. Status: Active. Type: Contract. Version: 3." The catalog is small, fast to search, and holds no actual content — only pointers and attributes.
+
+The archivist's workflow: a new document arrives → archivist physically places the box on the shelf (writes to object storage) → archivist fills in a catalog card (writes to metadata DB). Both must succeed before the document is considered stored. When someone wants the document: search the catalog (metadata DB query) → get the box code (S3 key) → retrieve the box (S3 GET or generate a pre-signed URL).
+
+**The key insight is:** Object storage is a flat, unlimited key-value store for binary content — infinitely scalable, cheap per GB, not queryable. The metadata database is the query layer on top — fast, queryable, but stores no bytes of the actual content. These two always work as a pair.
+
+---
+
+## 🎨 Visual — Upload flow and document versioning
+
+```
+DOCUMENT UPLOAD FLOW
+════════════════════
+
+Client (browser/app)
+       │
+       │ POST /api/documents
+       │ (multipart form: file + metadata)
+       ▼
+┌─────────────────────┐
+│   App Server        │
+│   (Spring Boot)     │
+└─────────────────────┘
+       │
+       ├──────────────────────────────────────►  Amazon S3
+       │  Step 1: PUT s3://bucket/docs/{uuid}.pdf   │
+       │  (upload binary content)                   │
+       │◄─────────────────────── ETag (hash) ───────┘
+       │
+       │  Step 2: INSERT into documents table
+       ▼
+┌─────────────────────┐
+│   Postgres          │
+│   (metadata only)   │
+│   id, s3_key,       │
+│   owner_id, version │
+│   size, status...   │
+└─────────────────────┘
+
+DOWNLOAD FLOW:
+  Client → App Server → SELECT s3_key FROM documents WHERE id=?
+                      → Generate pre-signed URL (time-limited, no credentials exposed)
+                      → Return URL to client
+  Client → S3 directly with pre-signed URL (bypasses app server for large file transfer)
+
+
+DOCUMENT VERSIONING — TWO STRATEGIES
+═══════════════════════════════════════
+
+Strategy A: IMMUTABLE KEYS (one S3 key per version) — recommended for legal docs
+────────────────────────────────────────────────────────────────────────────────
+docs/doc-5821/v1.pdf  ← never modified after upload
+docs/doc-5821/v2.pdf  ← new upload = new key
+docs/doc-5821/v3.pdf  ← current
+
+Metadata DB:
+┌──────────┬──────────────────────────┬─────────┬──────────┐
+│ doc_id   │ s3_key                   │ version │ is_latest│
+├──────────┼──────────────────────────┼─────────┼──────────┤
+│ 5821     │ docs/doc-5821/v1.pdf     │ 1       │ false    │
+│ 5821     │ docs/doc-5821/v2.pdf     │ 2       │ false    │
+│ 5821     │ docs/doc-5821/v3.pdf     │ 3       │ true     │
+└──────────┴──────────────────────────┴─────────┴──────────┘
+
+Strategy B: S3 NATIVE VERSIONING (same key, S3 tracks versions internally)
+───────────────────────────────────────────────────────────────────────────
+docs/doc-5821/contract.pdf  ← S3 keeps version history internally
+                               each PUT generates a new versionId
+
+Metadata DB only stores: doc_id, s3_key, current_s3_version_id
+
+KEY INVARIANT:
+   Metadata DB is the source of truth for queries (owner, status, type, version).
+   S3 is the source of truth for content.
+   A document is only "stored" when BOTH writes succeed.
+```
+
+---
+
+## ⚙️ How It Actually Works
+
+### Storage Type Decision — Object vs Block vs File
+
+Before any code, pick the right storage primitive:
+
+| | **Object Storage** (S3, GCS) | **Block Storage** (EBS, SAN) | **File Storage** (EFS, NFS) |
+|---|---|---|---|
+| **What it stores** | Arbitrary binary objects — PDFs, images, videos, backups | Raw blocks — like a hard drive attached to a server | Files in a directory tree — like a shared network drive |
+| **Access method** | HTTP PUT/GET with a flat key (`bucket/key`) | Mounted as a disk — `read(offset, length)` | POSIX file operations — `open()`, `read()`, `write()` |
+| **Scalability** | Virtually unlimited (exabytes) | Bounded by disk size, attached to one server | Scales but slower than object storage |
+| **Cost** | Cheapest per GB (~$0.02/GB/month) | More expensive (~$0.10/GB/month) | Mid-range |
+| **Use case** | Documents, media, backups, any immutable binary | Database files, OS disks, anything needing low latency random read/write | Shared config files, home directories, legacy app shared storage |
+| **DocuSign use** | ✅ Store signed PDFs | ❌ Wrong — no random write needed | ❌ Wrong — no directory tree needed |
+
+**Rule of thumb:** If you're storing files that are uploaded once and read many times (documents, images, videos) → object storage. If you're storing files that change constantly (DB data files) → block storage.
+
+---
+
+### Full Implementation — Metadata DB + S3
+
+**Steps in plain English:**
+
+1. **Design the metadata table** — captures everything queryable about a document, with `s3_key` as the pointer to the actual content.
+2. **Upload** — write to S3 first (get back an ETag confirming the upload), then INSERT the metadata row. If the DB insert fails after S3 upload, the orphaned S3 object is cleaned up by a periodic reconciliation job.
+3. **Retrieve** — query metadata DB by any attribute (owner, status, doc type), get the `s3_key`, generate a pre-signed URL with a short expiry.
+4. **Version a document** — insert a new row with a new `s3_key` and incremented version; mark the previous row `is_latest = false`.
+5. **Soft delete** — set `status = DELETED` in metadata DB; never delete the S3 object (audit trail preservation).
+
+```sql
+-- Metadata table schema
+CREATE TABLE documents (
+    id              UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner_id        UUID          NOT NULL,
+    title           VARCHAR(500)  NOT NULL,
+    -- s3_key is the pointer into object storage — never store the raw bytes here
+    s3_key          VARCHAR(1000) NOT NULL UNIQUE,
+    s3_bucket       VARCHAR(255)  NOT NULL,
+    content_type    VARCHAR(100)  NOT NULL,              -- e.g. "application/pdf"
+    size_bytes      BIGINT        NOT NULL,
+    checksum_sha256 VARCHAR(64)   NOT NULL,              -- integrity verification
+    version         INT           NOT NULL DEFAULT 1,
+    is_latest       BOOLEAN       NOT NULL DEFAULT TRUE,
+    -- GDPR / compliance: which region the data resides in
+    data_region     VARCHAR(50)   NOT NULL DEFAULT 'us-east-1',
+    status          VARCHAR(20)   NOT NULL DEFAULT 'ACTIVE',  -- ACTIVE, DELETED, LEGAL_HOLD
+    created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    deleted_at      TIMESTAMPTZ,
+
+    CONSTRAINT chk_status CHECK (status IN ('ACTIVE', 'DELETED', 'LEGAL_HOLD'))
+);
+
+-- Index for the most common queries
+CREATE INDEX idx_documents_owner_latest ON documents (owner_id, is_latest) WHERE is_latest = TRUE;
+CREATE INDEX idx_documents_owner_status ON documents (owner_id, status);
+```
+
+```java
+@Service
+public class DocumentStorageService {
+
+    private final AmazonS3 s3Client;
+    private final DocumentRepository docRepo;
+    private final String bucketName;
+
+    public DocumentStorageService(AmazonS3 s3Client,
+                                  DocumentRepository docRepo,
+                                  @Value("${storage.bucket}") String bucketName) {
+        this.s3Client = s3Client;
+        this.docRepo = docRepo;
+        this.bucketName = bucketName;
+    }
+
+    // Step 2 — upload: write S3 first, then metadata DB
+    @Transactional
+    public Document uploadDocument(UUID ownerId, String title,
+                                   MultipartFile file) throws IOException {
+        // Generate a stable, unique S3 key — UUID prevents key collisions
+        String s3Key = "docs/" + ownerId + "/" + UUID.randomUUID() + ".pdf";
+
+        // Step 2a — write binary content to S3
+        ObjectMetadata metadata = new ObjectMetadata();
+        metadata.setContentType(file.getContentType());
+        metadata.setContentLength(file.getSize());
+        s3Client.putObject(bucketName, s3Key, file.getInputStream(), metadata);
+
+        // Compute SHA-256 for integrity verification
+        String checksum = computeChecksum(file.getBytes());
+
+        // Step 2b — write metadata to DB (pointer to S3 object)
+        Document doc = new Document();
+        doc.setOwnerId(ownerId);
+        doc.setTitle(title);
+        doc.setS3Key(s3Key);
+        doc.setS3Bucket(bucketName);
+        doc.setContentType(file.getContentType());
+        doc.setSizeBytes(file.getSize());
+        doc.setChecksumSha256(checksum);
+        doc.setVersion(1);
+        doc.setLatest(true);
+        doc.setStatus("ACTIVE");
+
+        return docRepo.save(doc);
+    }
+
+    // Step 3 — retrieve: metadata query + pre-signed URL generation
+    public String getDownloadUrl(UUID documentId, UUID requesterId) {
+        Document doc = docRepo.findById(documentId)
+                .orElseThrow(() -> new DocumentNotFoundException("Document not found"));
+
+        if (!doc.getOwnerId().equals(requesterId)) {
+            throw new AccessDeniedException("Not authorized to access this document");
+        }
+        if ("DELETED".equals(doc.getStatus())) {
+            throw new DocumentNotFoundException("Document has been deleted");
+        }
+
+        // Step 3 — generate pre-signed URL: valid for 15 minutes
+        // Client downloads directly from S3 — app server is not in the data path
+        java.util.Date expiry = new java.util.Date(
+            System.currentTimeMillis() + (15 * 60 * 1000)
+        );
+        return s3Client.generatePresignedUrl(
+            bucketName, doc.getS3Key(), expiry
+        ).toString();
+    }
+
+    // Step 4 — version: new S3 key + new metadata row, old row marked not-latest
+    @Transactional
+    public Document uploadNewVersion(UUID existingDocId, UUID ownerId,
+                                     MultipartFile file) throws IOException {
+        // Mark old version as not latest
+        Document existing = docRepo.findById(existingDocId)
+                .orElseThrow(() -> new DocumentNotFoundException("Document not found"));
+        existing.setLatest(false);
+        docRepo.save(existing);
+
+        // Upload new version as a new S3 key (immutable — old version preserved)
+        String newS3Key = "docs/" + ownerId + "/" + UUID.randomUUID() + ".pdf";
+        s3Client.putObject(bucketName, newS3Key, file.getInputStream(), new ObjectMetadata());
+
+        // New metadata row pointing to the new S3 key
+        Document newVersion = new Document();
+        newVersion.setOwnerId(ownerId);
+        newVersion.setTitle(existing.getTitle());
+        newVersion.setS3Key(newS3Key);
+        newVersion.setVersion(existing.getVersion() + 1);
+        newVersion.setLatest(true);
+        newVersion.setStatus("ACTIVE");
+
+        return docRepo.save(newVersion);
+    }
+
+    // Step 5 — soft delete: status update only, S3 object never deleted
+    @Transactional
+    public void deleteDocument(UUID documentId, UUID requesterId) {
+        Document doc = docRepo.findById(documentId)
+                .orElseThrow(() -> new DocumentNotFoundException("Document not found"));
+
+        if (!doc.getOwnerId().equals(requesterId)) {
+            throw new AccessDeniedException("Not authorized");
+        }
+        // Soft delete — S3 object preserved for audit trail and legal hold
+        doc.setStatus("DELETED");
+        doc.setDeletedAt(java.time.OffsetDateTime.now());
+        docRepo.save(doc);
+        // S3 object is NOT deleted here — a separate lifecycle policy handles archiving
+    }
+
+    private String computeChecksum(byte[] content) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(content);
+            return java.util.HexFormat.of().formatHex(hash);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not available", e);
+        }
+    }
+}
+```
+
+---
+
+### What is Amazon S3, and why does it fit here?
+
+**Amazon S3** (Simple Storage Service) is an object storage service — a flat key-value store where the key is a string path (`bucket/prefix/filename`) and the value is an arbitrary binary blob of any size (up to 5 TB per object). It exposes a simple HTTP API: `PUT` to upload, `GET` to download, `DELETE` to remove. There is no directory tree, no schema, no query language — you retrieve objects by exact key only.
+
+**Why it fits document storage:** Documents are write-once-read-many (immutable after creation), can be any size, and do not need random byte-range updates. S3's strengths align perfectly: infinite scale, 99.999999999% durability (eleven 9s), cheap storage, and global CDN integration via CloudFront. It is the dominant choice for document, image, and video storage.
+
+**In an interview, if asked:** "S3 is a flat HTTP key-value store for binary objects — you PUT a document with a unique key and GET it back by that key. It's infinitely scalable, 11-nines durable, and charges per GB stored. I pair it with a Postgres metadata table that stores the S3 key alongside all queryable attributes — owner, status, version, content type — because S3 itself is not queryable."
+
+---
+
+### What is a Pre-Signed URL, and why does it fit here?
+
+A **pre-signed URL** is a time-limited URL that grants temporary read (or write) access to a specific S3 object without requiring the requester to have AWS credentials. The app server generates it by signing the S3 request with its own AWS credentials, embedding an expiry timestamp. The client then hits S3 directly with this URL.
+
+**Why it fits:** Serving a 50 MB PDF through your app server is wasteful — the app server becomes a bandwidth bottleneck and every download occupies a thread. A pre-signed URL lets the client download directly from S3, bypassing the app server entirely. The app server only handles authentication and URL generation (microseconds), not file transfer (seconds).
+
+**In an interview, if asked:** "I generate a pre-signed URL with 15-minute expiry — the client downloads directly from S3 without touching my app server. This keeps large file transfers off my application tier, prevents bandwidth bottlenecks, and still enforces access control because the URL is only generated after authentication and authorization checks."
+
+---
+
+### DocuSign-Specific Additions — Signed Document Immutability
+
+For a document signing platform, immutability is not just a design choice — it is a legal requirement. Once all parties have signed, the document must never be altered. Two mechanisms enforce this:
+
+**1. Immutable S3 keys per version (application layer):** Each signed document version gets a UUID-based S3 key. The application never overwrites an existing key — new content = new key. Old keys are never deleted.
+
+**2. S3 Object Lock (WORM — Write Once Read Many):** S3 supports a compliance mode lock where objects cannot be deleted or overwritten for a defined retention period, enforced at the storage layer regardless of application code. Used for legal hold scenarios.
+
+**3. Checksum in metadata:** The `checksum_sha256` column in the documents table stores a SHA-256 hash of the document content at upload time. Any tampering attempt (even direct S3 manipulation) can be detected by recomputing the hash and comparing.
+
+```java
+// Integrity verification: recompute hash and compare
+public boolean verifyDocumentIntegrity(UUID documentId) {
+    Document doc = docRepo.findById(documentId)
+            .orElseThrow(() -> new DocumentNotFoundException("Not found"));
+
+    // Re-download from S3 and hash
+    S3Object s3Object = s3Client.getObject(doc.getS3Bucket(), doc.getS3Key());
+    byte[] content = s3Object.getObjectContent().readAllBytes();
+    String recomputedHash = computeChecksum(content);
+
+    // If hashes match, document is intact
+    return recomputedHash.equals(doc.getChecksumSha256());
+}
+```
+
+---
+
+## 🏢 Real World — Where Companies Use This
+
+- **DocuSign** (signed contract storage): Every executed agreement is stored as an immutable PDF in S3 with S3 Object Lock in compliance mode — legally non-deletable for the retention period. Metadata in Postgres (signer IDs, timestamps, envelope status) is the query layer.
+- **Dropbox** (file sync service): Dropbox stores all file content in S3 (originally their own block servers, later migrated). Their metadata service (originally MySQL, later a custom distributed store) tracks file paths, versions, owner, and share permissions.
+- **GitHub** (repository objects): Git objects (commits, blobs, trees) are stored in object storage. The database tracks repository metadata — name, owner, visibility, stars — but the actual git content is in blob storage.
+- **Netflix** (video content): Encoded video segments stored in S3, served via CloudFront CDN. Metadata DB tracks title, quality levels, available encodings, content ratings. No video content touches the app servers at playback time.
+- **Figma** (design file storage): Design files (sometimes 100+ MB) stored in object storage. Postgres tracks project ID, owner, team, permissions, version history. Pre-signed URLs used for file export.
+- **Slack** (file uploads): Attachments stored in S3 with short-lived pre-signed URLs served to clients. File metadata (uploader, channel, timestamp, size) in their main database.
+
+---
+
+## 🧭 When to Use vs When NOT to Use
+
+| Use object storage when | Do NOT use object storage when |
+|---|---|
+| Files are write-once or write-rarely (documents, images, videos, backups) | You need byte-range updates (e.g., append to a log file — use block storage) |
+| File size is large (> 1 MB) and you want to keep DB rows small | The file is small and frequently read alongside its metadata — consider storing inline in DB as `BYTEA` for simplicity |
+| You need virtually unlimited scale and 11-nines durability | You need POSIX filesystem semantics (open/seek/read/write) — use file storage (EFS/NFS) |
+| Files must be served to clients globally with low latency (pair with CDN) | Real-time random access is needed at the byte level (DB data files, VM disks) |
+
+**The common mistake:** Storing S3 URLs directly in the application response and embedding them in client-side code. Pre-signed URLs expire — if a client caches a direct S3 URL, it breaks after expiry. Always serve pre-signed URLs generated fresh per request, or serve through a CDN URL that never expires.
+
+---
+
+## ⚠️ Trade-offs
+
+| | |
+|---|---|
+| **You gain** | Unlimited scalable binary storage at low cost (~$0.02/GB), 11-nines durability, built-in replication across availability zones, CDN integration, no database row size limits |
+| **You lose** | Two-system consistency (S3 upload + DB write must both succeed — partial failures leave orphaned objects), S3 is not queryable (you must maintain a metadata DB separately), S3 eventual consistency means a PUT and immediate GET on a new key may occasionally return 404 (millisecond window) |
+| **Failure mode** | S3 upload succeeds but metadata DB insert fails — the document is "stored" in S3 but invisible to the application. Fix: run a periodic reconciliation job that lists S3 keys and compares against DB rows; orphaned keys are either re-registered or cleaned up. Alternatively, write DB first with status `PENDING_UPLOAD`, then upload S3, then update status to `ACTIVE` — if S3 upload fails, the DB row stays `PENDING` and is retried. |
+
+---
+
+## 🔬 Interview Q&As
+
+### Q: "What's the difference between object storage, block storage, and file storage?"
+
+> Object storage (S3) is a flat HTTP key-value store — you PUT and GET arbitrary binary blobs by a unique key, no directory tree, not queryable, virtually unlimited scale, cheapest per GB. Block storage (EBS) presents as a raw disk — attached to one server, supports random byte-level reads and writes, used for database data files and OS disks. File storage (EFS/NFS) provides a shared POSIX filesystem — multiple servers can mount it, supports file-path operations, used for shared config or legacy apps. For documents and media, object storage is always the answer — write once, read many, never needs byte-range updates.
+
+---
+
+### Q: "Why do you store metadata separately from the file content?"
+
+> Object storage is not queryable — you cannot do `SELECT * FROM s3 WHERE owner = 'alice' AND status = 'signed'`. To find documents by any attribute, you need a relational database. The metadata DB (Postgres) stores owner, status, version, content type, S3 key, and any other queryable attribute. The S3 key in the metadata row is the pointer to the actual bytes. This separation also means the database never touches large binary content — rows stay small (< 1 KB), indexes stay fast, and backup/restore of the DB is lightweight.
+
+---
+
+### Q: "How do you handle document versioning?"
+
+> I use immutable S3 keys — each version gets a new UUID-based key, so `docs/{ownerId}/{uuid-v1}.pdf` and `docs/{ownerId}/{uuid-v2}.pdf` co-exist in S3. In the metadata DB, I keep all version rows and add an `is_latest` boolean — the application always queries with `WHERE is_latest = TRUE` for the current version. Old versions remain accessible by their version number. I prefer immutable keys over S3 native versioning because the metadata DB gives me fine-grained control over version visibility, legal hold, and partial rollback.
+
+---
+
+### Q: "What is a pre-signed URL and why use it for document downloads?"
+
+> A pre-signed URL is an S3 URL that embeds a time-limited cryptographic signature generated by the app server using its AWS credentials. The client uses this URL to download directly from S3 — the app server is not in the data path. Benefits: no bandwidth bottleneck on the app tier (a 50 MB PDF download takes 5 seconds — that's a thread blocked for 5 seconds on every concurrent download without pre-signed URLs), access control enforced at generation time (only authenticated + authorized requests get a URL), and the URL expires (typically 15 minutes) so leaked URLs have limited blast radius.
+
+---
+
+### Q (Tier 2): "Your S3 upload succeeds but the DB insert fails due to a DB outage. You now have an orphaned S3 object that no one knows about. How do you handle this?"
+
+> Two complementary approaches: (1) **Write-ahead status pattern** — insert the DB row first with `status = PENDING_UPLOAD` before uploading to S3. If S3 upload succeeds, update status to `ACTIVE`. If S3 upload fails, the `PENDING_UPLOAD` row is retried by a background job. This way, there's always a DB record before the S3 object exists. (2) **Periodic reconciliation job** — runs every hour, lists all S3 keys under the `docs/` prefix, cross-references against DB rows. Any S3 key with no matching DB row (orphan) is either re-registered if recoverable, or deleted after a grace period. The combination of both patterns handles all failure modes cleanly.
+
+---
+
+### Q (Tier 2): "DocuSign must guarantee that a signed document can never be altered — not even by a rogue engineer with AWS console access. How do you enforce this technically?"
+
+> Three layers: (1) **Immutable S3 keys** at the application layer — no code path overwrites an existing key, only creates new ones. (2) **S3 Object Lock in compliance mode** — a bucket-level policy that prevents deletion or overwrite of objects for a retention period, enforced by AWS itself at the storage layer. Even the root AWS account cannot delete a compliance-locked object before expiry. (3) **Checksum in metadata DB** — at upload time, compute SHA-256 of the document and store it in the `checksum_sha256` column. Integrity verification re-downloads the S3 object, recomputes the hash, and compares. If they differ, someone tampered with the S3 object. This provides non-repudiation at the storage layer, complementing the cryptographic signature on the document content itself (see `13-security-pki.md`).
+
+---
+
+## 🧾 TL;DR — One Interviewer-Ready Line
+
+> "For document storage I use object storage (S3) for the binary content — infinitely scalable, 11-nines durable, cheap per GB — paired with a Postgres metadata table that holds the S3 key alongside all queryable attributes; clients receive pre-signed URLs with 15-minute expiry to download directly from S3, and documents are never deleted — only soft-deleted with status = DELETED in the metadata DB — so the S3 object persists for audit trail and legal hold."
+
+---
+
+## 🔗 Related Concepts
+
+- **`13-security-pki.md`** — digital signatures on documents (PKI, SHA-256 hash + private key signing) work at the content layer; blob storage enforces immutability at the storage layer — both are needed for a complete signed-document system
+- **`03-caching.md`** — document metadata is a natural cache candidate; pre-signed URL generation is also cached with a TTL slightly shorter than the URL's own expiry
+- **`04-idempotency.md`** — document upload endpoint should be idempotent: same `Idempotency-Key` header returns the same document ID without creating a duplicate S3 object
+- **`12-data-modeling.md`** — the metadata table design follows the same normalisation and indexing principles; the `documents` table is a canonical example of a metadata-alongside-blob schema
+
+---
+
+## 📚 Further Reading (Optional — after the note)
+
+| Resource | What it adds | Time |
+|---|---|---|
+| **"Object Storage vs Block Storage vs File Storage"** — ByteByteGo (YouTube: search "ByteByteGo object storage block storage file storage") | Visual animation of all three types with use-case decision tree — best 8-minute explainer | ~8 min |
+| **hellointerview.com — Storage Systems** (https://www.hellointerview.com/learn/system-design/deep-dives/s3) | Complete S3-style system design deep dive — replication, consistency model, multipart upload | ~20 min read |
+
+---
+
+## 🔄 Changelog
+
+| Date | Change |
+|---|---|
+| June 2026 | File created. Added to bridge D2 gap for DocuSign R2 interview. Covers: object vs block vs file storage decision, metadata DB + S3 pair, upload/download/versioning/soft-delete Java implementation, pre-signed URLs, S3 Object Lock for compliance, checksum integrity, DocuSign-specific immutability guarantees. 6 Q&As (4 Tier 1 + 2 Tier 2). |

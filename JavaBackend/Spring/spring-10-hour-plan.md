@@ -94,7 +94,7 @@ Each day's DeepDive note follows this structure:
 **Self-check (the question to verbalize before sleeping):**
 > "What does a servlet container do that a plain `main()` method can't?"
 
-**Deliverables:** `DeepDive/01-web-fundamentals.md` + `Reference/01-web-fundamentals-reference.md` (Reference written immediately after DeepDive is complete)
+**Deliverables:** `DeepDive/01-web-servlet-foundation.md` (merged from Days 1+2) + `Reference/01-web-fundamentals-reference.md` + `Reference/02-servlet-api-reference.md`
 
 ---
 
@@ -121,7 +121,7 @@ Each day's DeepDive note follows this structure:
 **Self-check:**
 > "Trace what happens between a curl request and your `doGet` being called."
 
-**Deliverables:** `DeepDive/02-servlet-api.md` + `Reference/02-servlet-api-reference.md` + `Practice/exercises/01-servlet-hello/` + `Practice/growing-app/v1-servlet/`
+**Deliverables:** `DeepDive/01-web-servlet-foundation.md` (merged; covers both Days 1+2) + `Reference/02-servlet-api-reference.md` + `Practice/exercises/01-servlet-hello/` + `Practice/growing-app/v1-servlet/`
 
 ---
 

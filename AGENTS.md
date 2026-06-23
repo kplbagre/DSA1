@@ -57,6 +57,34 @@ kapil-kb/
 
 ---
 
+## 🗂️ External Context Folders
+
+These folders live **outside** this repo but contain information Kapil may refer to during conversations. When the trigger phrases below appear, read the relevant folder before responding — do NOT use cached assumptions, always read fresh because the content changes.
+
+### 1. Current Job / Work Projects
+
+**Trigger phrases:** "my work", "my project", "my current job", "Walmart project", "what I did at work", "my team", "my service", any question about Kapil's actual professional work
+
+**Folder:** `/Users/k0b077v/Documents/Kpl-inv/project-update/`
+
+**What's inside:** Running notes on Kapil's current Walmart projects — what was built, technical decisions made, team context, outcomes. Used when Kapil wants to discuss his work experience, prepare resume bullets, or reference real project context in interview prep.
+
+**Rule:** Read the files in this folder at query time. Do NOT memorize or assume the content is the same as a previous read — Kapil updates this folder as projects evolve.
+
+---
+
+### 2. AI Project (TransNova)
+
+**Trigger phrases:** "my AI project", "TransNova", "my AI work", "the AI backend", "PnS AI", "the GenAI thing I'm building"
+
+**Folder:** `/Users/k0b077v/aiPnSBackend/prep/`
+
+**What's inside:** Documentation, notes, and context for Kapil's personal AI/GenAI backend project (TransNova). Used when discussing the architecture, decisions, or progress of that project.
+
+**Rule:** Same as above — read fresh, do not cache assumptions between sessions.
+
+---
+
 ## 🌐 Universal Rules
 
 These apply to every note in every subdomain.
@@ -353,3 +381,4 @@ When a new convention emerges from a real conversation:
 | May 2026 | **Repository created.** Migrated from local Notion-paste workflow to GitHub. Split monolithic AGENTS.md into universal (this file) + per-subdomain rules. |
 | May 2026 | **AI-agnostic phrasing.** Removed references to specific AI tools so any assistant cloning this repo can follow the conventions and produce the same quality of notes. |
 | May 2026 | **Rule 8 added — First-Use Term Gloss.** Every potentially-unfamiliar technical term must be glossed in parentheses at first use in a doc, with a one-line plain-English explanation. Triggered by Kapil flagging that words like *dispatch* were used repeatedly across notes without ever being explained. |
+| June 2026 | **External Context Folders added.** Two external folders registered: `Kpl-inv/project-update/` (current Walmart work) and `aiPnSBackend/prep/` (TransNova AI project). AI assistants must read these fresh on trigger — no caching. |

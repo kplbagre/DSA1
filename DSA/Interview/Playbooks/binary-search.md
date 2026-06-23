@@ -90,10 +90,16 @@ KEY INVARIANT:
 
 ## 🧭 Pattern 1: Classic Binary Search
 
+**What this solves:** You have a sorted array and need to find a target value's index. Without using the sorted property, you'd scan every element. The sorted order is the property that makes halving possible.
+
 **Recognition cues — reach for this when:**
 - "Find target in a sorted array"
 - "Determine if element exists"
 - Problem explicitly states array is sorted
+
+**Brute force:** Scan every element left to right until target is found. O(n) time, O(1) space. Works on any array — but ignores the sorted property entirely.
+
+**Key insight:** Since the array is sorted, comparing `arr[mid]` with target tells you which half to discard. One comparison eliminates half the remaining search space — that's the log factor.
 
 **Steps in plain English:**
 
@@ -120,17 +126,25 @@ public int binarySearch(int[] arr, int target) {
 }
 ```
 
+**Complexity (optimal):** O(log n) time, O(1) space
+
 **🏷️ Problems:** LC 704 (Binary Search), LC 374 (Guess Number Higher or Lower).
 
 ---
 
 ## 🧭 Pattern 2: Bisect Left / Bisect Right (First & Last Position) ⭐
 
+**What this solves:** You have a sorted array with duplicates and need the FIRST or LAST occurrence of a value — not just any occurrence. Classic binary search stops at the first match it finds; it can't tell you whether there are earlier or later copies.
+
 **Recognition cues — reach for this when:**
 - "Find the first/last occurrence of target"
 - "Find the insertion point"
 - "How many elements are less than X?"
 - "Find the leftmost/rightmost position"
+
+**Brute force:** Scan left to right, record first index where `arr[i] == target`; scan again for last. O(n) time, O(1) space.
+
+**Key insight:** When `arr[mid] == target`, don't return. Instead bias the boundary — move `hi = mid` to keep searching left (bisect-left) or `lo = mid + 1` to keep searching right (bisect-right). This is the ONLY difference from classic binary search.
 
 **Steps in plain English:**
 
@@ -172,11 +186,15 @@ public int bisectRight(int[] arr, int target) {
 }
 ```
 
+**Complexity (optimal):** O(log n) time, O(1) space
+
 **🏷️ Problems:** LC 34 (Find First and Last Position), LC 278 (First Bad Version), LC 35 (Search Insert Position).
 
 ---
 
 ## 🧭 Pattern 3: Rotated Sorted Array ⭐
+
+**What this solves:** A sorted array was cut at some unknown point and the two pieces were swapped. Classic binary search breaks because the array is no longer globally sorted. You need to find a target or the minimum element despite the rotation.
 
 **Recognition cues — reach for this when:**
 - "Sorted array that has been rotated"
@@ -184,7 +202,9 @@ public int bisectRight(int[] arr, int target) {
 - "Find the minimum element in rotated array"
 - Array was sorted, then some rotation happened
 
-**The key insight:** In a rotated sorted array, at least ONE half (left or right of `mid`) is always properly sorted. Check which half is sorted, then decide if the target falls in that sorted half.
+**Brute force:** Linear scan through the array. O(n) time, O(1) space. You don't need the sorted property to find an element by brute force.
+
+**Key insight:** Even after rotation, at least ONE half (left or right of `mid`) is always completely sorted — the rotation creates at most one "cliff." Identify the sorted half by comparing `arr[lo]` with `arr[mid]`, then check if target falls in that sorted half to decide direction.
 
 **Steps in plain English:**
 
@@ -248,11 +268,15 @@ KEY INVARIANT:
    arr[lo] > arr[mid]  → right half is sorted (cliff is on the left side)
 ```
 
+**Complexity (optimal):** O(log n) time, O(1) space — degrades to O(n) worst case when duplicates prevent determining which half is sorted (LC 81)
+
 **🏷️ Problems:** LC 33 (Search in Rotated Sorted Array), LC 153 (Find Minimum in Rotated Sorted Array), LC 81 (Search in Rotated Sorted Array II — with duplicates).
 
 ---
 
 ## 🧭 Pattern 4: Binary Search on Answer Space ⭐
+
+**What this solves:** The answer isn't in the array — it's a value you need to find (like minimum speed, minimum capacity, or optimal split). You can check whether a candidate answer "works," but you'd need to try every possible value. The trick: the "works/doesn't work" boundary is monotonic.
 
 **Recognition cues — reach for this when:**
 - "Minimize the maximum" or "Maximize the minimum"
@@ -260,7 +284,9 @@ KEY INVARIANT:
 - "Can you do it with capacity/speed K?" — and the answer is monotonic (if K works, K+1 also works)
 - "Split array into K parts minimizing the largest sum"
 
-**The key insight:** You're not searching an array — you're searching through possible answers. For each candidate answer, you check "is this feasible?" The feasibility check is monotonic: once it becomes true, it stays true for all larger values.
+**Brute force:** Try every possible answer from `lo` to `hi`, run the feasibility check for each. O(answer_range × n) time, O(1) space. Correct but completely impractical for large ranges.
+
+**Key insight:** The feasibility function has exactly one flip point — below it, infeasible; above it, feasible (or vice versa). Binary search finds that flip point in O(log(answer_range)) checks instead of O(answer_range).
 
 **Steps in plain English:**
 
@@ -288,16 +314,24 @@ public int binarySearchOnAnswer(int[] input, int constraint) {
 }
 ```
 
+**Complexity (optimal):** O(n × log(answer_range)) time, O(1) space — the feasibility check (O(n)) runs log(answer_range) times
+
 **🏷️ Problems:** LC 875 (Koko Eating Bananas), LC 410 (Split Array Largest Sum), LC 1011 (Capacity to Ship Packages Within D Days).
 
 ---
 
 ## 🧭 Pattern 5: Matrix Binary Search
 
+**What this solves:** A 2D matrix where each row is sorted left→right AND the first element of each row is greater than the last element of the previous row. This means the matrix, read row-by-row, is one big sorted 1D array — but you can't index it directly like an array.
+
 **Recognition cues — reach for this when:**
 - "Search in a 2D matrix" where rows and columns are sorted
 - "Each row is sorted and first element of next row > last element of previous row"
 - Can treat the matrix as a flattened sorted array
+
+**Brute force:** Scan every cell left to right, top to bottom until target is found. O(m × n) time, O(1) space.
+
+**Key insight:** Because each row ends before the next row begins, the whole matrix is globally sorted. Map 1D index `i` to 2D using `row = i / cols`, `col = i % cols`, then run standard binary search on the virtual 1D array.
 
 **Steps in plain English:**
 
@@ -325,6 +359,8 @@ public boolean searchMatrix(int[][] matrix, int target) {
     return false;
 }
 ```
+
+**Complexity (optimal):** O(log(m × n)) time, O(1) space — note: LC 240 (rows and columns independently sorted, not globally ordered) uses staircase search instead: O(m + n) time, O(1) space
 
 **🏷️ Problems:** LC 74 (Search a 2D Matrix), LC 240 (Search a 2D Matrix II — different approach: staircase search).
 
@@ -396,8 +432,8 @@ class Solution {
 
 ### Complexity
 
-- **Time:** O(n · log(max(piles))) — binary search range is max(piles), feasibility check is O(n)
-- **Space:** O(1)
+- **Brute force** (try every speed 1..max(piles)): O(n × max(piles)) time, O(1) space
+- **Binary search on answer space**: O(n × log(max(piles))) time, O(1) space — log(max(piles)) iterations × O(n) feasibility check each
 
 ---
 
@@ -409,6 +445,8 @@ class Solution {
 
 > **Problem:** Given a sorted array of integers and a target, return the index of target if found, otherwise return -1. Example: `nums = [-1,0,3,5,9,12], target = 9` → `4`.
 
+> **Brute force:** Linear scan every element until target is found. O(n) time, O(1) space.
+> **Key insight:** Sorted order means one comparison tells you which half to discard — that's the log factor.
 > **Approach:** Classic Pattern 1 — `lo <= hi`, compare `nums[mid]` with target, narrow half.
 
 ```java
@@ -428,12 +466,16 @@ while (lo <= hi) {
 return -1;
 ```
 
+**Complexity (optimal):** O(log n) time, O(1) space
+
 ---
 
 ### LC 34: Find First and Last Position of Element in Sorted Array
 
 > **Problem:** Given a sorted array and a target, find the starting and ending position of target. Return `[-1,-1]` if not found. Example: `nums = [5,7,7,8,8,10], target = 8` → `[3,4]`.
 
+> **Brute force:** Scan left to right to record first occurrence, scan again right to left for last. O(n) time, O(1) space.
+> **Key insight:** When `arr[mid] == target`, don't return — bias the boundary. `hi = mid` keeps searching left (first), `lo = mid + 1` keeps searching right (last). One binary search per direction.
 > **Approach:** Run bisect-left to find first position, bisect-right to find last position. Two binary searches, both O(log n).
 
 ```java
@@ -448,12 +490,16 @@ if (first < nums.length && nums[first] == target) {
 return new int[]{-1, -1};
 ```
 
+**Complexity (optimal):** O(log n) time, O(1) space
+
 ---
 
 ### LC 278: First Bad Version
 
 > **Problem:** You have `n` versions `[1, 2, ..., n]`. One version is bad, and all versions after it are also bad. Find the first bad version using an API `isBadVersion(version)`. Example: `n = 5, firstBad = 4` → `4`.
 
+> **Brute force:** Check versions 1, 2, 3... until the first bad one is found. O(n) API calls, O(1) space.
+> **Key insight:** All bad versions form a suffix (once bad, stays bad) — the condition `isBadVersion` is monotonic. Bisect-left finds the exact flip point.
 > **Approach:** Bisect-left on the condition `isBadVersion(mid)`. When true, `hi = mid`. When false, `lo = mid + 1`.
 
 ```java
@@ -472,12 +518,16 @@ while (lo < hi) {
 return lo;
 ```
 
+**Complexity (optimal):** O(log n) API calls, O(1) space
+
 ---
 
 ### LC 33: Search in Rotated Sorted Array
 
 > **Problem:** A sorted array is rotated at an unknown pivot. Find the index of a target value, or return -1. No duplicates. Example: `nums = [4,5,6,7,0,1,2], target = 0` → `4`.
 
+> **Brute force:** Linear scan through the array. O(n) time, O(1) space.
+> **Key insight:** One half is always fully sorted after rotation. Identify it with `nums[lo] <= nums[mid]`, then check if target falls in that sorted half to pick direction.
 > **Approach:** Pattern 3 — check which half is sorted (`nums[lo] <= nums[mid]`), then check if target falls in the sorted half to decide direction.
 
 ```java
@@ -493,12 +543,16 @@ if (nums[lo] <= nums[mid]) {
 }
 ```
 
+**Complexity (optimal):** O(log n) time, O(1) space
+
 ---
 
 ### LC 153: Find Minimum in Rotated Sorted Array
 
 > **Problem:** Find the minimum element in a rotated sorted array (no duplicates). Example: `nums = [3,4,5,1,2]` → `1`.
 
+> **Brute force:** Linear scan, track the minimum element seen so far. O(n) time, O(1) space.
+> **Key insight:** The minimum is at the rotation point (the one "drop"). Compare `nums[mid]` with `nums[hi]`: if `nums[mid] > nums[hi]`, the drop is to the right of mid; otherwise mid could be the minimum.
 > **Approach:** The minimum is at the rotation point. Compare `nums[mid]` with `nums[hi]`: if `nums[mid] > nums[hi]`, the minimum is in the right half; otherwise it's in the left half (including mid).
 
 ```java
@@ -517,12 +571,16 @@ while (lo < hi) {
 return nums[lo];
 ```
 
+**Complexity (optimal):** O(log n) time, O(1) space
+
 ---
 
 ### LC 162: Find Peak Element
 
 > **Problem:** A peak element is strictly greater than its neighbors. Find any peak's index. The array may have multiple peaks. `nums[-1] = nums[n] = -∞`. Example: `nums = [1,2,3,1]` → `2`.
 
+> **Brute force:** Check every element against its neighbors to find where it is strictly greater than both. O(n) time, O(1) space.
+> **Key insight:** Moving toward the uphill neighbor always leads to a peak — the -∞ at both boundaries guarantees one must exist in that direction.
 > **Approach:** If `nums[mid] < nums[mid+1]`, a peak must exist to the right (uphill direction). Otherwise, a peak exists at `mid` or to the left. Binary search converges to a peak.
 
 ```java
@@ -540,12 +598,16 @@ while (lo < hi) {
 return lo;
 ```
 
+**Complexity (optimal):** O(log n) time, O(1) space
+
 ---
 
 ### LC 875: Koko Eating Bananas
 
 > **Problem:** Koko eats from banana piles at speed `k` per hour (one pile at a time). Find the minimum `k` to finish all piles within `h` hours. Example: `piles = [3,6,7,11], h = 8` → `4`.
 
+> **Brute force:** Try every speed from 1 to max(piles), simulate hours needed at each speed. O(n × max(piles)) time, O(1) space.
+> **Key insight:** If speed k is fast enough, any speed > k is also fast enough — the feasibility condition is monotonic. Binary search on the speed space.
 > **Approach:** Pattern 4 — binary search on answer space `[1, max(piles)]`. Feasibility: for each pile, `ceil(pile/k)` hours. Sum ≤ h means feasible.
 
 ```java
@@ -554,12 +616,16 @@ hours += (pile + speed - 1) / speed;
 // Binary search: if feasible → hi = mid, else → lo = mid + 1
 ```
 
+**Complexity (optimal):** O(n log max(piles)) time, O(1) space
+
 ---
 
 ### LC 1011: Capacity to Ship Packages Within D Days
 
 > **Problem:** Conveyor belt has packages with weights. Ship all packages in order within `d` days. Find the minimum ship capacity. Example: `weights = [1,2,3,4,5,6,7,8,9,10], days = 5` → `15`.
 
+> **Brute force:** Try every capacity from max(weights) to sum(weights), simulate days needed at each. O(n × sum(weights)) time, O(1) space.
+> **Key insight:** If capacity C is enough to ship in d days, any capacity > C also works — monotonic. Binary search on capacity space.
 > **Approach:** Binary search on capacity `[max(weights), sum(weights)]`. Feasibility: greedily load packages until capacity exceeded, count days.
 
 ```java
@@ -576,12 +642,16 @@ for (int w : weights) {
 return days <= d;
 ```
 
+**Complexity (optimal):** O(n log sum(weights)) time, O(1) space
+
 ---
 
 ### LC 74: Search a 2D Matrix
 
 > **Problem:** Each row is sorted left to right. First integer of each row > last integer of previous row. Determine if a target exists. Example: `matrix = [[1,3,5,7],[10,11,16,20],[23,30,34,60]], target = 3` → `true`.
 
+> **Brute force:** Check every cell in the matrix. O(m × n) time, O(1) space.
+> **Key insight:** Row-by-row order is globally sorted (last of row i < first of row i+1), so the entire matrix is one flat sorted array. Map 1D index to 2D with `row = mid / cols`, `col = mid % cols`.
 > **Approach:** Pattern 5 — treat as 1D sorted array of `rows * cols` elements. Convert index: `row = mid / cols`, `col = mid % cols`.
 
 ```java
@@ -590,12 +660,16 @@ int val = matrix[mid / cols][mid % cols];
 // Then standard binary search comparison
 ```
 
+**Complexity (optimal):** O(log(m × n)) time, O(1) space
+
 ---
 
 ### LC 410: Split Array Largest Sum
 
 > **Problem:** Split array into `k` non-empty contiguous subarrays to minimize the largest subarray sum. Example: `nums = [7,2,5,10,8], k = 2` → `18` (split as [7,2,5] and [10,8]).
 
+> **Brute force:** Try every possible max-sum limit, check if k splits are achievable at that limit. Exponential time.
+> **Key insight:** If a max-sum limit M allows splitting into ≤ k parts, any M' > M also allows it — monotonic. Binary search on M in range `[max(nums), sum(nums)]`.
 > **Approach:** Binary search on the answer (the largest sum allowed). `lo = max(nums)`, `hi = sum(nums)`. Feasibility: greedily fill subarrays — if current sum exceeds candidate, start a new subarray. Count subarrays ≤ k?
 
 ```java
@@ -612,12 +686,16 @@ for (int num : nums) {
 return parts <= k;
 ```
 
+**Complexity (optimal):** O(n log sum(nums)) time, O(1) space
+
 ---
 
 ### LC 374: Guess Number Higher or Lower
 
 > **Problem:** I pick a number from 1 to n. You call `guess(num)` which returns -1 (too high), 1 (too low), or 0 (correct). Find the number. Example: `n = 10, pick = 6` → `6`.
 
+> **Brute force:** Try every number 1, 2, 3... until the API returns 0. O(n) guesses, O(1) space.
+> **Key insight:** The API gives the same directional feedback as an array comparison (too high / too low / correct) — it's just Pattern 1 with the API call replacing `arr[mid] vs target`.
 > **Approach:** Classic binary search on range `[1, n]`. Call `guess(mid)` instead of array comparison.
 
 ```java
@@ -638,12 +716,16 @@ while (lo <= hi) {
 }
 ```
 
+**Complexity (optimal):** O(log n) guesses, O(1) space
+
 ---
 
 ### LC 35: Search Insert Position
 
 > **Problem:** Given a sorted array and target, return the index where target is found or would be inserted. Example: `nums = [1,3,5,6], target = 5` → `2`. `target = 2` → `1`.
 
+> **Brute force:** Scan left to right, return the first index where the element is >= target. O(n) time, O(1) space.
+> **Key insight:** "Where would target be inserted?" is the same as "first index where arr[i] >= target" — that's exactly bisect-left.
 > **Approach:** Bisect-left. Find the first position where `nums[mid] >= target`. Same as `bisectLeft` template.
 
 ```java
@@ -662,12 +744,16 @@ while (lo < hi) {
 return lo;
 ```
 
+**Complexity (optimal):** O(log n) time, O(1) space
+
 ---
 
 ### LC 81: Search in Rotated Sorted Array II (with duplicates)
 
 > **Problem:** Same as LC 33 but array may contain duplicates. Return true if target exists. Example: `nums = [2,5,6,0,0,1,2], target = 0` → `true`.
 
+> **Brute force:** Linear scan. O(n) time, O(1) space.
+> **Key insight:** Same as LC 33 but duplicates can make both `nums[lo] == nums[mid]` AND `nums[mid] == nums[hi]` — you can't tell which half is sorted. Shrink both ends by 1 and try again.
 > **Approach:** Same as LC 33 but when `nums[lo] == nums[mid] == nums[hi]`, you can't determine which half is sorted. Shrink both: `lo++, hi--`. Worst case O(n).
 
 ```java
@@ -680,12 +766,16 @@ if (nums[lo] == nums[mid] && nums[mid] == nums[hi]) {
 }
 ```
 
+**Complexity (optimal):** O(log n) avg / O(n) worst (all duplicates) time, O(1) space
+
 ---
 
 ### LC 240: Search a 2D Matrix II
 
 > **Problem:** Each row is sorted left→right, each column sorted top→bottom. But first element of next row is NOT necessarily > last of previous. Find target. Example: `matrix, target = 5` → `true`.
 
+> **Brute force:** Check every cell. O(m × n) time, O(1) space.
+> **Key insight:** Top-right corner is larger than everything in its column and smaller than everything in its row — one comparison eliminates an entire row or column. This is NOT the 1D-flatten trick; rows are not globally ordered here.
 > **Approach:** Staircase search (NOT the 1D-flatten trick from LC 74). Start at top-right corner. If value > target → go left. If value < target → go down. O(m + n).
 
 ```java
@@ -704,6 +794,87 @@ while (row < matrix.length && col >= 0) {
 }
 return false;
 ```
+
+**Complexity (optimal):** O(m + n) time, O(1) space
+
+---
+
+### LC 981: Time Based Key-Value Store
+
+> **Problem:** Design a key-value store where each key can hold multiple values, each stored with a timestamp. `set(key, value, timestamp)` stores the value. `get(key, timestamp)` returns the value whose timestamp is the **largest timestamp ≤ the given timestamp**, or `""` if none exists. Timestamps in `set()` are always increasing (guaranteed).
+
+> **Brute force:** For each key, store a list of `(timestamp, value)` pairs. On `get`, scan the list backwards from the end to find the latest timestamp ≤ target. O(n) per `get`.
+
+> **Key insight:** Since `set()` always provides increasing timestamps, the list per key is always sorted. This makes it a classic **bisect-right - 1** problem — find the rightmost position where `timestamp ≤ target`, then step back one. Two implementations: TreeMap (uses `floorKey()` — cleanest) or manual binary search on a List.
+
+> **Approach A — TreeMap (cleanest):** `HashMap<String, TreeMap<Integer, String>>`. `set()` does `treeMap.put(timestamp, value)`. `get()` does `treeMap.floorKey(timestamp)` — returns the largest key ≤ timestamp, or null if none.
+
+```java
+class TimeMap {
+    private Map<String, TreeMap<Integer, String>> map;
+
+    public TimeMap() {
+        map = new HashMap<>();
+    }
+
+    public void set(String key, String value, int timestamp) {
+        // computeIfAbsent: create TreeMap only if key is new
+        map.computeIfAbsent(key, k -> new TreeMap<>()).put(timestamp, value);
+    }
+
+    public String get(String key, int timestamp) {
+        if (!map.containsKey(key)) {
+            return "";
+        }
+        TreeMap<Integer, String> timeMap = map.get(key);
+        // floorKey: largest key <= timestamp, null if none
+        Integer floor = timeMap.floorKey(timestamp);
+        return floor == null ? "" : timeMap.get(floor);
+    }
+}
+```
+
+> **Approach B — Binary Search (teaches the pattern):** `HashMap<String, List<Integer>>` for timestamps + `HashMap<String, List<String>>` for values. On `get`, bisect-right on the timestamp list — `lo` lands at the first index > target, so `lo - 1` is the answer.
+
+```java
+class TimeMap {
+    private Map<String, List<Integer>> times;
+    private Map<String, List<String>> values;
+
+    public TimeMap() {
+        times = new HashMap<>();
+        values = new HashMap<>();
+    }
+
+    public void set(String key, String value, int timestamp) {
+        times.computeIfAbsent(key, k -> new ArrayList<>()).add(timestamp);
+        values.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
+    }
+
+    public String get(String key, int timestamp) {
+        if (!times.containsKey(key)) {
+            return "";
+        }
+        List<Integer> ts = times.get(key);
+        // Bisect-right: find first index where ts[mid] > timestamp
+        int lo = 0, hi = ts.size();
+        while (lo < hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (ts.get(mid) <= timestamp) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        // lo is first index > timestamp; lo-1 is latest index <= timestamp
+        return lo == 0 ? "" : values.get(key).get(lo - 1);
+    }
+}
+```
+
+**Complexity (optimal):** O(1) set, O(log n) get — both approaches. TreeMap approach is cleaner; binary search approach is better if you forget `floorKey()`.
+
+**When the interviewer asks:** "Why not just sort on every get?" → because `set()` guarantees increasing timestamps, so the list is always already sorted — no sort needed.
 
 ---
 
@@ -770,3 +941,5 @@ Solve LC 278 (First Bad Version) using bisect-left. Time yourself.
 | Date | Change |
 | --- | --- |
 | May 2026 | **File created.** Binary Search Interview Playbook — 5 patterns (Classic, Bisect Left/Right, Rotated Array, Answer Space, Matrix), canonical walkthrough (LC 875 Koko Eating Bananas), 10 problems with expanded definitions. |
+| June 2026 | **Brute force + optimal complexity added** to all 5 pattern sections and all 14 problem bank entries. Format: brute force baseline → optimal with explanation of what drives the log factor. |
+| June 2026 | **LC 981 Time Based Key-Value Store added.** Two implementations: TreeMap with `floorKey()` (cleanest) and manual bisect-right on List (teaches the pattern). Added pre-DocuSign interview gap fill. |

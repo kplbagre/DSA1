@@ -1,6 +1,6 @@
 # Day 2 — Servlet API · Reference cheatsheet
 
-> **Companion to:** `../DeepDive/02-servlet-api.md`. **Read this:** the night before the interview + during the day to refresh. Distilled from the DeepDive — adds no new concepts.
+> **Companion to:** `../DeepDive/01-web-servlet-foundation.md` (Part C — The Servlet API in Depth). **Read this:** the night before the interview + during the day to refresh. Distilled from the DeepDive — adds no new concepts.
 
 ---
 
@@ -238,7 +238,7 @@ container shutdown
 
 ## 📚 Companion links
 
-- **DeepDive (full mental model):** `../DeepDive/02-servlet-api.md`
+- **DeepDive (full mental model):** `../DeepDive/01-web-servlet-foundation.md` (Part C)
 - **Plan entry:** `../spring-10-hour-plan.md` § Day 2
 - **Prep log:** `../spring-prep-log.md`
 - **Previous reference:** `01-web-fundamentals-reference.md`

@@ -237,6 +237,12 @@ public void bookSeatsWithPessimisticLock(Long busId, int count) {
 ### Q: "The bus booking problem — A wants 10, B wants 25, total 30. What do you use?"
 > Optimistic locking with a `version` column on the `seat_inventory` row. Both A and B read `version=7`. A commits first — seats go from 30 to 20, version becomes 8. B's `WHERE version=7` finds 0 rows, B retries. On retry, B reads `seats=20, version=8`. B needs 25 but only 20 remain — cleanly rejected. No locks held, no queuing, correct result.
 
+### Q (Tier 2): "Optimistic locking retries on conflict. But what if the operation has side effects — like sending an email or calling a payment API inside the transaction?"
+> This is the subtle trap with optimistic locking: if the critical section includes **non-transactional side effects** (HTTP calls, email sends, Kafka publishes), a retry doubles those effects. You send two emails, charge the card twice. The fix is to move side effects **outside** the retry loop — either write an idempotent version of the side effect (idempotency key on payment API, deduplication on Kafka consumer) or push the side effect to a background job triggered **only after** the DB transaction commits. See `04-idempotency.md` for how idempotency keys pair with retry loops. Rule of thumb: anything inside an optimistic-lock retry must be either pure-DB or idempotent.
+
+### Q (Tier 2): "At what point does optimistic locking become worse than pessimistic, and how would you detect it?"
+> When the retry success rate drops below roughly 70% — meaning most attempts fail and retry — you're wasting CPU doing speculative work that gets thrown away. Detect it by tracking `OptimisticLockException` rate in your metrics. If you see a persistent spike on the same entity class during peak traffic (e.g., flash sale on a single inventory row), that's the signal to switch that specific entity to pessimistic locking or to a counter shard strategy. The key word is "specific entity" — most of your inventory rows are fine with optimistic; you switch only the hot one, not the entire system.
+
 ---
 
 ## 🧾 TL;DR — One Interviewer-Ready Line
@@ -250,3 +256,20 @@ public void bookSeatsWithPessimisticLock(Long busId, int count) {
 - **`06-distributed-locking.md`** — when the lock needs to span multiple services, not just one DB row (Redis SETNX, Redlock)
 - **`04-idempotency.md`** — the retry in optimistic locking only works if your write operation is idempotent
 - **`03-caching.md`** — cache-aside pattern has a similar "read-modify-write" race condition solved by similar techniques
+
+---
+
+## 📚 Further Reading (Optional — after the note)
+
+| Resource | What it adds | Time |
+|---|---|---|
+| **"Optimistic and Pessimistic Locking"** — Arpit Bhayani (YouTube: "Arpit Bhayani optimistic locking") | Internals of how Postgres and MySQL implement row-level locking — adds depth beyond JPA/Hibernate abstraction | ~25 min |
+| **"Handling Concurrency"** — hellointerview.com (https://www.hellointerview.com/learn/system-design/deep-dives/sql) | How locking fits into the broader SQL/NoSQL system design decision — interview-aligned context | ~15 min read |
+
+---
+
+## 🔄 Changelog
+
+| Date | Change |
+|---|---|
+| June 2026 | File created. Covers optimistic locking (@Version, Hibernate), pessimistic locking (SELECT FOR UPDATE, @Lock), deadlock prevention, when to use each. 8 Q&As (4 Tier 1 + 2 Tier 2 + 2 worked examples). |

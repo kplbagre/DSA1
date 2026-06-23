@@ -1,6 +1,6 @@
 # Day 1 Reference — Web Fundamentals Cheatsheet
 
-> **Companion to `../DeepDive/01-web-fundamentals.md`** — that file is for learning; this file is for revising. Skim end-to-end in 5-10 minutes; the night before the interview, re-read sections **🧾**, **🎤**, and the 60-second mental rehearsal at the bottom.
+> **Companion to `../DeepDive/01-web-servlet-foundation.md`** (Parts A + B) — that file is for learning; this file is for revising. Skim end-to-end in 5-10 minutes; the night before the interview, re-read sections **🧾**, **🎤**, and the 60-second mental rehearsal at the bottom.
 
 ---
 
@@ -324,7 +324,7 @@ public FilterRegistrationBean<RequestLoggingFilter> loggingFilter() {
 
 ## 📚 Companion links
 
-- **Full study notes:** `../DeepDive/01-web-fundamentals.md`
+- **Full study notes:** `../DeepDive/01-web-servlet-foundation.md` (Parts A + B)
 - **Master plan:** `../spring-10-hour-plan.md` (Day 1 entry)
 - **Track status:** `../spring-prep-log.md`
 - **Universal style rules:** `../../../AGENTS.md`

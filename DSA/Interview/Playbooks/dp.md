@@ -81,12 +81,34 @@ DP problem
 
 ## 🧭 Pattern 1: Linear DP (1D Array) ⭐
 
+**What this solves:** Problems with a 1D sequence where the optimal value at position `i` depends only on the previous 1-2 positions. Classic examples: maximize loot while skipping adjacent items, count ways to reach a position, minimize cost while stepping through a sequence. Each decision is local — you don't need the full history, just the last state or two.
+
 **Recognition cues — reach for this when:**
 - "Maximum/minimum value considering elements in sequence"
 - "Rob houses" — can't take adjacent
 - "Climb stairs" — ways to reach the top
 - "Coin change" — minimum coins to make amount
 - Decision at each step depends only on previous 1-2 states
+
+**Brute force:** Recursive enumeration of all include/exclude choices at each step. O(2^n) time — each element branches into two paths (take or skip), and the recursion tree has n levels.
+
+```java
+// Brute force recursion — O(2^n), no memoization
+private int robHelper(int[] nums, int i) {
+    // Base: no houses left to consider
+    if (i < 0) {
+        return 0;
+    }
+    // Rob house i (skip i-1) vs skip house i
+    return Math.max(
+        nums[i] + robHelper(nums, i - 2),
+        robHelper(nums, i - 1)
+    );
+}
+// Call: robHelper(nums, nums.length - 1)
+```
+
+**Key insight:** The optimal at position `i` depends only on the previous 1-2 positions — not the full history. Cache those O(n) subproblems instead of re-computing the same branches exponentially.
 
 **The template (forward direction, 0→n):**
 
@@ -140,16 +162,53 @@ public int solve(int[] nums) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space with two-variable space optimization.
+
 ---
 
 ## 🧭 Pattern 2: Grid DP (2D) ⭐
+
+**What this solves:** 2D grid problems where you move in restricted directions (typically right/down only) and want to count paths or find a minimum/maximum cost path from one corner to another. The restriction on movement direction makes this DP — you can only arrive at each cell from a limited set of predecessors.
 
 **Recognition cues — reach for this when:**
 - "Count paths from top-left to bottom-right"
 - "Minimum cost path in grid"
 - "Can only move right or down"
 
-**The template:**
+**Brute force:** DFS/recursion exploring all right/down paths from top-left to bottom-right. O(2^(m+n)) time — at each non-boundary cell you branch right or down.
+
+```java
+// Brute force recursion — O(2^(m+n)), no memoization
+private int paths(int r, int c) {
+    // Base: first row or first column has exactly one path
+    if (r == 0 || c == 0) {
+        return 1;
+    }
+    // Branch: arrive from above or from the left
+    return paths(r - 1, c) + paths(r, c - 1);
+}
+// Call: paths(m - 1, n - 1)
+```
+
+→ **Memoization (top-down, O(m×n) time, O(m×n) space):** same recursion — add a `memo[][]` array. Use `0` as the unvisited sentinel (safe because 0 paths is impossible for valid inputs; for cost problems use `Integer[][]` and check `null`).
+
+```java
+private int paths(int r, int c, int[][] memo) {
+    if (r == 0 || c == 0) {
+        return 1;
+    }
+    if (memo[r][c] != 0) {
+        return memo[r][c];
+    }
+    memo[r][c] = paths(r - 1, c, memo) + paths(r, c - 1, memo);
+    return memo[r][c];
+}
+// Call: paths(m - 1, n - 1, new int[m][n])
+```
+
+**Key insight:** With right/down movement only, every cell `(r, c)` can only be reached from `(r-1, c)` or `(r, c-1)`. So `dp[r][c]` has exactly two predecessors — fill row by row and each cell is computed once.
+
+**The template (tabulation):**
 
 **Steps in plain English:**
 
@@ -182,15 +241,40 @@ public int uniquePaths(int m, int n) {
 }
 ```
 
+**Complexity (optimal):** O(m × n) time, O(m × n) space (or O(n) with a 1D rolling row).
+
 ---
 
 ## 🧭 Pattern 3: String DP (Two Strings) ⭐
+
+**What this solves:** Problems comparing two strings character by character, asking for the longest/shortest/count of matching patterns between them. The defining feature: a 2D DP table where rows represent one string and columns the other — each cell answers "what's the answer considering the first `i` characters of `s1` and first `j` characters of `s2`?"
 
 **Recognition cues — reach for this when:**
 - "Longest common subsequence" of two strings
 - "Edit distance" (min operations to transform)
 - "Interleaving string"
 - Two strings compared character by character
+
+**Brute force:** Recursion trying all ways to align characters from both strings. O(2^(m+n)) time for LCS — at each mismatch, branch into skip-from-s1 or skip-from-s2.
+
+```java
+// Brute force recursion — O(2^(m+n)), no memoization
+private int lcs(String s1, String s2, int i, int j) {
+    // Base: exhausted one string
+    if (i == 0 || j == 0) {
+        return 0;
+    }
+    // Match: both pointers advance together (diagonal move in table)
+    if (s1.charAt(i - 1) == s2.charAt(j - 1)) {
+        return 1 + lcs(s1, s2, i - 1, j - 1);
+    }
+    // Mismatch: take best single-character skip
+    return Math.max(lcs(s1, s2, i - 1, j), lcs(s1, s2, i, j - 1));
+}
+// Call: lcs(s1, s2, s1.length(), s2.length())
+```
+
+**Key insight:** When characters match, both string indices advance together (diagonal move in the table). When they don't, take the best single-character skip. Only O(m × n) unique (i, j) states exist — cache them.
 
 **The template:**
 
@@ -215,14 +299,40 @@ public int longestCommonSubsequence(String text1, String text2) {
 }
 ```
 
+**Complexity (optimal):** O(m × n) time, O(m × n) space (or O(min(m, n)) with a 1D rolling row).
+
 ---
 
 ## 🧭 Pattern 4: 0/1 Knapsack / Subset Sum
+
+**What this solves:** Problems asking "can I select a subset of these numbers to hit exactly this target sum?" or "what's the minimum number of items to reach this target?" Each item is used at most once (0/1) or unlimited times (unbounded). The DP table maps possible running sums 0..target, not indices.
 
 **Recognition cues — reach for this when:**
 - "Can you partition into two equal-sum subsets?"
 - "Count ways to reach target sum using given numbers"
 - "Each item can be used once (0/1) or unlimited (unbounded)"
+
+**Brute force:** Recursively try include/exclude for each item at every possible sum. O(2^n) time — each item branches into take/skip, giving an exponential recursion tree.
+
+```java
+// Brute force recursion — O(2^n), no memoization
+private boolean canReach(int[] nums, int i, int target) {
+    // Base: hit the target exactly
+    if (target == 0) {
+        return true;
+    }
+    // Base: no items left or overshot
+    if (i == 0 || target < 0) {
+        return false;
+    }
+    // Include nums[i-1] in subset vs exclude it
+    return canReach(nums, i - 1, target - nums[i - 1])
+        || canReach(nums, i - 1, target);
+}
+// Call: canReach(nums, nums.length, total / 2)
+```
+
+**Key insight:** Iterating the sum array right-to-left (0/1) prevents using the same item twice in one pass; left-to-right (unbounded) allows re-use. This turns O(2^n) branching into O(n × target) table fills.
 
 **The template (0/1 knapsack — space-optimized):**
 
@@ -270,14 +380,47 @@ public int coinChange(int[] coins, int amount) {
 }
 ```
 
+**Complexity (optimal):** O(n × target) time, O(target) space.
+
 ---
 
 ## 🧭 Pattern 5: Counting / Decision DP
+
+**What this solves:** Problems asking "how many distinct ways can this string be decoded/segmented?" Unlike knapsack (optimize a value), you're counting valid paths through a decision tree where the number of interpretations explodes exponentially without memoization. The defining trigger: "number of ways" + choices depending on 1 or 2 positions back.
 
 **Recognition cues — reach for this when:**
 - "Number of ways to decode"
 - "Word break — can string be segmented?"
 - "Number of unique BSTs"
+
+**Brute force:** Recursive enumeration of all valid decodings at each position, branching into 1-digit and 2-digit paths. O(2^n) time — exponential branching at each character.
+
+```java
+// Brute force recursion — O(2^n), no memoization
+private int decode(String s, int i) {
+    // Base: decoded the entire string — one valid way
+    if (i == s.length()) {
+        return 1;
+    }
+    // Leading zero — invalid decode path
+    if (s.charAt(i) == '0') {
+        return 0;
+    }
+    // One-digit decode
+    int ways = decode(s, i + 1);
+    // Two-digit decode (only if valid 10-26)
+    if (i + 1 < s.length()) {
+        int two = Integer.parseInt(s.substring(i, i + 2));
+        if (two >= 10 && two <= 26) {
+            ways += decode(s, i + 2);
+        }
+    }
+    return ways;
+}
+// Call: decode(s, 0)
+```
+
+**Key insight:** The number of ways to decode `s[0..i]` depends only on `dp[i-1]` (one-digit decode) and `dp[i-2]` (two-digit decode, if valid 10-26). Two lookups collapse exponential branching into a linear table fill.
 
 **Decode Ways (LC 91):**
 
@@ -302,6 +445,8 @@ public int numDecodings(String s) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space (or O(1) with two rolling variables).
+
 ---
 
 ## 🔬 Canonical Problem — LC 198: House Robber
@@ -320,7 +465,82 @@ public int numDecodings(String s) {
 
 "At house `i`, I either skip it (`dp[i-1]`) or rob it (`dp[i-2] + nums[i]`). Take the max."
 
-### Step 4 — Code
+### Step 4 — Code (4 stages: brute recursion → memoized → tabulated → space-opt)
+
+**Stage 1 — Brute recursion (O(2^n) time, O(n) stack):**
+
+```java
+private int robHelper(int[] nums, int i) {
+    // Base: no houses left to consider
+    if (i < 0) {
+        return 0;
+    }
+    // Rob house i (skip i-1) vs skip house i
+    return Math.max(
+        nums[i] + robHelper(nums, i - 2),
+        robHelper(nums, i - 1)
+    );
+}
+// Call: robHelper(nums, nums.length - 1)
+```
+
+→ **Stage 2 — Memoization (top-down, O(n) time, O(n) space):** same recurrence — wrap with a `memo[]` array to short-circuit repeated calls.
+
+```java
+public int rob(int[] nums) {
+    int[] memo = new int[nums.length];
+    Arrays.fill(memo, -1);
+    return robMemo(nums, nums.length - 1, memo);
+}
+private int robMemo(int[] nums, int i, int[] memo) {
+    if (i < 0) {
+        return 0;
+    }
+    if (memo[i] != -1) {
+        return memo[i];
+    }
+    memo[i] = Math.max(
+        nums[i] + robMemo(nums, i - 2, memo),
+        robMemo(nums, i - 1, memo)
+    );
+    return memo[i];
+}
+```
+
+> **Lesson learned the hard way (June 2026):** First memoization attempt used `Integer[n+1]` (tabulation sizing), which forced 1-indexed thinking (`mem[i]` = first i houses), which forced `nums[i-1]` offset. The offset is where subtle bugs live. Root cause: wrong array size imported from the next stage. See sizing rule below.
+
+**Array sizing rule — say this out loud before writing the array:**
+
+| Stage | Array type | Size | Index meaning | House value |
+| --- | --- | --- | --- | --- |
+| Memoization | `Integer[]` | `n` | `memo[i]` = answer starting at index `i` (0-based, mirrors recursion) | `nums[i]` — direct, no offset |
+| Tabulation | `int[]` | `n+1` | `dp[i]` = answer for first `i` houses (1-based count) | `nums[i-1]` — offset because dp is 1-indexed |
+
+**Why memoization is size `n`:** It mirrors the recursive function. Recursion says "I'm at index `i`" (0-based). Memo stores that result at `memo[i]`. Indices run 0 to n-1 → size `n`.
+
+**Why tabulation is size `n+1`:** You need `dp[0] = 0` as a "zero houses" base case so `dp[1]` and `dp[2]` compute cleanly. That extra slot shifts everything 1-right, so `dp[i]` = first i houses and the house value is `nums[i-1]`.
+
+**One-line interviewer answer:** "Memoization mirrors the 0-based recursive index so size n. Tabulation needs a dp[0] base case for zero elements so size n+1."
+
+→ **Stage 3 — Tabulation (bottom-up, O(n) time, O(n) space):** flip the recursion into a forward loop — no call stack, same recurrence.
+
+```java
+public int rob(int[] nums) {
+    int n = nums.length;
+    if (n == 1) {
+        return nums[0];
+    }
+    int[] dp = new int[n];
+    dp[0] = nums[0];
+    dp[1] = Math.max(nums[0], nums[1]);
+    for (int i = 2; i < n; i++) {
+        dp[i] = Math.max(dp[i - 1], dp[i - 2] + nums[i]);
+    }
+    return dp[n - 1];
+}
+```
+
+→ **Stage 4 — Space optimization (O(n) time, O(1) space):** `dp[i]` only reads `dp[i-1]` and `dp[i-2]` — two variables replace the entire array.
 
 ```java
 public int rob(int[] nums) {
@@ -368,6 +588,8 @@ Answer: 12 ✅ (rob houses 0, 2, 4 → 2+9+1=12)
 
 > **Problem:** You are climbing a staircase with `n` steps. Each time you can climb 1 or 2 steps. How many distinct ways can you reach the top?
 
+> **Brute force:** Recursive tree trying all 1-step and 2-step combinations. O(2^n) time — binary branching at each step.
+> **Key insight:** Fibonacci in disguise — ways to reach step `i` only depends on the previous two steps. Two variables replace the full array.
 > **Approach:** `dp[i] = dp[i-1] + dp[i-2]` — Fibonacci sequence. Ways to reach step `i` = ways via one step from `i-1` + ways via two steps from `i-2`.
 
 ```java
@@ -388,12 +610,16 @@ public int climbStairs(int n) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 198: House Robber
 
 > **Problem:** Rob houses in a line, can't rob two adjacent. Maximize total money.
 
+> **Brute force:** Try all 2^n subsets of non-adjacent houses. O(2^n) time.
+> **Key insight:** At each house, the decision is rob-it-or-skip-it — only the previous two values matter, not the full history.
 > **Approach:** `dp[i] = max(dp[i-1], dp[i-2] + nums[i])` — skip or rob current house. Space-optimize with two variables.
 
 ```java
@@ -401,12 +627,16 @@ public int climbStairs(int n) {
 int current = Math.max(prev1, prev2 + nums[i]);
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 213: House Robber II
 
 > **Problem:** Same as House Robber but houses are in a **circle** — first and last house are adjacent.
 
+> **Brute force:** Try all 2^n non-adjacent subsets respecting the circular constraint. O(2^n) time.
+> **Key insight:** First and last house are adjacent so you can never take both — break the circle by running House Robber twice (once excluding each endpoint) and take the max.
 > **Approach:** Run House Robber twice: once on `nums[0..n-2]` (skip last), once on `nums[1..n-1]` (skip first). Take the max.
 
 ```java
@@ -423,12 +653,16 @@ public int rob(int[] nums) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 746: Min Cost Climbing Stairs
 
 > **Problem:** Given array `cost` where `cost[i]` is the cost to step on stair `i`, find the minimum cost to reach the top (past the last index). You can start from index 0 or 1.
 
+> **Brute force:** Recursive exploration of all 1-step/2-step paths, accumulating cost. O(2^n) time.
+> **Key insight:** Same recurrence as House Robber but minimizing instead of maximizing — only the previous two costs matter at each step.
 > **Approach:** `dp[i] = cost[i] + min(dp[i-1], dp[i-2])`. Answer is `min(dp[n-1], dp[n-2])` since you can step past from either of the last two.
 
 ```java
@@ -447,12 +681,16 @@ public int minCostClimbingStairs(int[] cost) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 62: Unique Paths
 
 > **Problem:** Robot on an `m × n` grid starts at top-left, can only move right or down. Count the number of unique paths to bottom-right.
 
+> **Brute force:** DFS exploring all right/down paths from top-left to bottom-right. O(2^(m+n)) time.
+> **Key insight:** Each cell has exactly two predecessors (above and left) — count paths by summing those two, filling row by row in O(m × n).
 > **Approach:** `dp[r][c] = dp[r-1][c] + dp[r][c-1]`. First row and first column are all 1s (only one way to reach them).
 
 ```java
@@ -460,12 +698,16 @@ public int minCostClimbingStairs(int[] cost) {
 dp[r][c] = dp[r - 1][c] + dp[r][c - 1];
 ```
 
+**Complexity (optimal):** O(m × n) time, O(m × n) space.
+
 ---
 
 ### LC 64: Minimum Path Sum
 
 > **Problem:** Given an `m × n` grid of non-negative numbers, find a path from top-left to bottom-right that minimizes the sum. Can only move right or down.
 
+> **Brute force:** DFS exploring all right/down paths, summing cell values. O(2^(m+n)) time.
+> **Key insight:** Same two-predecessor structure as Unique Paths but minimize instead of count — can modify the grid in-place with O(1) extra space.
 > **Approach:** `dp[r][c] = grid[r][c] + min(dp[r-1][c], dp[r][c-1])`. Like Unique Paths but add cell value and take min.
 
 ```java
@@ -488,12 +730,16 @@ public int minPathSum(int[][] grid) {
 }
 ```
 
+**Complexity (optimal):** O(m × n) time, O(1) extra space (in-place).
+
 ---
 
 ### LC 322: Coin Change
 
 > **Problem:** Given coin denominations and a target amount, return the minimum number of coins needed. Each coin can be used unlimited times. Return -1 if impossible.
 
+> **Brute force:** Enumerate all combinations of coins that sum to amount. O(amount^numCoins) time.
+> **Key insight:** Unbounded knapsack — iterate left-to-right so each coin can be reused. `dp[i - coin] + 1` reuses previously computed minimums.
 > **Approach:** Unbounded knapsack. `dp[i] = min(dp[i], dp[i - coin] + 1)` for each coin. Iterate left-to-right (coins are reusable).
 
 ```java
@@ -501,12 +747,16 @@ public int minPathSum(int[][] grid) {
 dp[i] = Math.min(dp[i], dp[i - coin] + 1);
 ```
 
+**Complexity (optimal):** O(n × amount) time, O(amount) space.
+
 ---
 
 ### LC 1143: Longest Common Subsequence
 
 > **Problem:** Given two strings, return the length of their longest common subsequence (characters in order but not necessarily contiguous).
 
+> **Brute force:** Recursion trying all ways to align characters — skip from s1, skip from s2, or match both. O(2^(m+n)) time.
+> **Key insight:** On a match, take the diagonal (`dp[i-1][j-1] + 1`); on a mismatch, take the best single skip. Only O(m × n) unique states.
 > **Approach:** `dp[i][j]` = LCS of `s1[0..i-1]` and `s2[0..j-1]`. If chars match → `dp[i-1][j-1] + 1`. Else → `max(dp[i-1][j], dp[i][j-1])`.
 
 ```java
@@ -518,12 +768,16 @@ if (text1.charAt(i - 1) == text2.charAt(j - 1)) {
 }
 ```
 
+**Complexity (optimal):** O(m × n) time, O(m × n) space.
+
 ---
 
 ### LC 416: Partition Equal Subset Sum
 
 > **Problem:** Given array of positive integers, determine if it can be partitioned into two subsets with equal sum.
 
+> **Brute force:** Try all 2^n subsets, check if any sums to half the total. O(2^n) time.
+> **Key insight:** Reduce to subset-sum: can any subset reach `total / 2`? Use 0/1 knapsack with right-to-left iteration to prevent reusing elements.
 > **Approach:** If total is odd → impossible. Else find if any subset sums to `total / 2`. 0/1 knapsack — iterate right-to-left to avoid reusing elements.
 
 ```java
@@ -531,12 +785,16 @@ if (text1.charAt(i - 1) == text2.charAt(j - 1)) {
 dp[j] = dp[j] || dp[j - num];
 ```
 
+**Complexity (optimal):** O(n × target) time, O(target) space.
+
 ---
 
 ### LC 91: Decode Ways
 
 > **Problem:** A message of digits can be decoded where `'A'=1, 'B'=2, ..., 'Z'=26`. Given a string of digits, count the number of ways to decode it.
 
+> **Brute force:** Recursive 1-digit/2-digit branching at each position. O(2^n) time — exponential branching at each character.
+> **Key insight:** `dp[i] = dp[i-1]` (one-digit, if valid) `+ dp[i-2]` (two-digit, if 10-26). Two lookups collapse exponential branching.
 > **Approach:** `dp[i]` = ways to decode `s[0..i-1]`. One-digit decode (if valid) adds `dp[i-1]`. Two-digit decode (if 10-26) adds `dp[i-2]`.
 
 ```java
@@ -544,6 +802,8 @@ dp[j] = dp[j] || dp[j - num];
 if (oneDigit >= 1) dp[i] += dp[i - 1];
 if (twoDigit >= 10 && twoDigit <= 26) dp[i] += dp[i - 2];
 ```
+
+**Complexity (optimal):** O(n) time, O(n) space.
 
 ---
 
@@ -566,11 +826,17 @@ if (twoDigit >= 10 && twoDigit <= 26) dp[i] += dp[i - 2];
 | Unique Paths | "What if some cells are obstacles?" | Set `dp[r][c] = 0` for obstacles, rest same |
 | LCS | "Print the actual subsequence?" | Backtrack through the dp table |
 
-### The 3 rookie DP mistakes:
+### Common rookie DP mistakes:
 
 1. **State vs Result confusion** — carrying accumulated value as parameter instead of returning it
 2. **Mixing recursion directions** — commit to forward (0→n) or backward (n→0), don't mix
 3. **Wrong calling convention** — read the problem for "where can I start?" to determine if you call `solve(0)` or `min(solve(0), solve(1))`
+4. **Stage contamination** — using tabulation variable names (`prev1`, `prev2`) while writing brute-force recursion. Each stage has its own vocabulary: recursion has parameters + return values only. No arrays, no `prev` variables until tabulation.
+5. **Memoization template improvisation** — caching sub-results (`memo[n-1]`, `memo[n-2]`) instead of the current call's own result (`memo[n]`). The template is always: check at top → compute → cache own slot → return. Never invent a variation.
+6. **Carrying `Integer[]` into tabulation** — `Integer[]` (boxed) is the right type for memoization because you need `null` to detect uncomputed slots. The moment you switch to tabulation, switch to `int[]` (primitive) — no null checks, no boxing overhead, cleaner code.
+7. **Wrong array size causes index offset bugs** — using `Integer[n+1]` in memoization forces you into 1-indexed thinking (`memo[i]` = first i elements → `nums[i-1]`). That off-by-one offset is where subtle bugs hide. Rule: memoization = size `n` (0-indexed, mirrors recursion), tabulation = size `n+1` (1-indexed, needs dp[0] base case). If you find yourself writing `nums[i-1]` inside a memoization function, your array is the wrong size.
+
+> **Lesson learned the hard way (June 2026):** Mistakes 4, 5, 6, and 7 all hit during House Robber / Climbing Stairs practice. The `n+1` sizing in memo was the domino — it forced 1-indexed thinking, which forced `nums[i-1]`, which is the exact bug that costs 10 minutes in an interview. Mental checklist at each stage: array type? (`Integer[]` memo, `int[]` tab) → array size? (n memo, n+1 tab) → index offset? (none in memo, i-1 in tab).
 
 Full coverage in `DSA/DeepDive/dp-fundamentals.md` — "Three Rookie Mistakes" section.
 
@@ -624,3 +890,6 @@ From memory, write the recurrence for House Robber with space optimization (prev
 | Date | Change |
 | --- | --- |
 | May 2026 | **File created.** Interview Playbook for DP. 5 pattern families: linear, grid, string, knapsack, counting. Canonical walkthrough (LC 198 House Robber), expanded problem bank with 10 problems (definition + approach + code each). |
+| June 2026 | **Brute force / Key insight pass.** Added `**What this solves**`, `**Brute force**`, `**Key insight**`, `**Complexity (optimal)**` to all 5 patterns and all 10 problem bank entries. Format matches `binary-search.md` and `heaps.md`. |
+| June 2026 | **Recursion bridge (Option B).** Added naked recursion code sketch to each of the 5 pattern Brute force sections. Expanded canonical walkthrough (LC 198) to show all 4 stages: brute recursion → memoization (top-down) → tabulation (bottom-up) → space optimization. |
+| June 2026 | **Practice mistakes logged.** Added lesson-learned callout after Stage 2 in canonical walkthrough (memoization template + array sizing). Extended rookie mistakes list from 3 to 5: stage contamination + memoization template improvisation. |

@@ -82,6 +82,22 @@ Gaps identified in real interview — add these to Phase 1:
 
 ---
 
+## Phase 2.6 — Added from DocuSign R2 Prep (June 2026)
+
+Gaps identified from DocuSign system design question research — confirmed asked in R2. These are UNIVERSAL concepts; DocuSign prep just surfaced them first.
+
+> Source: `Interview/DocuSign/r2-prep-strategy.md` and `Interview/DocuSign/system-design-questions.md`
+
+| Write Order | # | Concept | File | Status | Why Added |
+|---|---|---|---|---|---|
+| 11th | 11 | **API Design** (REST contracts, versioning, idempotency keys, pagination) | `11-api-design.md` | [ ] Not started | ⭐ Critical — DocuSign confirmed "choose between API design OR server-side" format |
+| 12th | 12 | **Relational Data Modeling** (schema design, normalisation, validation rules) | `12-data-modeling.md` | [ ] Not started | ⭐ Critical — Expense Report + Pagination API questions confirmed asked |
+| 13th | 13 | **Security + PKI Fundamentals** (digital signatures, asymmetric crypto, audit trail) | `13-security-pki.md` | [ ] Not started | High — DocuSign's own product is e-signatures; D1 question highly likely |
+
+> **Note:** D3 (Notification Service) and D2 (Document Storage) are covered by `07-cdc-outbox.md` + `02-observer.md` (LLD) + `02-rate-limiting.md`. No new files needed for those.
+
+---
+
 ## Phase 3 — Bonus Concepts (add only if Phase 1-2 are done)
 
 These come up in HLD rounds more than PS, but worth having:

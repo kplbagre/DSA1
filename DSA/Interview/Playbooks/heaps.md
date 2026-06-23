@@ -155,10 +155,16 @@ KEY INVARIANT:
 
 ## 🧭 Pattern 1: Top-K Elements ⭐
 
+**What this solves:** You need the K most important elements (largest, most frequent, closest) from N total elements. The goal is to find exactly K elements without sorting everything.
+
 **Recognition cues — reach for this when:**
 - "K most frequent elements"
 - "K largest / K smallest elements" (return all K, not just the Kth)
 - "Top K [anything]" where K << n
+
+**Brute force:** Sort all N elements by the ranking criterion, then take the first K. O(n log n) time, O(n) space. Works but wastes computation ranking elements you'll never use.
+
+**Key insight:** You only need to track the K "winners." A min-heap of size K acts as a bouncer — anything weaker than the current weakest winner is rejected immediately in O(log k). No need to sort all N.
 
 **Steps in plain English:**
 
@@ -198,16 +204,24 @@ public int[] topKFrequent(int[] nums, int k) {
 }
 ```
 
+**Complexity (optimal):** O(n log k) time, O(k) space — n elements each do one O(log k) heap operation
+
 **🏷️ Problems:** LC 347 (Top K Frequent Elements), LC 692 (Top K Frequent Words), LC 973 (K Closest Points to Origin).
 
 ---
 
 ## 🧭 Pattern 2: Kth Largest / Kth Smallest ⭐
 
+**What this solves:** Find the single element that would sit at position K if the array were sorted. You need one value, not all K — so sorting everything is overkill.
+
 **Recognition cues — reach for this when:**
 - "Find the Kth largest element"
 - "Find the Kth smallest element"
 - A stream of numbers and you need the Kth largest at any point
+
+**Brute force:** Sort the array, return the element at index `n - k`. O(n log n) time, O(1) space (in-place sort). Correct but sorts elements you never needed ranked.
+
+**Key insight:** After processing all elements through a size-K min-heap, the heap holds exactly the K largest elements. The top (`peek()`) is the smallest of those K — which is the Kth largest overall. No sorting needed.
 
 **Steps in plain English:**
 
@@ -228,16 +242,24 @@ public int findKthLargest(int[] nums, int k) {
 }
 ```
 
+**Complexity (optimal):** O(n log k) time, O(k) space
+
 **🏷️ Problems:** LC 215 (Kth Largest Element in an Array), LC 703 (Kth Largest Element in a Stream).
 
 ---
 
 ## 🧭 Pattern 3: Merge K Sorted Lists/Arrays ⭐
 
+**What this solves:** Combine K already-sorted sequences into one globally sorted sequence. Concatenating and re-sorting throws away the pre-sorted structure of each list.
+
 **Recognition cues — reach for this when:**
 - "Merge K sorted lists into one sorted list"
 - "Smallest range covering elements from K lists"
 - Multiple sorted sources need to be combined
+
+**Brute force:** Collect all elements from all K lists into one array, sort it, rebuild the result. O(n log n) time where n = total elements. Ignores the pre-sorted structure entirely.
+
+**Key insight:** The globally smallest unprocessed element must be the current head of one of the K lists. A min-heap of K heads finds it in O(log K) instead of checking all K heads one by one.
 
 **Steps in plain English:**
 
@@ -297,16 +319,24 @@ KEY INVARIANT:
    Time: O(n log K) where n = total elements across all lists.
 ```
 
+**Complexity (optimal):** O(n log K) time, O(K) space — n = total elements, K = number of lists
+
 **🏷️ Problems:** LC 23 (Merge K Sorted Lists), LC 378 (Kth Smallest Element in a Sorted Matrix).
 
 ---
 
 ## 🧭 Pattern 4: Two Heaps (Running Median)
 
+**What this solves:** Maintain a running median as elements arrive one at a time. Re-sorting after every insertion is too slow; you need O(log n) insertion and O(1) median retrieval.
+
 **Recognition cues — reach for this when:**
 - "Find median from data stream"
 - "Balance two halves" — need quick access to both the max of the lower half and min of the upper half
 - Running statistics that split the data into two groups
+
+**Brute force:** Keep all seen elements in a list, sort it after each insertion, return the middle element. O(n) per insertion for sorting → O(n²) for n insertions total.
+
+**Key insight:** Split elements into two halves — lower half in a max-heap, upper half in a min-heap. The two tops are always adjacent to the median. Keep them balanced (sizes differ by ≤ 1) and the median is O(1) to compute.
 
 **Steps in plain English:**
 
@@ -367,16 +397,24 @@ KEY INVARIANT:
    Median is always accessible from the tops in O(1).
 ```
 
+**Complexity (optimal):** O(log n) per `addNum`, O(1) per `findMedian`, O(n) space
+
 **🏷️ Problems:** LC 295 (Find Median from Data Stream), LC 480 (Sliding Window Median).
 
 ---
 
 ## 🧭 Pattern 5: Greedy + Heap (Scheduling/Cooldown)
 
+**What this solves:** You must process tasks/characters in some order subject to constraints (no two adjacent same, cooldown between repeats). The optimal order always depends on picking the highest-priority available item next.
+
 **Recognition cues — reach for this when:**
 - "Schedule tasks with cooldown between same tasks"
 - "Reorganize string so no two adjacent are the same"
 - "Process items greedily, always picking the highest priority available"
+
+**Brute force:** Try all valid orderings of tasks, pick the one with minimum total time (or maximum length). Exponential — factorial time for n distinct tasks.
+
+**Key insight:** Always scheduling the most frequent available task minimizes wasted idle time. A max-heap by frequency gives the most frequent task in O(log n) each round without re-sorting after every pick.
 
 **Steps in plain English:**
 
@@ -424,6 +462,8 @@ public int leastInterval(char[] tasks, int n) {
     return time;
 }
 ```
+
+**Complexity (optimal):** O(n log n) time, O(n) space — n = total task count, heap operations per cycle are O(log n)
 
 **🏷️ Problems:** LC 621 (Task Scheduler), LC 767 (Reorganize String), LC 1405 (Longest Happy String).
 
@@ -493,6 +533,8 @@ class Solution {
 
 > **Problem:** Given an integer array and an integer k, return the k most frequent elements (in any order). Example: `nums = [1,1,1,2,2,3], k = 2` → `[1,2]`.
 
+> **Brute force:** Build frequency map, sort all unique elements by frequency, take the top K. O(n log n) time, O(n) space.
+> **Key insight:** Min-heap of size K ordered by frequency — evict the least frequent when size exceeds K. Only K elements in the heap at any time.
 > **Approach:** Build frequency map, then min-heap of size K ordered by frequency. Alternative: bucket sort by frequency for O(n).
 
 ```java
@@ -510,12 +552,16 @@ for (int num : freq.keySet()) {
 }
 ```
 
+**Complexity (optimal):** O(n log k) time, O(n + k) space — n for freq map, k for heap
+
 ---
 
 ### LC 23: Merge K Sorted Lists
 
 > **Problem:** Merge K sorted linked lists into one sorted linked list. Example: `lists = [[1,4,5],[1,3,4],[2,6]]` → `[1,1,2,3,4,4,5,6]`.
 
+> **Brute force:** Collect all nodes into an array, sort by value, rebuild the linked list. O(n log n) time where n = total nodes. Ignores pre-sorted structure of each list.
+> **Key insight:** The next globally smallest node must be the current head of one of the K lists. A min-heap of K heads finds it in O(log K) per step.
 > **Approach:** Pattern 3 — seed min-heap with K heads. Poll smallest, push that node's `.next`. Use dummy node for result.
 
 ```java
@@ -534,12 +580,16 @@ while (!pq.isEmpty()) {
 }
 ```
 
+**Complexity (optimal):** O(n log K) time, O(K) space — n = total nodes, K = number of lists
+
 ---
 
 ### LC 973: K Closest Points to Origin
 
 > **Problem:** Given an array of points and an integer K, return the K closest points to the origin `(0,0)`. Distance = `x² + y²` (no need for sqrt). Example: `points = [[1,3],[-2,2]], K = 1` → `[[-2,2]]`.
 
+> **Brute force:** Compute all distances, sort points by distance, return first K. O(n log n) time, O(n) space.
+> **Key insight:** Max-heap of size K by distance — the farthest point in the heap is the weakest candidate. Any new point closer than the farthest evicts it.
 > **Approach:** Max-heap of size K ordered by distance. If new point is closer than the farthest in the heap, swap. Avoids sorting all N points.
 
 ```java
@@ -556,12 +606,16 @@ for (int[] p : points) {
 }
 ```
 
+**Complexity (optimal):** O(n log k) time, O(k) space
+
 ---
 
 ### LC 295: Find Median from Data Stream
 
 > **Problem:** Design a data structure that supports `addNum(int num)` and `findMedian()` in a stream of integers. Example: add 1, add 2 → median 1.5; add 3 → median 2.
 
+> **Brute force:** Keep all seen elements in a sorted list, insert at the right position each time, return the middle element. O(n) per insertion → O(n²) total.
+> **Key insight:** Two heaps split the data into lower and upper halves. Their tops are always adjacent to the median — O(1) to compute after each O(log n) insertion.
 > **Approach:** Pattern 4 — two heaps. Max-heap for left half, min-heap for right half. Rebalance after each add so sizes differ by at most 1.
 
 ```java
@@ -574,12 +628,16 @@ if (minHeap.size() > maxHeap.size()) maxHeap.offer(minHeap.poll());
 // Median: both peeks or the bigger heap's peek
 ```
 
+**Complexity (optimal):** O(log n) per `addNum`, O(1) per `findMedian`, O(n) space
+
 ---
 
 ### LC 621: Task Scheduler
 
 > **Problem:** Given tasks and a cooldown period `n`, find the minimum intervals (including idle) to complete all tasks. Same task must have at least `n` intervals between executions. Example: `tasks = ["A","A","A","B","B","B"], n = 2` → `8` (A B idle A B idle A B).
 
+> **Brute force:** Try all valid task orderings, find the one with minimum total time. Factorial time — impractical.
+> **Key insight:** Always scheduling the most frequent remaining task minimizes forced idle time. Max-heap gives the most frequent task in O(log n) without re-sorting after each pick.
 > **Approach:** Pattern 5 — max-heap by frequency. Each cycle processes up to `n+1` distinct tasks. If fewer available, idle slots fill the gap.
 
 ```java
@@ -588,12 +646,16 @@ if (minHeap.size() > maxHeap.size()) maxHeap.offer(minHeap.poll());
 // Time increments every step (task or idle)
 ```
 
+**Complexity (optimal):** O(n log n) time, O(n) space
+
 ---
 
 ### LC 703: Kth Largest Element in a Stream
 
 > **Problem:** Design a class that finds the kth largest element in a stream. `add(val)` returns the kth largest after adding `val`. Example: `k=3, init=[4,5,8,2]`, `add(3)→4`, `add(5)→5`.
 
+> **Brute force:** Keep all seen values in a sorted list, insert each new value at the correct position, return the element at index `size - k`. O(n) per call.
+> **Key insight:** Min-heap of size K always holds exactly the K largest values seen so far. `peek()` is the Kth largest — never need to look at older values.
 > **Approach:** Min-heap of size K. On `add`: offer the value, if size > K poll. Return `peek()`.
 
 ```java
@@ -612,6 +674,8 @@ public int add(int val) {
 
 > **Problem:** Given an `n x n` matrix where each row and column is sorted in ascending order, find the kth smallest element. Example: `matrix = [[1,5,9],[10,11,13],[12,13,15]], k = 8` → `13`.
 
+> **Brute force:** Collect all matrix elements into an array, sort it, return the K-th element. O(mn log mn) time, O(mn) space.
+> **Key insight:** Treat each row as a sorted list — same as Merge K Sorted Lists. Each poll gives the next globally smallest element; the K-th poll is the answer.
 > **Approach:** Min-heap seeded with first column (or first row). Poll smallest, push its right neighbor. After K polls, the answer is the last polled value. Similar to Merge K Sorted Lists (each row is a sorted list).
 
 ```java
@@ -632,12 +696,16 @@ for (int i = 0; i < k; i++) {
 return val;
 ```
 
+**Complexity (optimal):** O(K log n) time, O(n) space — n = number of rows (heap size)
+
 ---
 
 ### LC 767: Reorganize String
 
 > **Problem:** Rearrange a string so that no two adjacent characters are the same. Return `""` if impossible. Example: `s = "aab"` → `"aba"`.
 
+> **Brute force:** Try all permutations of the string, return the longest valid one. Exponential time.
+> **Key insight:** Always placing the most frequent character (that isn't the previous one) greedily avoids impossible adjacency — max-heap gives the most frequent in O(log n) each step.
 > **Approach:** Pattern 5 variant — max-heap by frequency. Greedily place the most frequent char, then place the next most frequent. Keep a "previous" char that can't be placed again until next round.
 
 ```java
@@ -646,12 +714,16 @@ return val;
 // Offer previous back (if count > 0), set current as new previous
 ```
 
+**Complexity (optimal):** O(n log n) time, O(n) space — n = string length
+
 ---
 
 ### LC 1046: Last Stone Weight
 
 > **Problem:** Smash the two heaviest stones together. If equal, both destroyed. If not, the lighter is destroyed and the heavier loses that weight. Return the weight of the last remaining stone (or 0). Example: `stones = [2,7,4,1,8,1]` → `1`.
 
+> **Brute force:** Find the two largest stones by linear scan each round, smash them, repeat. O(n²) total — one scan per smash.
+> **Key insight:** Max-heap gives the two heaviest stones in O(log n) per smash instead of O(n) scan.
 > **Approach:** Max-heap. Poll two largest, push difference back if nonzero. Repeat until ≤1 stone left.
 
 ```java
@@ -669,12 +741,16 @@ while (pq.size() > 1) {
 return pq.isEmpty() ? 0 : pq.peek();
 ```
 
+**Complexity (optimal):** O(n log n) time, O(n) space
+
 ---
 
 ### LC 215: Kth Largest Element in an Array
 
 > **Problem:** Find the kth largest element (not kth distinct). Example: `nums = [3,2,1,5,6,4], k = 2` → `5`.
 
+> **Brute force:** Sort the array, return element at index `n - k`. O(n log n) time.
+> **Key insight:** Size-K min-heap holds exactly the K largest — `peek()` is the Kth largest. No need to rank all n elements.
 > **Approach:** Min-heap of size K. Add all elements; if size > K, poll. After processing, `peek()` = kth largest. O(n log k).
 
 ```java
@@ -689,12 +765,16 @@ for (int num : nums) {
 return pq.peek();
 ```
 
+**Complexity (optimal):** O(n log k) time, O(k) space
+
 ---
 
 ### LC 692: Top K Frequent Words
 
 > **Problem:** Return the k most frequent words, sorted by frequency (ties broken alphabetically). Example: `words = ["i","love","leetcode","i","love","coding"], k = 2` → `["i","love"]`.
 
+> **Brute force:** Build frequency map, sort all unique words by frequency (then alphabetically), take first K. O(n log n) time.
+> **Key insight:** Min-heap of size K — evict the word that should rank lowest (least frequent, or last alphabetically at equal frequency). The comparator handles both criteria.
 > **Approach:** Frequency map + min-heap of size K. Comparator: sort by frequency ascending, then reverse alphabetical (so smallest freq/last-alphabetical gets evicted first).
 
 ```java
@@ -713,12 +793,16 @@ for (String w : freq.keySet()) {
 }
 ```
 
+**Complexity (optimal):** O(n log k) time, O(n + k) space
+
 ---
 
 ### LC 480: Sliding Window Median
 
 > **Problem:** Find the median of each sliding window of size k. Example: `nums = [1,3,-1,-3,5,3,6,7], k = 3` → `[1.0,-1.0,-1.0,3.0,5.0,6.0]`.
 
+> **Brute force:** Sort each window of size K, return the median. O(n × K log K) time, O(K) space.
+> **Key insight:** Extend the two-heap structure from LC 295 with lazy deletion — mark leaving elements as deleted, skip them when they surface at the top. Avoids O(n) removal cost.
 > **Approach:** Two-heap pattern (same as LC 295) + lazy deletion. Maintain max-heap (left) and min-heap (right). As window slides, add new element and logically remove the leaving element (mark as deleted, clean up when it appears at top).
 
 ```java
@@ -727,12 +811,16 @@ for (String w : freq.keySet()) {
 // On rebalance, skip elements that are in the "to-delete" map
 ```
 
+**Complexity (optimal):** O(n log K) time, O(K) space
+
 ---
 
 ### LC 1405: Longest Happy String
 
 > **Problem:** Build the longest string using at most `a` 'a's, `b` 'b's, `c` 'c's. No three consecutive same characters. Example: `a=1, b=1, c=7` → `"ccbccacc"`.
 
+> **Brute force:** Try all valid character orderings, return the longest. Exponential time.
+> **Key insight:** Always picking the most frequent available character (that doesn't violate the two-in-a-row rule) greedily maximizes length. Max-heap gives the most frequent in O(log n) each step.
 > **Approach:** Greedy + max-heap. Always pick the most frequent char. If last two chars are the same, pick the second most frequent instead.
 
 ```java
@@ -740,6 +828,8 @@ for (String w : freq.keySet()) {
 // If top char was used twice in a row → pick second char
 // Else → pick top char, append, decrement count, re-offer if count > 0
 ```
+
+**Complexity (optimal):** O(n log n) time, O(n) space
 
 ---
 
@@ -809,3 +899,4 @@ Solve LC 1046 (Last Stone Weight) using a max-heap. Time yourself.
 | --- | --- |
 | May 2026 | **File created.** Heaps & Priority Queues Interview Playbook — 5 patterns (Top-K, Kth Element, Merge K Sorted, Two Heaps, Greedy+Heap), canonical walkthrough (LC 215), 10 problems with expanded definitions. |
 | May 2026 | **Lambda/fallback pass.** Added 🔄 Lambda section with PQ comparator, `Collections.reverseOrder()`, `merge`, `Integer.compare` explanations + fallbacks. Inline comments + `🔄 Fallback` at all 12 PriorityQueue/merge/reverseOrder usage points across patterns and problem bank. |
+| June 2026 | **Brute force + key insight pass.** Added `**What this solves**`, `**Brute force**`, `**Key insight**` to all 5 pattern blocks. Added `> **Brute force**`, `> **Key insight**`, and `**Complexity (optimal)**` to all 13 problem bank entries. Format matches AGENTS.md spec. |
