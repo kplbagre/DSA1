@@ -6,14 +6,37 @@
 
 ## Mandatory Pre-Work (Do This Before Writing Any Solution File)
 
-1. **Read `solution-notes-standards.md` in this folder** — the complete 15-section format, two interview types (Type A / Type B), requirements variation table principle, and pre-write checklist. Every solution file must follow it exactly.
-2. **Read `INDEX.md` in this folder** — the current list of planned and written files, their priority order, and the quick-reference interview format. Check this before creating a new file to avoid duplicating or misordering.
-3. **Read the root `AGENTS.md`** (`/Users/k0b077v/Documents/kapil-kb/AGENTS.md`) — universal formatting rules: code style, ASCII visuals, emoji palette, first-use term gloss.
-4. **Read `SystemDesignConcepts/AGENTS.md`** — for the rules governing concept notes (coverage completeness, named-technology explanation, section order). Solution files cross-reference concept notes — knowing those rules prevents you from accidentally duplicating concept-note content here.
-5. **Read the prerequisite concept note(s)** listed in the target file's Section 0 Identity Card before writing. The solution file is the application of those concepts — you cannot write it without understanding what those notes already cover.
-6. **Read `system-design-questions.md`** in `Interview/DocuSign/` — the master question list with source, tier, and coverage tracking. Update the Coverage column after writing a new solution file.
+1. **Read `DELIVERY-RECIPE.md`** in the parent folder (`Interview/DocuSign/`) — the universal 6-step interview delivery framework that backs all solution files. Every solution file IS an instantiation of this framework. Understand: why the 6 steps exist (cognitive psychology), how to allocate 60 minutes, memory anchors for stress management, and how to explicitly map to DocuSign's 7 evaluation dimensions. This is non-negotiable.
+2. **Read `solution-notes-standards.md` in this folder** — the complete 15-section format, two interview types (Type A / Type B), requirements variation table principle, and pre-write checklist. Every solution file must follow it exactly. Note: Sections 0–15 are *organized* to match DELIVERY-RECIPE's 6 steps, not replace them.
+3. **Read `INDEX.md` in this folder** — the current list of planned and written files, their priority order, and the quick-reference interview format. Check this before creating a new file to avoid duplicating or misordering.
+4. **Read the root `AGENTS.md`** (`/Users/k0b077v/Documents/kapil-kb/AGENTS.md`) — universal formatting rules: code style, ASCII visuals, emoji palette, first-use term gloss.
+5. **Read `SystemDesignConcepts/AGENTS.md`** — for the rules governing concept notes (coverage completeness, named-technology explanation, section order). Solution files cross-reference concept notes — knowing those rules prevents you from accidentally duplicating concept-note content here.
+6. **Read the prerequisite concept note(s)** listed in the target file's Section 0 Identity Card before writing. The solution file is the application of those concepts — you cannot write it without understanding what those notes already cover.
+7. **Read `system-design-questions.md`** in `Interview/DocuSign/` — the master question list with source, tier, and coverage tracking. Update the Coverage column after writing a new solution file.
 
 > **Rule: When a new reference file is added to this folder that AI should consult, this AGENTS.md Mandatory Pre-Work must be updated in the same step — never separately.**
+
+---
+
+## 🧠 How DELIVERY-RECIPE Maps to Solution Files
+
+**The relationship:** DELIVERY-RECIPE defines the *sequence and psychology* of answering a system design question in 60 minutes. Solution files are the *instantiation* of that recipe for specific questions. Every solution file is structured so that if you follow it section-by-section, you're executing DELIVERY-RECIPE.
+
+**Mapping:**
+
+| DELIVERY-RECIPE Step | Solution File Section(s) | Time | What you're doing |
+|---|---|---|---|
+| **Step 1: Requirements** | Sections 1–3 (Opener + Clarifying Qs + Requirements) | 5 min | Ask 4–6 questions to clarify scope; state FR/NFR |
+| **Step 2: Core Entities** | Embedded in Section 3 (Requirements) + Section 4 (Scale) | — | Core entities emerge from scale estimation |
+| **Step 3: API/Interface** | Section 8 (API Design) | — | Boundary contract (for Type B questions; Type A references this) |
+| **Step 4: Data Flow** | Section 6 (HLD walkthrough) + Section 7 (Deep dives) | 5 min | "Say this out loud" narrative — trace request end-to-end |
+| **Step 5: High-Level Architecture** | Section 5 (Requirements Variation) + Section 6 (HLD + ASCII) | 15 min | Draw boxes, justify each, walk the flow |
+| **Step 6: Deep Dives** | Section 7 (2–3 riskiest components) | 15 min | Schema, algorithm, trade-off comparison per component |
+| **Trade-offs** | Section 10 (exactly 3, with gain/lose/failure-mode) | 8 min | Name what breaks if you chose wrong |
+| **DocuSign Dimensions** | Section 11 (explicit mapping) | — | Post-HLD: "Let me map this to DocuSign's 7 dimensions" |
+| **Interviewer Probes** | Section 12 (Tier 1 / 2 / 3) | 7 min | Answer 3-tier follow-ups from your preparation |
+
+**Key insight:** You don't *memorize* solution files. You memorize DELIVERY-RECIPE's 6 memory anchors, then *apply* them. Solution files are studied beforehand to pre-load the deep dives and trade-offs — so that under stress, you execute the familiar 6-step rhythm and call up the pre-prepared details.
 
 ---
 
@@ -33,16 +56,36 @@ Do NOT put concept-level teaching in solution files. Cross-reference concept not
 
 | Priority | File | Question | Type | Status |
 |---|---|---|---|---|
-| A2 | `A2-chat-messenger.md` | Build a Facebook Chat / Messenger Application | Mixed A+B | ✅ Written |
-| 1 | `C1-rate-limiter.md` | Design a Rate Limiter for a Microservices API | Type A — System Design | ❌ Not written |
-| 2 | `D1-digital-signature.md` | Design a Digital Signature System | Mixed A+B | ❌ Not written |
-| 3 | `C3-pagination-api.md` | Pagination API + Data Model Design | Type B — Product Arch | ❌ Not written |
-| 4 | `C2-expense-report.md` | Expense Report System — Data Model Design | Type B — Product Arch | ❌ Not written |
+| A1 | `A1-url-shortener.md` | Design a URL Shortener | Type A — System Design | ✅ Written (Jun 23, 2026) |
+| A2 | `A2-chat-messenger.md` | Build a Facebook Chat / Messenger Application | Type A — System Design | ✅ Written + DELIVERY-RECIPE integrated (Jun 23, 2026) |
+| 1 | `C1-rate-limiter.md` | Design a Rate Limiter for a Microservices API | Type A — System Design | ✅ Written (Jun 23, 2026) |
+| 2 | `C2-expense-report.md` | Expense Report System — Data Model Design | Type B — Product Arch | ✅ Written (Jun 23, 2026) |
+| 3 | `C3-pagination-api.md` | Pagination API + Data Model Design | Type B — Product Arch | ✅ Written (Jun 24, 2026) |
+| 4 | `D1-digital-signature.md` | Design a Digital Signature System | Mixed A+B | ✅ Written (Jun 24, 2026) |
 | 5 | `D3-notification-service.md` | Design a Real-Time Notification Service | Type A — System Design | ❌ Not written |
 | 6 | `D2-document-storage.md` | Design a Document Storage & Retrieval Service | Type B — Product Arch | ❌ Not written |
-| A1 | `A1-url-shortener.md` | Design a URL Shortener | Type A — System Design | ❌ Not written |
 
-> **Note on A1/A2:** These are PDF example questions confirmed asked by real candidates (per web research, June 2026). They are written in addition to the 6 gap questions. A2 was written first as a format proof-of-concept.
+> **Note on A1/A2:** These are PDF example questions confirmed asked by real candidates (per web research, June 2026). They are written in addition to the 6 gap questions. A1 and A2 establish the DELIVERY-RECIPE-integrated template; remaining 6 files (C1–D2) follow the same pattern.
+
+---
+
+## Using DELIVERY-RECIPE During Interviews — Memory Anchors
+
+Before every interview, memorize **these 6 memory anchors** from DELIVERY-RECIPE.md:
+
+1. **"Ask before you design."** → Requirements first (Section 2).
+2. **"Name the nouns."** → Entities (embedded in Section 3–4).
+3. **"Define the boundary."** → API/Interface (Section 8).
+4. **"Trace a request."** → Data flow (Section 6 walkthrough).
+5. **"Draw the boxes."** → HLD (Section 6 diagram).
+6. **"Dig where it's risky."** → Deep dives (Section 7, pick 2–3 riskiest, not most interesting).
+
+**Additional anchors (if you have space):**
+- "Everything is a trade-off." (Section 10 — always prepared)
+- "Why, not what." (Always explain reasoning, not just technology)
+- "Conversational, not presentation." (Answer sounds like thinking aloud, not recitation)
+
+**Stress management:** Under pressure, your working memory shrinks 40–50%. The 6 anchors let your brain execute the framework *without thinking* — like a pianist playing a familiar song. Solution files provide the "sheet music" (the pre-prepared details); the anchors provide the rhythm.
 
 ---
 
@@ -179,3 +222,4 @@ Abbreviated from `solution-notes-standards.md` — run both:
 | Date | Change |
 |---|---|
 | June 2026 | AGENTS.md created for r2-solutions folder. Modelled on SystemDesignConcepts/AGENTS.md. Covers: mandatory pre-work (6 steps), folder purpose distinction (solution vs concept), 9 folder-specific rules, full pre-publish checklist. Triggered by the first solution file (A2-chat-messenger.md) being written without a governing standards file. |
+| June 23, 2026 | **DELIVERY-RECIPE integration.** Added: (1) DELIVERY-RECIPE as step 1 in Mandatory Pre-Work, (2) mapping table showing how 6-step recipe translates to 15-section solution format, (3) Memory Anchors section with 6 core anchors + 3 bonus anchors + stress management rationale. Clarified: solution files ARE instantiations of DELIVERY-RECIPE, not separate frameworks. All subsequent solution files (C1, D1, etc.) will inherit this integrated approach. |

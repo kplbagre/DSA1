@@ -1024,6 +1024,13 @@ Almost every binary tree problem fits one of these. Recognize the pattern → wr
 
 ### Pattern 1: Top-Down DFS (carry state down)
 
+**When you'll see this pattern:**
+- LC 112 Path Sum — carry remaining target down to leaves
+- LC 1448 Count Good Nodes — carry running max down to count valid nodes
+- LC 113 Path Sum II — carry path down, collect all root-to-leaf paths
+- LC 129 Sum Root to Leaf Numbers — carry running digit down, sum at leaves
+- Real-world example: Accumulating context as you descend a tree (current level, depth, constraints)
+
 > Pass information **from parent to child** as you recurse. Often used to track depth, current path, or running sums.
 
 **Steps in plain English (template):**
@@ -1098,9 +1105,33 @@ public boolean hasPathSum(TreeNode node, int target) {
 
 ---
 
+### Pattern 1 — Pattern Application Gallery
+
+**Most-asked problems using top-down DFS:**
+
+- **LC 112 Path Sum** — Does any root-to-leaf path sum to target?
+- **LC 113 Path Sum II** — Find all root-to-leaf paths with target sum
+- **LC 1448 Count Good Nodes** — Count nodes where node.val ≥ max ancestor seen
+- **LC 129 Sum Root to Leaf Numbers** — Treat paths as numbers, sum all such numbers
+- **LC 988 Smallest String Starting From Leaf** — Build leaf-to-root strings, return lexicographically smallest
+
+---
+
 ### Pattern 2: Bottom-Up DFS (collect from children, return up)
 
 > Each call **returns information** about its subtree. The parent **combines** the children's returns to compute its own answer.
+
+**When you'll see this pattern:**
+
+Computing metrics that roll up from leaves — height, depth, sums, counts, validity checks. The subtree's answer flows up through returns; the parent combines them into a global answer:
+
+- **LC 110 Balanced Binary Tree** — return height *and* validity; combine subtree heights to check balance constraint
+- **LC 543 Diameter of Binary Tree** — return height; compute global diameter as left height + right height
+- **LC 124 Maximum Path Sum** — return max-height-ending-at-node; track global max path (may bend at current node)
+- **LC 687 Longest Univalue Path** — return longest same-value path ending here; track longest bending through this node
+- **LC 1373 Maximum Sum BST in Binary Tree** — return subtree info (BST? sum?); track the max-sum BST seen
+
+**Real-world example:** Your service needs to summarize a tree of data — total cost per subtree, max latency path, whether a compliance rule holds across all descendants. You traverse up, combining child results into your own.
 
 **Steps in plain English (template):**
 
@@ -1207,6 +1238,20 @@ private int height(TreeNode node) {
 >
 > Same root cause shows up as the List-flavored Bug 11 (LC 113 Path Sum II — see below in Pattern 1 Try-These).
 
+---
+
+### Pattern 2 — Pattern Application Gallery
+
+**Most-asked problems using bottom-up DFS:**
+
+- **LC 110 Balanced Binary Tree** — Check if tree is balanced (height difference ≤ 1 at every node)
+- **LC 543 Diameter of Binary Tree** — Find the longest path between any two nodes
+- **LC 124 Maximum Path Sum** — Find the path with maximum sum of node values
+- **LC 687 Longest Univalue Path** — Find the longest path of consecutive equal values
+- **LC 1373 Maximum Sum BST in Binary Tree** — Find the largest BST subtree by sum
+
+---
+
 > 🧩 **Try these:**
 > - ✅ LC 110 Balanced Binary Tree — postorder height + early-termination via sentinel `-1`. **Start here** to get bottom-up muscle memory.
 > - 🟡 **Try after LC 110 + the "Building Up to Two-Purpose Recursion" ladder below** — LC 543 Diameter of Binary Tree
@@ -1219,6 +1264,32 @@ private int height(TreeNode node) {
 ### Pattern 3: BFS by Level (level-snapshot trick)
 
 > Use the queue with `size = queue.size()` to process one level at a time. See the BFS section above.
+
+**When you'll see this pattern:**
+
+Collecting per-level snapshots — you need all nodes at depth `d` before moving to `d+1`. The queue's `size()` tells you exactly how many nodes belong to this level:
+
+- **LC 102 Level Order Traversal** — collect all nodes at each level into a list
+- **LC 103 Zigzag Level Order Traversal** — same, but alternate left-to-right, right-to-left per level
+- **LC 199 Right Side View** — pick the last (rightmost) node at each level
+- **LC 515 Largest Value in Each Row** — find max node value at each level
+- **LC 1161 Maximum Level Sum** — track sum per level, return the level number with max sum
+
+**Real-world example:** Your team processes a batch of work at each "round" — depth 0 one round, depth 1 next. You need to wait for all depth-0 jobs to finish before scheduling depth-1.
+
+---
+
+### Pattern 3 — Pattern Application Gallery
+
+**Most-asked problems using BFS by level:**
+
+- **LC 102 Level Order Traversal** — Collect all nodes at each level into separate lists
+- **LC 103 Zigzag Level Order Traversal** — Collect nodes per level, alternating direction each level
+- **LC 199 Right Side View** — Return the rightmost node visible from each level
+- **LC 515 Largest Value in Each Row** — Return the maximum value at each level
+- **LC 1161 Maximum Level Sum** — Return the level number with the maximum node sum
+
+---
 
 > 🧩 **Try these:**
 > - ✅ LC 102 Level Order Traversal
@@ -1233,6 +1304,18 @@ private int height(TreeNode node) {
 ### Pattern 4: Tree Comparison / Symmetry (parallel DFS)
 
 > Recurse on **two trees (or two parts of the same tree) in parallel**. The function takes two nodes instead of one.
+
+**When you'll see this pattern:**
+
+Comparing trees, detecting symmetry, or validating shape invariants — walk two pointers side-by-side:
+
+- **LC 100 Same Tree** — exact structural and value match between two trees
+- **LC 101 Symmetric Tree** — tree is a mirror of itself (walk left vs right of same tree)
+- **LC 572 Subtree of Another Tree** — is one tree a subtree of another? (combine same-tree check with top-down scan)
+- **LC 951 Flip Equivalent Binary Trees** — trees equivalent with optional left/right child swaps allowed
+- **LC 1367 Linked List in Binary Tree** — check if a linked-list sequence appears as a root-to-leaf path
+
+**Real-world example:** Validate that a tree matches a schema, or detect if two config trees are equivalent despite structural differences.
 
 **Example use case — Same Tree (LC 100):** *"Are two trees structurally identical with the same values?"*
 
@@ -1300,6 +1383,20 @@ private boolean isMirror(TreeNode a, TreeNode b) {
         && isMirror(a.right, b.left);   // inner: drifting toward center
 }
 ```
+
+---
+
+### Pattern 4 — Pattern Application Gallery
+
+**Most-asked problems using parallel DFS:**
+
+- **LC 100 Same Tree** — Check if two trees are structurally identical with the same values
+- **LC 101 Symmetric Tree** — Check if tree is symmetric (mirror of itself)
+- **LC 572 Subtree of Another Tree** — Check if one tree is a subtree of another
+- **LC 951 Flip Equivalent Binary Trees** — Check if trees are equivalent with optional left/right flips
+- **LC 1367 Linked List in Binary Tree** — Check if a linked list sequence appears as a tree path
+
+---
 
 > 🧩 **Try these:**
 > - ✅ LC 100 Same Tree — the example above is the answer

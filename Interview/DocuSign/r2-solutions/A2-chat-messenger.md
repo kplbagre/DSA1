@@ -4,6 +4,47 @@
 
 ---
 
+## 🧠 How to Use This File
+
+**This file is an instantiation of DELIVERY-RECIPE** (`Interview/DocuSign/DELIVERY-RECIPE.md`). Every section below maps to one step of the 6-step interview delivery framework. The framework is backed by cognitive psychology — under stress, your working memory shrinks 40–50%, so you need ONE rhythm you can execute automatically.
+
+**Before your interview:**
+1. Read DELIVERY-RECIPE.md once to understand the psychology (30 min)
+2. Skim the 6 **Memory Anchors** below (2 min)
+3. Read this entire file and the 3 **Common Mistakes** (Section 13) so you know what to avoid (20 min)
+4. During the interview, follow the 6-step rhythm: Ask → Clarify → Requirements → Estimate → HLD → Deep Dives → Trade-offs → Dimensions → Probes
+
+**The time budget:**
+- Minutes 0–5: Sections 1–2 (Opener + Clarifying questions)
+- Minutes 5–10: Sections 3–4 (Requirements + Scale estimation)
+- Minutes 10–20: Sections 5–6 (Requirements variation + HLD + Data flow)
+- Minutes 20–38: Section 7 (Deep dives: 2–3 riskiest components)
+- Minutes 38–45: Section 10 (Trade-offs: exactly 3, with failure modes)
+- Minutes 45–50: Section 11 (DocuSign dimensions — map explicitly)
+- Minutes 50–60: Section 12 (Interviewer probes — prepared Tier 1/2/3 answers)
+
+**Stay on this schedule.** If you're at minute 40 and still deep-diving, pause and move to trade-offs — the rubric values trade-off thinking over technical depth.
+
+---
+
+## 💾 Memory Anchors (Memorize These 6)
+
+Before every interview, say these 6 sentences to yourself (takes 30 seconds):
+
+1. **"Ask before you design."** — Don't assume. Use Section 2 to ask clarifying questions and confirm scope.
+2. **"Name the nouns."** — Entities are your mental hooks. When stressed, you can remember categories even if you forget details.
+3. **"Define the boundary."** — The API/interface is the contract. Lock it down before you argue about implementation.
+4. **"Trace a request."** — Section 6's data flow narrative shows you understand movement through the system, not just boxes.
+5. **"Draw the boxes."** — ASCII HLD is your mental model made visible. The interviewer can probe specific boxes without restarting.
+6. **"Dig where it's risky."** — Section 7: pick 2–3 *riskiest* components (where the system breaks, where scale hits hardest), not the most *interesting* ones.
+
+**Bonus anchors (if you have memory space):**
+- "Everything is a trade-off." → Section 10
+- "Why, not what." → Explain reasoning, not just technology
+- "Conversational, not presentation." → Think aloud; don't recite
+
+---
+
 ## Section 0 — Question Identity Card
 
 | | |
@@ -26,6 +67,11 @@ Then immediately go to Section 2. Do NOT start drawing.
 ---
 
 ## Section 2 — 🔍 Clarifying Questions Script (Minutes 0–5)
+
+**What to do:** Ask 4–6 questions that clarify scope. Don't assume. The interviewer is watching how you *think*, not how fast you talk.
+
+**Say this out loud (after your opener):**
+> "I have a few clarifying questions so I make sure I'm building the right thing..."
 
 ---
 
@@ -111,7 +157,14 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
-## Section 4 — 🔢 Scale Estimation (Minutes 5–8)
+## Section 4 — 🔢 Scale Estimation (Minutes 5–10)
+
+**What to do:** Do envelope math out loud. These numbers justify every architecture choice you make in Section 6+. The interviewer wants to see your *thinking*, not just your conclusion.
+
+**Say this out loud (as you write the math on the whiteboard):**
+> "Let me do some envelope math to justify the architecture. Starting with traffic..."
+
+---
 
 **Traffic:**
 - DAU: 500M
@@ -151,7 +204,14 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
-## Section 6 — 🏗️ High-Level Architecture (Minutes 8–20)
+## Section 6 — 🏗️ High-Level Architecture (Minutes 10–25)
+
+**What to do:** Draw the boxes (ASCII or whiteboard). Walk through the data flow *as if telling a story*. The interviewer is checking: "Does this person understand flow or just know boxes?"
+
+**Say this out loud (as you start drawing):**
+> "Let me draw a high-level architecture. This is how the system looks from 10,000 feet..."
+
+---
 
 ### ASCII Architecture Diagram
 
@@ -215,7 +275,19 @@ If Redis shows Client B has no active connection:
 
 ---
 
-## Section 7 — 🔬 Core Component Deep Dives (Minutes 20–38)
+## Section 7 — 🔬 Core Component Deep Dives (Minutes 25–40)
+
+**What to do:** Pick 2–3 *riskiest* components. "Riskiest" = where the system most likely fails, where scale hits hardest, or what's unique to this problem.
+
+**Why not 5 deep dives?** Under stress, your working memory shrinks 40–50%. If you try to hold 5 things, you'll confuse them. Pick the hardest 2–3 and go deep.
+
+**Why these 3 for chat?**
+1. **Message Storage (Cassandra)** — Wrong choice here = system can't scale past a few million users
+2. **WebSocket Connection Management** — 7,700 stateful servers × 65K connections each. Routing must be millisecond-fast.
+3. **Fan-out Strategy** — Breaks spectacularly at scale. Small group (2 members) vs large (100K members) use opposite strategies.
+
+**Say this out loud:**
+> "Let me go deep on the three riskiest components — the ones where the system most likely breaks at scale..."
 
 ---
 
@@ -445,7 +517,16 @@ SET user:{userId}:device:{deviceId}:server {connectionServerId} EX 60
 
 ---
 
-## Section 10 — ⚠️ Trade-offs + Failure Modes (Minutes 38–45)
+## Section 10 — ⚠️ Trade-offs + Failure Modes (Minutes 40–48)
+
+**What to do:** Name exactly 3 major trade-offs. For each: what you chose, what you gain, what you lose, what breaks if you chose wrong.
+
+**Why this matters (from DocuSign PDF):** "We are more interested in seeing how you think through the pros and cons of different approaches."
+
+**Say this out loud:**
+> "Let me step back and name the three major trade-offs in this design..."
+
+---
 
 ### Trade-off 1: Fan-out on Write vs Fan-out on Read for Group Chat
 
@@ -470,11 +551,13 @@ SET user:{userId}:device:{deviceId}:server {connectionServerId} EX 60
 
 ---
 
-## Section 11 — 🔐 DocuSign-Specific Depth
+## Section 11 — 🔐 DocuSign-Specific Depth (Minutes 48–52)
 
-**This is a PDF-example question, not a DocuSign domain question.** The DocuSign-specific signal is not the content of the design — it is naming which evaluation dimensions your design addresses and how.
+**What to do:** For PDF-example questions (A1, A2), the DocuSign signal is naming which of the 7 evaluation dimensions your design addresses and how.
 
-**After the HLD, say this out loud:**
+**This is NOT a DocuSign domain question.** Chat has no e-signature or document angle. The grading signal is: "Does the candidate understand how DocuSign evaluates, and can they map their generic design to those dimensions?"
+
+**After the trade-offs, say this out loud:**
 
 > "Let me pause and map this back to the DocuSign evaluation dimensions:
 > - **Scalability:** Cassandra sharded by conversation_id + 7,700 WebSocket servers via consistent hashing
@@ -487,7 +570,15 @@ SET user:{userId}:device:{deviceId}:server {connectionServerId} EX 60
 
 ---
 
-## Section 12 — 🔬 Where the Interviewer Will Probe
+## Section 12 — 🔬 Where the Interviewer Will Probe (Minutes 52–60)
+
+**What to do:** Prepare for 3 tiers of follow-ups. Tier 1 (surface) — everyone gets it. Tier 2 (deep) — tests if you *understand*, not just *know*. Tier 3 (cross-concept) — separates senior candidates.
+
+**Why 3 tiers?** The interviewer is watching your depth. Answer Tier 1 in 2–3 sentences. Tier 2 in 3–4 sentences with specific technical detail. Tier 3 requires you to reason across system boundaries.
+
+**If you get a Tier 3 question, it's a good sign** — they think you're strong enough to probe the hard stuff.
+
+---
 
 ### Surface Probe (Tier 1 — every candidate gets this)
 
@@ -517,7 +608,11 @@ SET user:{userId}:device:{deviceId}:server {connectionServerId} EX 60
 
 ## Section 13 — 🐞 Common Mistakes on This Question
 
-- **Mistake 1:** Using MySQL/PostgreSQL for message storage → **Why wrong:** MySQL's B-tree primary key on `(conversation_id, created_at)` degrades as conversations grow; horizontal write scaling requires app-level sharding. **Say instead:** "Cassandra's append-optimised LSM tree and partition-by-conversation design handle this access pattern natively."
+**Note:** Reading these mistakes BEFORE the interview prevents you from making them under stress. Your working memory will shrink, and you're most likely to default to mistakes you haven't explicitly prepared for.
+
+---
+
+- **Mistake 1:** Using MySQL/PostgreSQL for message storage → **Why wrong:** MySQL's B-tree primary key on `(conversation_id, created_at)` degrades as conversations grow; horizontal write scaling requires app-level sharding. You'll sound like you picked a database without understanding the access pattern. **Say instead:** "Cassandra's append-optimised LSM tree and partition-by-conversation design handle this access pattern natively. The access pattern is append-only writes + range reads by time — that's exactly what Cassandra's clustering key is built for."
 
 - **Mistake 2:** Using HTTP polling instead of WebSocket → **Why wrong:** 500M DAU polling every 1 second = 500M+ requests/sec of pure overhead. **Say instead:** "WebSocket gives me persistent full-duplex connections; the connection server fleet handles the statefulness."
 
@@ -543,9 +638,14 @@ SET user:{userId}:device:{deviceId}:server {connectionServerId} EX 60
 
 ---
 
-## Section 15 — 🧾 TL;DR Answer Summary
+## Section 15 — 🧾 TL;DR Answer Summary (Review Morning-of-Interview)
 
-> "I'd design the chat system with WebSocket connection servers (routed by consistent hashing on user_id) feeding into a Kafka-backed Message Service that writes to Cassandra — partitioned by conversation_id with TIMEUUID clustering for natural message ordering. Fan-out delivers to online recipients via their connection server's WebSocket, and to offline users via APNs/FCM. The key trade-off is fan-out on write for small groups (≤100 members, cheap reads) versus fan-out on read for large groups (one shared message row, each reader queries from their cursor). In a DocuSign interview, I'd call out explicitly which of the 7 evaluation dimensions each component addresses — that's the grading signal for this question type."
+**If you had 60 seconds to summarize the entire answer, say this:**
+
+> "I'd design the chat system with WebSocket connection servers (routed by consistent hashing on user_id) feeding into a Kafka-backed Message Service that writes to Cassandra — partitioned by conversation_id with TIMEUUID clustering for natural message ordering. Fan-out delivers to online recipients via their connection server's WebSocket, and to offline users via APNs/FCM. The key trade-off is fan-out on write for small groups (≤100 members, cheap reads) versus fan-out on read for large groups (one shared message row, each reader queries from their cursor). In a DocuSign interview, I'd map this explicitly to their 7 evaluation dimensions — that's the grading signal. The core insight: at 700K messages/sec, you can't afford synchronous persistence; Kafka and eventual consistency are non-negotiable."
+
+**Why read this before your interview?**
+The TL;DR fixes the core idea in your head. Under stress, you'll default to this mental model. When the interviewer asks unexpected questions, you'll reason from this core idea, not from memorized details.
 
 ---
 
@@ -554,3 +654,4 @@ SET user:{userId}:device:{deviceId}:server {connectionServerId} EX 60
 | Date | Change |
 |---|---|
 | June 2026 | File created. Type A — System Design. Based on: DocuSign PDF (confirmed question type), candidate report ("Facebook messenger type app"), ByteByteGo chat system design chapter, hellointerview.com WhatsApp breakdown, codekarle.com WhatsApp architecture. Advisor review: DocuSign angle clarified (7 dimensions, not forced chat-domain mapping); multi-device sync and E2EE addressed explicitly; cross-references used instead of reproduced content. |
+| June 23, 2026 | **DELIVERY-RECIPE integration & interview-readiness rewrite.** (1) Added 🧠 preamble explaining file structure + 60-minute time budget with explicit minute allocations per section. (2) Added 💾 Memory Anchors section (6 core + 3 bonus) with stress management rationale. (3) Enhanced all major sections (2, 4, 6, 7, 10, 11, 12) with: explicit timing callouts, "say this out loud" dialogue framing, interview psychology context (why this step matters, working memory constraints, stress failure modes). (4) Clarified "riskiest vs interesting" components in Deep Dives section. (5) Updated TL;DR to emphasize reviewing morning-of-interview + mental model stability under stress. (6) Enhanced Common Mistakes section with context that these are designed to be read before the interview to prevent stress-induced defaults. Result: File is now interview delivery-ready with zero refinement needed. |

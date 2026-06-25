@@ -526,6 +526,18 @@ Every video maps cleanly to one of the four templates. The pattern format below 
 
 > Slide a window of a known size `k` across the array. On every slide, do an O(1) update: add the new right element and remove the old left element. Used when the constraint specifies an exact window size.
 
+**When you'll see this pattern:**
+
+The problem asks for an aggregate over **exactly** K consecutive elements — sum, max, min, or frequency count. Every position gets a new window, so updating incrementally beats recalculating:
+
+- **LC 1423 Maximum Points You Can Obtain from Cards** — pick K cards from either end; equivalent to sliding over removed middle
+- **LC 643 Maximum Average Subarray I** — max average over all subarrays of length K
+- **LC 438 Find All Anagrams in a String** — fixed-length window looking for a specific char frequency match
+- **LC 567 Permutation in String** — window size = length of target string, check frequency match
+- **LC 2461 Maximum Sum of Distinct Subarrays With Length K** — track all distinct-value subarrays of size K
+
+**Real-world example:** Rolling metrics over a fixed time window — compute max CPU usage every 60 seconds, aggregate daily transactions (fixed batch), detect anomalies over K-element blocks.
+
 **English steps:**
 1. **Build the first window** of size `k` (sum, freq, whatever the state is).
 2. **Slide one step at a time** — add `nums[right]`, remove `nums[right - k]`.
@@ -556,6 +568,20 @@ public int maxSumSubarrayOfSizeK(int[] nums, int k) {
 
 **🧩 Try these next:** LC 1456, LC 2090, LC 2461.
 
+---
+
+### Pattern 1 — Pattern Application Gallery
+
+**Most-asked problems using fixed-size window:**
+
+- **LC 1423 Maximum Points You Can Obtain from Cards** — Pick K cards from either end and maximize sum
+- **LC 643 Maximum Average Subarray I** — Find the maximum average over all subarrays of size K
+- **LC 438 Find All Anagrams in a String** — Find all window positions where anagram of target appears
+- **LC 567 Permutation in String** — Check if permutation of s1 exists as substring in s2
+- **LC 2461 Maximum Sum of Distinct Subarrays With Length K** — Sliding window finding max distinct-value subarray
+
+---
+
 > **L2 twist:** "Maximum points from cards" picks K cards from either end of the row, not a contiguous middle window. Trick: pick K cards from front and 0 from back, then "rotate" — each step swap one front-card out for a back-card in. The window slides over the *removed middle*, not over the answer.
 
 ---
@@ -563,6 +589,18 @@ public int maxSumSubarrayOfSizeK(int[] nums, int k) {
 ### Pattern 2 — Variable Window: Longest Valid [L3, L4, L5, L6, L8] ⭐
 
 > Expand the right pointer one step at a time. Whenever the window violates the constraint, shrink from the left until it's valid again. After shrinking, the window is the longest valid one ending at `right`. **The workhorse pattern of this entire playlist.**
+
+**When you'll see this pattern:**
+
+Finding the **maximum-length subarray/substring** satisfying a constraint where adding more never breaks earlier validity (monotonicity). You want to keep the window as large as possible:
+
+- **LC 3 Longest Substring Without Repeating Characters** — expand right, shrink when char repeats
+- **LC 1004 Max Consecutive Ones III** — find longest subarray with at most K zeros
+- **LC 904 Fruit Into Baskets** — find longest subarray with at most 2 distinct values
+- **LC 340 Longest Substring with At Most K Distinct Characters** — longest with ≤ K distinct chars
+- **LC 424 Longest Repeating Character Replacement** — longest where (len − maxFreq) ≤ K (replace cost)
+
+**Real-world example:** Find longest clean data segment without corruption, longest period with acceptable latency, longest prefix matching a pattern.
 
 **English steps:**
 1. **Initialize** `left = 0`, `answer = 0`, empty window state.
@@ -607,6 +645,20 @@ public int longestValid(int[] nums, int constraint) {
 
 **🧩 Try these next:** LC 1208 (Get Equal Substrings Within Budget), LC 1493 (Longest Subarray of 1's After Deleting One Element), LC 159 (Longest Substring With At Most 2 Distinct).
 
+---
+
+### Pattern 2 — Pattern Application Gallery
+
+**Most-asked problems using longest-valid window:**
+
+- **LC 3 Longest Substring Without Repeating Characters** — Find longest substring with no duplicate characters
+- **LC 1004 Max Consecutive Ones III** — Longest subarray with at most K zeros
+- **LC 904 Fruit Into Baskets** — Find longest subarray containing at most 2 distinct values
+- **LC 340 Longest Substring with At Most K Distinct Characters** — Longest substring with ≤ K distinct chars
+- **LC 424 Longest Repeating Character Replacement** — Longest subarray where replacing ≤ K chars makes all same
+
+---
+
 > **Sub-pattern: "Last-seen index jump."** For LC 3 (longest substring without repeats), instead of shrinking one step at a time, you can jump `left` to `lastSeen[c] + 1`. Both versions are O(n) but the jump version is faster in constants and one less inner loop to reason about.
 
 ```java
@@ -632,6 +684,18 @@ public int lengthOfLongestSubstring(String s) {
 ### Pattern 3 — Variable Window: Shortest Valid [L12] 🟡
 
 > Expand the right pointer one step at a time. Whenever the window becomes *valid*, record the length and shrink from the left to try to make it shorter. When it becomes invalid again, keep expanding. Used when the answer is a *minimum* length subarray satisfying some constraint.
+
+**When you'll see this pattern:**
+
+Finding the **minimum-length subarray/substring** satisfying a constraint. Once valid, shrink to find the tightest solution:
+
+- **LC 76 Minimum Window Substring** — find shortest substring containing all target chars with required frequencies
+- **LC 209 Minimum Size Subarray Sum** — find shortest subarray with sum ≥ target
+- **LC 632 Smallest Range Covering Elements from K Lists** — find smallest range including at least one element from each list
+- **LC 1234 Replace the Substring for Balanced String** — shortest substring to replace to balance string
+- **LC 1358 Number of Substrings Containing All Three Characters** — count valid windows (also Pattern 5)
+
+**Real-world example:** Find minimal cache size to serve a query log, shortest token sequence to reach goal, minimum config window for compliance check.
 
 **English steps:**
 1. **Initialize** `left = 0`, `answer = Integer.MAX_VALUE`, empty state.
@@ -664,6 +728,20 @@ public int shortestSubarrayWithSum(int[] nums, int target) {
 
 **🧩 Try these next:** LC 1234 (Replace the Substring for Balanced String), LC 658 (Find K Closest Elements — two pointers from outside in).
 
+---
+
+### Pattern 3 — Pattern Application Gallery
+
+**Most-asked problems using shortest-valid window:**
+
+- **LC 76 Minimum Window Substring** — Find shortest substring containing all required characters with correct frequencies
+- **LC 209 Minimum Size Subarray Sum** — Find minimum length subarray with sum ≥ target
+- **LC 632 Smallest Range Covering Elements from K Lists** — Find smallest range including one element from each list
+- **LC 1234 Replace the Substring for Balanced String** — Find shortest substring to replace for balanced L/R counts
+- **LC 30 Substring with Concatenation of All Words** — Find all windows where concatenated words appear
+
+---
+
 > **Why is L12 (LC 76) hard?** It combines Template 3 (shortest) with a tricky validity check ("window has at least the freq of every char in target"). The trick is the `formed` counter — see the L12 walkthrough below.
 
 ---
@@ -671,6 +749,18 @@ public int shortestSubarrayWithSum(int[] nums, int target) {
 ### Pattern 4 — Count Exactly K via atMost(K) − atMost(K−1) [L9, L10, L11] ⭐
 
 > Counting "exactly K" subarrays directly requires a hairy case analysis. Counting "at most K" is just Template 2 with an extra `count += right − left + 1` line. So compute `atMost(K) − atMost(K − 1)` and you're done. **The signature trick of this playlist.**
+
+**When you'll see this pattern:**
+
+Counting subarrays where something appears **exactly** K times — direct case analysis is messy, but the atMost subtraction trick is clean:
+
+- **LC 930 Binary Subarrays With Sum** — count subarrays with exactly sum = goal (using atMost on 0/1 values)
+- **LC 1248 Count Number of Nice Subarrays** — count subarrays with exactly K odd numbers
+- **LC 992 Subarrays with K Different Integers** — count subarrays with exactly K distinct values
+- **LC 2962 Count Subarrays Where Max Element Appears at Least K Times** — max appears exactly K times
+- **LC 1358 Number of Substrings Containing All Three Characters** — exactly one of each char (also Pattern 5)
+
+**Real-world example:** Count audit logs matching exactly N severity levels, transactions with exactly K distinct vendors, data segments with exactly T tags.
 
 **English steps:**
 1. **Write a helper `atMost(nums, k)`** that returns the number of subarrays with the property holding at most `k` times.
@@ -720,6 +810,20 @@ private int atMost(int[] nums, int k) {
 
 **🧩 Try these next:** LC 1358 (Number of Substrings Containing All Three Characters — variant), LC 1234 (Replace Substring for Balanced — different twist), LC 2962 (Count Subarrays Where Max Element Appears at Least K Times).
 
+---
+
+### Pattern 4 — Pattern Application Gallery
+
+**Most-asked problems using atMost(K) − atMost(K−1):**
+
+- **LC 930 Binary Subarrays With Sum** — Count subarrays with exactly sum equal to goal
+- **LC 1248 Count Number of Nice Subarrays** — Count subarrays with exactly K odd numbers
+- **LC 992 Subarrays with K Different Integers** — Count subarrays with exactly K distinct integers
+- **LC 2962 Count Subarrays Where Max Element Appears at Least K Times** — Count where max appears exactly K times
+- **LC 1358 Number of Substrings Containing All Three Characters** — Count substrings with all three chars (a, b, c)
+
+---
+
 > **Mental model:** *"At most K is permissive. At most K − 1 is one click more restrictive. The difference is exactly the subarrays whose 'count of thing' is K."*
 
 ---
@@ -727,6 +831,18 @@ private int atMost(int[] nums, int k) {
 ### Pattern 5 — Number-of-Substrings via "Smallest Left That Works" [L7] 🟡
 
 > Variant of Template 2. For each `right`, find the smallest `left` such that the window `[left..right]` is valid. Then the number of valid windows ending at `right` is `left + 1` (windows starting at indices 0, 1, …, left).
+
+**When you'll see this pattern:**
+
+Counting valid windows (not just finding one max-length window). For each right position, shrinking the left finds the **smallest valid start**; all windows starting at `[0..left−1]` ending at `right` are valid, so you add `left` to the count:
+
+- **LC 1358 Number of Substrings Containing All Three Characters** — count all substrings with a, b, c present
+- **LC 2799 Count Complete Subarrays in an Array** — count subarrays containing all distinct values
+- **LC 2090 K Radius Subarray Averages** — related counting variant
+- **LC 1248 Count Number of Nice Subarrays** — also solvable with this pattern (though Pattern 4 is cleaner)
+- **LC 1234 Replace the Substring for Balanced String** — variant of smallest-left-that-works
+
+**Real-world example:** Count all valid cache configurations, enumerate all compliant log segments, measure coverage of audit windows.
 
 **English steps:**
 1. For each `right`, expand and update state.
@@ -759,6 +875,20 @@ public int numberOfSubstrings(String s) {
 
 **🧩 Try these next:** LC 2799, LC 1248 (already in Pattern 4 but solvable here too).
 
+---
+
+### Pattern 5 — Pattern Application Gallery
+
+**Most-asked problems using smallest-left-that-works:**
+
+- **LC 1358 Number of Substrings Containing All Three Characters** — Count all substrings containing characters a, b, and c
+- **LC 2799 Count Complete Subarrays in an Array** — Count subarrays containing all distinct values from array
+- **LC 2090 K Radius Subarray Averages** — Compute averages for subarrays of size 2K+1
+- **LC 1248 Count Number of Nice Subarrays** — Count subarrays with exactly K odd numbers
+- **LC 395 Longest Substring with At Least K Repeating Characters** — Longest substring where all chars appear ≥ K times
+
+---
+
 > **Why this differs from Pattern 4:** Here, "valid" means "*at least* one of each" (a minimum constraint). In Pattern 4, "exactly K" requires the subtraction trick. When the constraint is "contains at least one of each X", the smallest-left-that-works variant is cleaner.
 
 ---
@@ -766,6 +896,18 @@ public int numberOfSubstrings(String s) {
 ### Pattern 6 — Classic Two Pointers (Converging) [L1] ✅
 
 > Two pointers start at opposite ends of a sorted array and move toward each other. Each step decides which pointer to move based on the comparison with the target. **Independent of sliding window** — different mental model.
+
+**When you'll see this pattern:**
+
+Problems on **sorted arrays** where you find a pair/triplet matching a constraint. Start from both ends and converge by eliminating halves — O(n) after sorting:
+
+- **LC 167 Two Sum II — Input Array Is Sorted** — find two indices summing to target
+- **LC 15 3Sum** — find all triplets summing to zero (fix one, two-pointer rest)
+- **LC 11 Container With Most Water** — find two lines maximizing area between them
+- **LC 42 Trapping Rain Water** — two-pointer version computing trapped water
+- **LC 125 Valid Palindrome** — two pointers checking valid alphanumeric palindrome
+
+**Real-world example:** Matching buy/sell orders, finding balanced pairs in a log, detecting symmetric patterns, allocating resources from opposite ends.
 
 **English steps:**
 1. Sort the array if not sorted.
@@ -795,6 +937,20 @@ public int[] twoSumSorted(int[] nums, int target) {
 
 **🧩 Try these next:** LC 16 (3Sum Closest), LC 18 (4Sum), LC 75 (Dutch Flag — three-pointer variant).
 
+---
+
+### Pattern 6 — Pattern Application Gallery
+
+**Most-asked problems using converging two pointers:**
+
+- **LC 167 Two Sum II — Input Array Is Sorted** — Find two numbers summing to target in sorted array
+- **LC 15 3Sum** — Find all triplets summing to zero
+- **LC 11 Container With Most Water** — Find two lines with maximum area between them
+- **LC 42 Trapping Rain Water** — Calculate trapped rainwater using height pairs
+- **LC 125 Valid Palindrome** — Check if string is valid palindrome ignoring non-alphanumeric chars
+
+---
+
 > **Cross-reference:** Full coverage in `DSA/DeepDive/arrays-fundamentals.md` — Pattern 1 (Two Pointers Converging).
 
 ---
@@ -802,6 +958,18 @@ public int[] twoSumSorted(int[] nums, int target) {
 ### Pattern 7 — Same-Direction Two Pointers [L1] 🟡
 
 > Both pointers move forward. The slow pointer marks where to write; the fast pointer scans. Used for in-place modifications: dedup, partition, removal.
+
+**When you'll see this pattern:**
+
+In-place array mutations — removing, reordering, or filtering elements without extra space. Fast pointer scouts ahead; slow pointer marks the write position:
+
+- **LC 26 Remove Duplicates from Sorted Array** — remove duplicates in-place, return new length
+- **LC 27 Remove Element** — remove all occurrences of a value, return new length
+- **LC 283 Move Zeroes** — move all zeros to end while maintaining order of non-zeros
+- **LC 80 Remove Duplicates II** — allow each element up to 2 times, remove excess
+- **LC 75 Sort Colors** — three-pointer partition (Dutch Flag problem)
+
+**Real-world example:** Compact database records in-place, dedup a log stream, filter spam from messages, reorder data to match priority.
 
 **English steps:**
 1. `slow = 0`, scan with `fast`.
@@ -824,6 +992,20 @@ public int removeDuplicatesSortedArray(int[] nums) {
 ```
 
 **🏷️ Example problems:** LC 26 (Remove Duplicates from Sorted Array), LC 27 (Remove Element), LC 283 (Move Zeroes), LC 80 (Remove Duplicates II).
+
+---
+
+### Pattern 7 — Pattern Application Gallery
+
+**Most-asked problems using same-direction two pointers:**
+
+- **LC 26 Remove Duplicates from Sorted Array** — Remove duplicates from sorted array, return new length
+- **LC 27 Remove Element** — Remove all occurrences of a value, return new length
+- **LC 283 Move Zeroes** — Move all zeros to end while keeping non-zero order
+- **LC 80 Remove Duplicates II** — Allow at most 2 occurrences of each element
+- **LC 75 Sort Colors** — Partition array into three sections (0, 1, 2) in-place
+
+---
 
 > **Cross-reference:** Same pattern lives in `DSA/DeepDive/arrays-fundamentals.md` — Pattern 2.
 

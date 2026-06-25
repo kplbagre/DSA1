@@ -308,6 +308,7 @@ public class RedisShardedCounter {
 - **`02-rate-limiting.md`** — rate limiters use counters per time window; sharded counters apply when a single user's counter becomes a hot key
 - **`03-caching.md`** — aggregate totals from sharded counters are cached in Redis with short TTL to avoid SUM on every read request
 - **`06-distributed-locking.md`** — sharded counters avoid the need for distributed locks on counter writes by design — each shard is independently writable
+- **`09-sharded-counters_advanced.md`** — For advanced patterns: CRDT counters (coordination-free counting across partitioned systems), time-series buckets (spike detection, count by time window), adaptive sharding (auto-split/merge based on load), approximate counting with HyperLogLog (cardinality estimation).
 
 ---
 

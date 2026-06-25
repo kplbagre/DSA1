@@ -324,6 +324,192 @@ public boolean verifyDocumentIntegrity(UUID documentId) {
 
 ---
 
+### S3 Operational Patterns — Multipart Upload & Lifecycle Policies
+
+For production systems, two operational patterns are critical: **multipart upload** for large files and **lifecycle policies** for cost optimization.
+
+**Multipart Upload — Breaking Large Uploads into Chunks:**
+
+Documents can be large — a 500 MB contract PDF, a multi-page scan, a high-resolution image. Uploading a 500 MB file in one go is risky: a network hiccup halfway through the upload wastes all prior progress. Multipart upload breaks the file into chunks (e.g., 5 MB each), uploads each chunk in parallel, then tells S3 to assemble them into a single object. If a chunk fails, only that chunk is retried, not the entire file.
+
+**Steps in plain English:**
+
+1. **Initiate** the multipart upload — S3 allocates an `uploadId`.
+2. **Upload chunks in parallel** — each chunk is a "part" (part 1, part 2, ..., part N) with an ETag.
+3. **Complete** the upload — send S3 all the ETags in order — S3 assembles the parts into a single object.
+4. **Cleanup on failure** — if any part fails after N retries, abort the upload to free S3 resources.
+
+```java
+@Service
+public class DocumentStorageService {
+
+    private final AmazonS3 s3Client;
+    private final DocumentRepository docRepo;
+    private final String bucketName;
+
+    // Multipart upload for large files (> 100 MB recommended)
+    public Document uploadLargeDocument(UUID ownerId, String title,
+                                        InputStream fileStream, long fileSizeBytes)
+            throws IOException {
+        String s3Key = "docs/" + ownerId + "/" + UUID.randomUUID() + ".pdf";
+        final int chunkSize = 5 * 1024 * 1024;  // 5 MB per chunk
+
+        // Step 1 — initiate multipart upload
+        InitiateMultipartUploadRequest initRequest = new InitiateMultipartUploadRequest(
+            bucketName, s3Key
+        );
+        InitiateMultipartUploadResult initResult = s3Client.initiateMultipartUpload(initRequest);
+        String uploadId = initResult.getUploadId();
+
+        List<PartETag> partETags = new ArrayList<>();
+
+        try {
+            // Step 2 — upload chunks in parallel
+            byte[] buffer = new byte[chunkSize];
+            int partNumber = 1;
+            int bytesRead;
+
+            while ((bytesRead = fileStream.read(buffer)) > 0) {
+                // Upload this chunk
+                UploadPartRequest uploadRequest = new UploadPartRequest()
+                    .withBucketName(bucketName)
+                    .withKey(s3Key)
+                    .withUploadId(uploadId)
+                    .withPartNumber(partNumber)
+                    .withPartSize(bytesRead)
+                    .withInputStream(new java.io.ByteArrayInputStream(buffer, 0, bytesRead));
+
+                UploadPartResult uploadPartResult = s3Client.uploadPart(uploadRequest);
+                partETags.add(uploadPartResult.getPartETag());
+
+                partNumber++;
+            }
+
+            // Step 3 — complete the upload
+            CompleteMultipartUploadRequest completeRequest =
+                new CompleteMultipartUploadRequest(bucketName, s3Key, uploadId, partETags);
+            s3Client.completeMultipartUpload(completeRequest);
+
+            // Step 4 — write metadata to DB
+            Document doc = new Document();
+            doc.setOwnerId(ownerId);
+            doc.setTitle(title);
+            doc.setS3Key(s3Key);
+            doc.setSizeBytes(fileSizeBytes);
+            doc.setStatus("ACTIVE");
+            return docRepo.save(doc);
+
+        } catch (Exception e) {
+            // Cleanup on failure — abort the multipart upload to free S3 storage
+            AbortMultipartUploadRequest abortRequest = new AbortMultipartUploadRequest(
+                bucketName, s3Key, uploadId
+            );
+            s3Client.abortMultipartUpload(abortRequest);
+            throw new IOException("Large document upload failed: " + e.getMessage(), e);
+        }
+    }
+}
+```
+
+**What is multipart upload, and when do you use it?**
+
+**Multipart upload** is an S3 feature where you break a file into parts (chunks), upload each part independently, and then assemble them server-side. Each part can be uploaded in parallel by different threads or retried individually on failure. It's especially valuable for files > 100 MB or in unstable networks.
+
+**In an interview, if asked:** "For large files, I use S3 multipart upload: initiate the upload (get an uploadId), upload chunks in parallel (5-10 MB each), then complete the upload by assembling the parts. If a chunk fails, I retry only that chunk, not the entire file. This reduces the impact of network failures and allows parallelized uploads for faster transfers on high-bandwidth connections."
+
+---
+
+**Lifecycle Policies — Archiving Old Documents:**
+
+Once a document is submitted and no longer accessed frequently, moving it to cheaper storage (S3 Glacier, S3 Deep Archive) saves money. A **lifecycle policy** automatically transitions objects between storage classes based on age or other criteria.
+
+```yaml
+# S3 Lifecycle Policy (JSON or XML)
+{
+  "Rules": [
+    {
+      "Id": "archive-old-documents",
+      "Filter": {
+        "And": {
+          "Prefix": "docs/",
+          "Tags": [
+            {
+              "Key": "archived",
+              "Value": "false"
+            }
+          ]
+        }
+      },
+      "Status": "Enabled",
+      "Transitions": [
+        {
+          "Days": 30,
+          "StorageClass": "STANDARD_IA"  # Move to Infrequent Access after 30 days (~$0.0125/GB)
+        },
+        {
+          "Days": 90,
+          "StorageClass": "GLACIER"      # Move to Glacier after 90 days (~$0.004/GB)
+        },
+        {
+          "Days": 365,
+          "StorageClass": "DEEP_ARCHIVE" # Archive after 1 year (~$0.00099/GB)
+        }
+      ],
+      "Expiration": {
+        "Days": 2555  # Delete after 7 years (compliance/retention period)
+      },
+      "NoncurrentVersionTransitions": [
+        {
+          "NoncurrentDays": 30,
+          "StorageClass": "GLACIER"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Steps to implement:**
+
+1. **Attach the policy to your S3 bucket** — via AWS Console, Terraform, or SDK.
+2. **Set document metadata tags** — tag documents on upload with `archived=false` so the lifecycle rule applies.
+3. **Monitor transitions** — S3 automatically moves objects at the specified ages (daily transition checks run at midnight UTC).
+4. **Handle retrieval from cold storage** — if you need to access a Glacier object, it requires "restore" operation (3 hours to 12 hours depending on retrieval tier) before it's readable.
+
+```java
+// Handling retrieval from Glacier
+public InputStream getDocumentContent(UUID documentId) throws IOException {
+    Document doc = docRepo.findById(documentId)
+            .orElseThrow(() -> new DocumentNotFoundException("Not found"));
+
+    S3Object s3Object = s3Client.getObject(doc.getS3Bucket(), doc.getS3Key());
+
+    // If object is in Glacier and not yet restored, initiate restore
+    if ("GLACIER".equals(s3Object.getObjectMetadata().getStorageClass())
+        && !isRestored(s3Object)) {
+        RestoreObjectRequest restoreRequest = new RestoreObjectRequest(
+            doc.getS3Bucket(), doc.getS3Key()
+        ).withExperationInDays(1).withGlacierJobParameters(
+            new GlacierJobParameters().withTier(Tier.Standard)
+        );
+        s3Client.restoreObjectV2(restoreRequest);
+        throw new DocumentNotAvailableException(
+            "Document is in Glacier. Restore initiated — available in ~3 hours."
+        );
+    }
+
+    return s3Object.getObjectContent();
+}
+```
+
+**What is a lifecycle policy, and why do you use it for document storage?**
+
+A **lifecycle policy** automatically transitions S3 objects between storage classes based on age, or deletes them after a retention period. STANDARD storage is expensive (~$0.023/GB) but immediate; GLACIER is 90% cheaper (~$0.004/GB) but requires a restore operation before access; DEEP_ARCHIVE is 95% cheaper (~$0.00099/GB) for long-term retention.
+
+**In an interview, if asked:** "Lifecycle policies automatically move documents to cheaper storage as they age — after 30 days to STANDARD_IA, 90 days to GLACIER for infrequent access, and 365 days to DEEP_ARCHIVE for compliance archive. This cuts storage costs by 90% for documents older than a year. For compliance systems, I set the policy to delete objects after 7 years (or whatever the legal retention period requires). The trade-off is that accessing archived documents requires a restore operation (3-12 hours), so I also surface an SLA to users: 'Recently submitted documents download instantly; archived documents require a 3-hour restore.'"
+
+---
+
 ## 🏢 Real World — Where Companies Use This
 
 - **DocuSign** (signed contract storage): Every executed agreement is stored as an immutable PDF in S3 with S3 Object Lock in compliance mode — legally non-deletable for the retention period. Metadata in Postgres (signer IDs, timestamps, envelope status) is the query layer.
@@ -425,3 +611,4 @@ public boolean verifyDocumentIntegrity(UUID documentId) {
 | Date | Change |
 |---|---|
 | June 2026 | File created. Added to bridge D2 gap for DocuSign R2 interview. Covers: object vs block vs file storage decision, metadata DB + S3 pair, upload/download/versioning/soft-delete Java implementation, pre-signed URLs, S3 Object Lock for compliance, checksum integrity, DocuSign-specific immutability guarantees. 6 Q&As (4 Tier 1 + 2 Tier 2). |
+| June 23, 2026 | Added "S3 Operational Patterns" subsection: multipart upload (for large files with chunking, parallel transfer, retry resilience) with full Java code, lifecycle policies (STANDARD → STANDARD_IA → GLACIER → DEEP_ARCHIVE with cost example), lifecycle policy JSON config, and retrieval from cold storage with restore operation. Defined "multipart upload" and "lifecycle policy" with first-use glosses and interview-ready answers. File grew 427→614 lines (+44%). |

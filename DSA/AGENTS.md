@@ -20,13 +20,23 @@ DSA notes are written for **revision under interview-prep pressure**. The reader
 DSA/
 ├── AGENTS.md                              ← THIS FILE
 │
+├── Foundation/                            ← Orientation layer (read after 2+ week gap)
+│   ├── ds-overview.md                     ← All DSes + decision table
+│   ├── java-collections-visual.md         ← Hierarchy + internal structures + custom DSes
+│   └── syntax-quick-card.md               ← Pure syntax + top 5 methods per DS
+│
 ├── DeepDive/                              ← In-depth study notes (read top-to-bottom once)
-│   ├── notes-standards-deepdive.md        ← Detailed conventions for DeepDive notes
+│   ├── notes-standards-deepdive.md        ← Detailed conventions for DeepDive notes (READ FIRST)
 │   ├── trees-fundamentals.md
 │   ├── recursion-fundamentals.md
 │   ├── graphs-fundamentals.md
 │   ├── backtracking-fundamentals.md
-│   └── integer-overflow-and-limits.md
+│   ├── integer-overflow-and-limits.md
+│   ├── hashmaps-sets-fundamentals.md      ← NEW (being created in Step 1)
+│   ├── stacks-queues-fundamentals.md      ← NEW (being created in Step 1)
+│   ├── linked-list-fundamentals.md        ← NEW (being created in Step 1)
+│   ├── strings-fundamentals.md            ← NEW (being created in Step 1)
+│   └── heaps-fundamentals.md              ← NEW (being created in Step 1)
 │
 ├── Reference/                             ← Compact cheatsheets (live in during practice)
 │   ├── notes-standards-reference.md       ← Detailed conventions for Reference notes
@@ -70,11 +80,12 @@ DSA/
 
 ---
 
-## 🧭 The Five Note Types
+## 🧭 The Six Note Types
 
 | Folder | Type | When to use | Length target | Standards file |
 | --- | --- | --- | --- | --- |
-| `DeepDive/` | **Deep dive (in-depth study)** | New topic not yet internalized; needs mental models + step-by-step explanations | 800–1500 lines | `DeepDive/notes-standards-deepdive.md` |
+| `Foundation/` | **Foundation (orientation)** | Returning after 2+ week gap; need "what DSes exist?" + decision table + syntax recall | 200–700 lines per file | (follows AGENTS.md universal + DSA-specific rules) |
+| `DeepDive/` | **Deep dive (in-depth study)** | New topic not yet internalized; needs mental models + step-by-step explanations | 800–1500 lines | `DeepDive/notes-standards-deepdive.md` ⭐ **READ THIS FIRST** |
 | `Reference/` | **Reference (cheatsheet)** | Method syntax + DSA patterns for a known data structure / language feature | 300–700 lines | `Reference/notes-standards-reference.md` |
 | `Implementation/` | **Implementation discipline** | Building blocks that prevent coding bugs under pressure — Java traps, simulation templates, parsing patterns | Deep dive: 500–800 lines; Reference: 200–350 lines | (follows DeepDive + Reference conventions) |
 | `Interview/` | **Interview playbook** | Pattern recognition + problem mapping — "I see this problem, which pattern do I use?" | 400–600 lines | `Interview/notes-standards-interview.md` |
@@ -189,13 +200,16 @@ Extends the universal checklist in the root `../AGENTS.md`:
 
 When the user asks for *"deep-dive notes on [topic]"* / *"a reference for [topic]"* / *"a pattern doc for LC X":*
 
-1. Identify the folder (DeepDive / Reference / Patterns) using the decision question above
+1. Identify the folder (Foundation / DeepDive / Reference / Patterns) using the decision question above
 2. Read the root `../AGENTS.md` for universal rules
 3. Read THIS file for DSA-specific rules
-4. Read the folder's `notes-standards-*.md` file for note-type-specific rules
-5. Write the note
-6. Run ALL three checklists (universal + DSA + note-type)
-7. Deliver
+4. **[MANDATORY FOR DEEPDIVE]** Read `DeepDive/notes-standards-deepdive.md` for detailed conventions (section order, visual blocks, drill placement, difficulty tagging)
+5. Read any other folder's `notes-standards-*.md` file if applicable
+6. Write the note
+7. Run ALL three checklists (universal + DSA + note-type)
+8. Deliver
+
+**⭐ CRITICAL: DeepDive files MUST follow `DeepDive/notes-standards-deepdive.md` exactly.** No deviations without explicit reasoning.
 
 If something needs to deviate from the standard for a specific topic, **call it out explicitly** in the response with reasoning.
 

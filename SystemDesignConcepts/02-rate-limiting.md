@@ -49,7 +49,21 @@ This is a pragmatic approximation. Not perfectly accurate (the estimate assumes 
 
 ---
 
-**The key insight is:** Fixed window is the simplest but gets gamed at boundaries. Token bucket is the default choice — it handles burst gracefully and is easy to reason about. Sliding window log is the strictest and most accurate — right when one extra allowed call has a real cost (billing API). Sliding window counter is the memory-efficient compromise between token bucket and the logbook.
+**Method 5 — Leaky Bucket (The Draining Faucet):**
+The bouncer has a bucket with a drain hole at the bottom. Water (requests) flows in at any rate. Water drains out at a constant rate — 1 unit per 6 minutes (10/hour). If the bucket is full and new water arrives, it overflows and is discarded — request is rejected.
+
+The key difference from token bucket: token bucket *allows* burst (full bucket means you can send many requests at once). Leaky bucket *forbids* burst — requests are processed at a constant rate regardless of how many arrive. A burst of 10 requests arriving together: the bucket can hold maybe 3, so 7 are rejected immediately.
+
+Leaky bucket is right for systems that must output at a constant rate — e.g., sending emails at a fixed throughput to avoid overwhelming a mail server, or draining a queue at a steady pace.
+
+---
+
+**The key insight is:** 
+- Fixed window: simplest, but gamed at boundaries
+- Token bucket: default choice — handles burst gracefully
+- Sliding window log: strictest, most accurate — for billing
+- Sliding window counter: memory-efficient compromise
+- Leaky bucket: enforces constant output rate — for steady-state processing
 
 ---
 
@@ -165,6 +179,63 @@ public boolean isAllowed(String clientId) {
     return result == 1L;
 }
 ```
+
+### Algorithm 2 — Leaky Bucket (use for constant-rate output)
+
+**Steps:**
+1. **Store two values per client in Redis:** `water_level` (current bucket fill) and `last_drain_time`.
+2. **On each request:** calculate elapsed time since last drain. Drain water at a constant rate: `water_drained = elapsed × drain_rate`. Update water level: `current_level = max(0, water_level - water_drained)`.
+3. **If adding the new request would overflow:** reject with HTTP 429. Otherwise, add request to bucket: `water_level += request_size`.
+4. **Process requests at constant rate from the bucket.** A background job drains the bucket at rate = `capacity_per_second`.
+
+```java
+// Redis Lua script for leaky bucket
+private static final String LEAKY_BUCKET_SCRIPT = """
+    local key = KEYS[1]
+    local capacity = tonumber(ARGV[1])
+    local drainRate = tonumber(ARGV[2])  -- requests per second
+    local now = tonumber(ARGV[3])
+    local requestSize = tonumber(ARGV[4])  -- usually 1
+
+    local bucket = redis.call('HMGET', key, 'waterLevel', 'lastDrain')
+    local waterLevel = tonumber(bucket[1]) or 0
+    local lastDrain = tonumber(bucket[2]) or now
+
+    -- Step 2: drain based on elapsed time
+    local elapsed = now - lastDrain
+    local drained = elapsed * drainRate
+    local currentLevel = math.max(0, waterLevel - drained)
+
+    -- Step 3: check if new request fits
+    if currentLevel + requestSize <= capacity then
+        redis.call('HMSET', key, 'waterLevel', currentLevel + requestSize, 'lastDrain', now)
+        redis.call('EXPIRE', key, 3600)
+        return 1  -- allowed
+    else
+        return 0  -- overflow, rejected
+    end
+    """;
+
+public boolean isAllowed(String clientId) {
+    String key = "leaky:" + clientId;
+    long now = System.currentTimeMillis() / 1000;
+    Long result = (Long) jedis.eval(
+        LEAKY_BUCKET_SCRIPT,
+        List.of(key),
+        List.of(
+            String.valueOf(CAPACITY),      // bucket capacity
+            String.valueOf(DRAIN_RATE),    // requests per second to drain
+            String.valueOf(now),
+            "1"                            // request size (typically 1)
+        )
+    );
+    return result == 1L;
+}
+```
+
+**Key insight:** Unlike token bucket (which allows burst up to capacity), leaky bucket smooths traffic. Even if 100 requests arrive together, they are drained at a steady rate. The bucket acts as a queue.
+
+---
 
 ### Algorithm 2 — Sliding Window Log (use for billing/strict APIs)
 
@@ -349,6 +420,7 @@ For most APIs: fail open. For payment APIs: fail closed.
 - **`04-idempotency.md`** — Rate limiting rejects retried requests; idempotency makes retries safe. The two concepts are complementary: rate limiting without idempotency means clients retry rejected requests and storm the API further.
 - **`06-distributed-locking.md`** — Both use Redis for distributed coordination. Rate limiter uses atomic Lua scripts; distributed lock uses SETNX + EXPIRE. Same Redis, different patterns.
 - **`03-caching.md`** — The KYC mapping table (api_key → entity_id) should be cached in Redis. Cache invalidation on key rotation is a real operational concern.
+- **`02-rate-limiting_advanced.md`** — For advanced patterns: adaptive rate limiting (auto-adjust based on system load), multi-dimensional limits (user + IP + API key), distributed coordination strategies (eventual consistency vs centralized), sharding to avoid Redis bottleneck.
 
 ---
 

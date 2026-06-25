@@ -19,18 +19,20 @@ These are "how to walk through THIS question in THIS interview" guides.
 
 ---
 
-## 6 Solution Files
+## 8 Solution Files — 2 PDF Examples + 6 Gap Questions
 
-| Priority | File | Question | Type | Source | Concept notes |
-|---|---|---|---|---|---|
-| 1 | `C1-rate-limiter.md` | Design a Rate Limiter for a Microservices API | Type A — System Design | ⭐ Confirmed | `02-rate-limiting.md` |
-| 2 | `D1-digital-signature.md` | Design a Digital Signature System | Mixed A+B | 🔶 Likely (DocuSign's own product) | `13-security-pki.md` |
-| 3 | `C3-pagination-api.md` | Pagination API + Data Model Design | Type B — Product Arch | ⭐ Confirmed | `11-api-design.md`, `12-data-modeling.md` |
-| 4 | `C2-expense-report.md` | Expense Report System — Data Model Design | Type B — Product Arch | ⭐ Confirmed | `12-data-modeling.md` |
-| 5 | `D3-notification-service.md` | Design a Real-Time Notification Service | Type A — System Design | 🔶 Likely | `07-cdc-outbox.md`, `04-idempotency.md` |
-| 6 | `D2-document-storage.md` | Design a Document Storage & Retrieval Service | Type B — Product Arch | 🔶 Likely | `14-document-blob-storage.md`, `03-caching.md` |
+| Priority | File | Question | Type | Source | Status | Concept notes |
+|---|---|---|---|---|---|---|
+| **A1** | `A1-url-shortener.md` | Design a URL Shortener | Type A — System Design | ⭐ PDF example | ✅ Written (Jun 23) | `11-api-design.md`, `03-caching.md` |
+| **A2** | `A2-chat-messenger.md` | Build a Facebook Chat / Messenger | Type A — System Design | ⭐ PDF example + confirmed | ✅ Written + DELIVERY-RECIPE integrated (Jun 23) | `03-caching.md`, `07-cdc-outbox.md`, `04-idempotency.md` |
+| 1 | `C1-rate-limiter.md` | Design a Rate Limiter for a Microservices API | Type A — System Design | ⭐ Confirmed | ✅ Written (Jun 23) | `02-rate-limiting.md`, `02-rate-limiting_advanced.md` |
+| 2 | `C2-expense-report.md` | Expense Report System — Data Model Design | Type B — Product Arch | ⭐ Confirmed | ✅ Written (Jun 23) | `12-data-modeling.md`, `01-optimistic-pessimistic-locking.md` |
+| 3 | `C3-pagination-api.md` | Pagination API + Data Model Design | Type B — Product Arch | ⭐ Confirmed | ✅ Written (Jun 24) | `11-api-design.md`, `12-data-modeling.md` |
+| 4 | `D1-digital-signature.md` | Design a Digital Signature System | Mixed A+B | 🔶 Likely (DocuSign product) | ✅ Written (Jun 24) | `13-security-pki.md` |
+| 5 | `D3-notification-service.md` | Design a Real-Time Notification Service | Type A — System Design | 🔶 Likely | ✅ Written (Jun 24) | `07-cdc-outbox.md`, `04-idempotency.md` |
+| 6 | `D2-document-storage.md` | Design a Document Storage & Retrieval Service | Type B — Product Arch | 🔶 Likely | ✅ Written (Jun 24) | `14-document-blob-storage.md`, `03-caching.md` |
 
-**Writing priority logic:** C1 first (confirmed + most likely asked), D1 second (DocuSign's core product — highest probe risk), C3 third (confirmed + cursor pagination is a known DocuSign deep-dive), then C2, D3, D2.
+**Writing priority logic:** A1/A2 are proof-of-concept PDF examples (establishes template). Then C1 (confirmed + most likely asked), D1 (DocuSign's core product — highest probe risk), C3 (confirmed + cursor pagination is known DocuSign deep-dive), then C2, D3, D2.
 
 ---
 

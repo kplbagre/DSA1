@@ -229,7 +229,79 @@ Same rule in DB: an index on `(status, submitted_at)` serves:
 
 ---
 
-### Part 4 — Many-to-Many Relationships (Junction Tables)
+### Part 4 — Schema Evolution: Adding Columns at Scale
+
+When your production table grows to millions or billions of rows, adding or modifying columns is risky — a naive `ALTER TABLE ADD COLUMN` can lock the table for hours, blocking all reads and writes. Modern relational databases (Postgres 11+, MySQL 8.0.23+) have optimizations, but the safest pattern is the **add-null → backfill-in-batches → add-constraint** approach.
+
+**The problem:** A table with 200 million rows. You need to add a new column `approved_by` (FK to users). Running `ALTER TABLE expense_reports ADD COLUMN approved_by BIGINT NOT NULL DEFAULT 1` on the live table:
+- Postgres < 11: rewrites the entire table — hours of locking.
+- MySQL with ALGORITHM=INPLACE: still acquires a metadata lock, blocking writes.
+- Result: your API returns "database locked" errors to users.
+
+**The safe pattern:**
+
+**Step 1 — Add the column as nullable (metadata-only, fast):**
+
+```sql
+ALTER TABLE expense_reports ADD COLUMN approved_by BIGINT NULL;
+```
+
+In modern Postgres/MySQL, this is a metadata-only change — doesn't rewrite the table, completes in seconds.
+
+**Step 2 — Backfill in batches (avoid lock contention):**
+
+```sql
+-- Backfill in chunks of 10,000 rows at a time
+-- Allows other transactions to interleave writes
+DECLARE @batchSize INT = 10000;
+DECLARE @maxId BIGINT = (SELECT MAX(id) FROM expense_reports);
+
+FOR @i = 0 TO @maxId STEP @batchSize BEGIN
+    UPDATE expense_reports
+    SET approved_by = 1  -- or any default logic
+    WHERE id BETWEEN @i AND @i + @batchSize - 1
+      AND approved_by IS NULL;
+    
+    -- Small sleep between batches to reduce I/O contention
+    WAITFOR DELAY '00:00:00.100';
+END
+```
+
+**Step 3 — Add the constraint once backfilled (now it's safe):**
+
+```sql
+ALTER TABLE expense_reports
+MODIFY COLUMN approved_by BIGINT NOT NULL;
+
+-- Optional: add the FK constraint
+ALTER TABLE expense_reports
+ADD CONSTRAINT fk_approved_by FOREIGN KEY (approved_by)
+    REFERENCES users(id) ON DELETE SET NULL;
+```
+
+**Key invariants:**
+- Every column add at scale is: **NULL add → batch backfill → constraint add**.
+- Never do `ALTER TABLE ... ADD COLUMN ... NOT NULL DEFAULT value` on a large live table — forces a full rewrite.
+- Batch size typically 1,000–50,000 rows depending on row width and load. Smaller batches = more interleaving, slower overall but less blocking.
+
+**What is a database migration, and why are they risky?**
+
+A **database migration** is a structured change to the schema — adding a column, changing a type, creating an index, etc. They're risky at scale because:
+- **Lock contention:** A rewrite-based migration (like adding a NOT NULL column to a large table) acquires a lock, blocking all writes.
+- **Rollback complexity:** If the migration fails halfway, rolling back can be as slow or slower than the forward migration.
+- **Zero-downtime deployments:** You can't take the service offline to migrate the schema in microservices — you need the schema change to happen while the app is live.
+
+The safest migrations use **expansion-then-contraction** pattern:
+1. **Expansion:** Add the new schema element (column, table, index) without removing the old one.
+2. **Soak period:** Let the new element exist while the old one is still active. Monitor for correctness.
+3. **Switch traffic:** Update the application to use the new element.
+4. **Contraction:** Only after traffic has moved, drop the old element.
+
+**In an interview, if asked:** "Adding a column to a 200M-row table requires the add-null → batch-backfill → add-constraint pattern. Use small batches (10K–50K rows) to avoid lock contention. Never add a NOT NULL column with a rewrite — always add it as NULL first. Plan major schema changes as separate, reversible deployment steps. This is why many teams use tools like pt-online-schema-change (Percona Toolkit) or gh-ost to automate safe migrations."
+
+---
+
+### Part 5 — Many-to-Many Relationships (Junction Tables)
 
 A many-to-many relationship — one booking can have many seats, one seat can be in many bookings — cannot be expressed with a single FK. You need a **junction table** (also called a join table or association table) that holds both FKs.
 
@@ -292,7 +364,7 @@ Examples: users ↔ roles, bookings ↔ seats, students ↔ courses, tags ↔ ar
 
 ---
 
-### Part 5 — UUID vs BIGINT AUTO_INCREMENT as Primary Key
+### Part 6 — UUID vs BIGINT AUTO_INCREMENT as Primary Key
 
 A common interview question: "Should your PK be a UUID or a BIGINT AUTO_INCREMENT?"
 
@@ -309,7 +381,7 @@ A common interview question: "Should your PK be a UUID or a BIGINT AUTO_INCREMEN
 
 ---
 
-### Part 6 — Validation: DB Layer vs Application Layer
+### Part 7 — Validation: DB Layer vs Application Layer
 
 ```java
 // DB-layer validation — enforced by the database itself, cannot be bypassed
@@ -340,7 +412,7 @@ public void validateExpenseItem(ExpenseItemRequest req) {
 
 ---
 
-### Part 5 — SQL vs NoSQL: The Interview Decision Framework
+### Part 8 — SQL vs NoSQL: The Interview Decision Framework
 
 ### What is ACID, and why does it matter here?
 
@@ -464,3 +536,4 @@ public void validateExpenseItem(ExpenseItemRequest req) {
 |---|---|
 | June 2026 | File created. DocuSign R2 prep — C2 (Expense Report) and C3 (Pagination) both confirmed required data modeling. Covers 3NF, FK cascade rules, indexing, validation layers, SQL vs NoSQL. |
 | June 2026 | Gaps patched: ACID definition + 4-property table added before SQL/NoSQL section. B-tree index explanation + leftmost prefix rule added after indexing code. JPA annotations explained inline (LAZY, orphanRemoval, EnumType.STRING). Many-to-many junction table section added (Part 4). UUID vs BIGINT PK debate added (Part 5). DECIMAL(12,2) glossed in schema. |
+| June 23, 2026 | Added Part 4 — "Schema Evolution: Adding Columns at Scale" — covers add-null → batch-backfill → add-constraint pattern, zero-downtime migrations, lock contention avoidance. Explains expansion-then-contraction migration strategy. Defines "database migration" with first-use gloss. Renumbered subsequent parts (Part 5→Part 8). Existing 200M-row Q&A already covers practical schema evolution answer. File grew 466→539 lines (+16%). |

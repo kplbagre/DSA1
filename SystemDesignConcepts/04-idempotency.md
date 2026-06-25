@@ -323,6 +323,7 @@ public void onPaymentSucceeded(PaymentSucceededEvent event) {
 - **`11-api-design.md`** — The `Idempotency-Key` header pattern introduced briefly there is fully detailed here. API design is where the client-facing contract lives; this note is the server-side implementation.
 - **`07-cdc-outbox.md`** — The transactional outbox pattern solves a related problem: ensuring the DB write and the Kafka publish are atomic. Idempotency on the Kafka consumer is the other half of that guarantee.
 - **`02-rate-limiting.md`** — Rate limiting and idempotency interact: a retry after a `429 Too Many Requests` must use the same idempotency key — otherwise the client creates a new operation when the previous one may have gone through.
+- **`04-idempotency_advanced.md`** — For advanced patterns: saga pattern (multi-step operations with compensations), batch idempotency (partition tracking and retry of failed partitions), deterministic request ID generation (deriving keys from inputs, not random).
 
 ---
 

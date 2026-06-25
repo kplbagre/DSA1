@@ -31,6 +31,24 @@ In databases: `SELECT ... FOR UPDATE` grabs a lock on the row. Anyone else tryin
 
 ---
 
+## 📋 Isolation Levels and Their Role
+
+Database isolation levels determine what data concurrent transactions can see from each other. There are three main levels: **READ_COMMITTED**, **REPEATABLE_READ**, and **SERIALIZABLE**.
+
+**READ_COMMITTED** — a transaction only sees committed data from other transactions. The danger: if Thread A reads a value at T1 and again at T3, the value might have changed because another thread committed in between (a "non-repeatable read").
+
+**REPEATABLE_READ** — a transaction sees a consistent snapshot as it was when the transaction started. Any reads of the same row within the transaction always return the same value, even if other transactions commit changes. This is the ideal isolation level for optimistic locking — the version column remains stable throughout the transaction, so the version check at commit time is reliable.
+
+**SERIALIZABLE** — the strongest isolation level. Transactions execute as if they were serial (one after another), with no interleaving. The database prevents not only non-repeatable reads but also **phantom reads** (when a new row matching a query appears because another transaction inserted it after your initial read). Serializable is what pessimistic locking effectively achieves for the locked rows.
+
+**The key connection:** Optimistic locking assumes REPEATABLE_READ isolation — the transaction sees a consistent snapshot, so the version check works reliably. If you used optimistic locking at READ_COMMITTED, you'd introduce lost-update anomalies: you read a value at T1, do work, then find the version changed at T3 for reasons you never observed. Pessimistic locking, by contrast, enforces SERIALIZABLE-like semantics for the locked rows — the lock prevents anyone else from reading or writing until you release it, eliminating non-repeatable reads and phantoms entirely.
+
+**Phantom reads and gap locks:** A phantom read occurs when you query rows matching a condition (e.g., `SELECT * FROM orders WHERE price > 100`), and another transaction inserts a row matching that condition. On a re-read, a new row appears. To prevent this at SERIALIZABLE isolation, databases use **gap locks** (locks on index gaps between rows) in addition to row locks. The database handles this automatically — you don't implement gap locks yourself — but it's valuable to know that pessimistic locking at the highest isolation level prevents phantoms, while optimistic locking at REPEATABLE_READ may allow them in edge cases.
+
+**In an interview, if asked:** "Optimistic locking relies on REPEATABLE_READ isolation so the version column stays stable throughout the transaction. Pessimistic locking effectively upgrades the isolation level to SERIALIZABLE for locked rows by preventing concurrent reads and writes entirely. The choice between the two is not just about conflict frequency, but also about what isolation level the use case requires."
+
+---
+
 ## 🎨 Visual — How Each Strategy Handles Two Concurrent Writers
 
 ```
@@ -243,6 +261,9 @@ public void bookSeatsWithPessimisticLock(Long busId, int count) {
 ### Q (Tier 2): "At what point does optimistic locking become worse than pessimistic, and how would you detect it?"
 > When the retry success rate drops below roughly 70% — meaning most attempts fail and retry — you're wasting CPU doing speculative work that gets thrown away. Detect it by tracking `OptimisticLockException` rate in your metrics. If you see a persistent spike on the same entity class during peak traffic (e.g., flash sale on a single inventory row), that's the signal to switch that specific entity to pessimistic locking or to a counter shard strategy. The key word is "specific entity" — most of your inventory rows are fine with optimistic; you switch only the hot one, not the entire system.
 
+### Q (Tier 2): "You said optimistic locking works at REPEATABLE_READ isolation, but what if the database is running at READ_COMMITTED by default?"
+> This is a critical gotcha. At READ_COMMITTED, you lose the guarantee that your version number stays stable. Between your initial read of `version=7` and your final write, another transaction could have updated the row to `version=8` — and you'd never see that intermediate change because READ_COMMITTED doesn't give you a consistent snapshot. When your `UPDATE ... WHERE version=7` fails, you'd retry, but this kind of isolation level mismatch can lead to subtle lost-update bugs. Best practice: if you're using optimistic locking, either (a) explicitly set the transaction isolation level to REPEATABLE_READ for the critical section, or (b) use pessimistic locking if your database defaults to READ_COMMITTED and you can't change it. Most modern ORMs (Hibernate) handle this by setting the isolation level automatically when you use `@Version`, but it's good to verify — check your database connection pool settings and transaction defaults to be sure.
+
 ---
 
 ## 🧾 TL;DR — One Interviewer-Ready Line
@@ -273,3 +294,4 @@ public void bookSeatsWithPessimisticLock(Long busId, int count) {
 | Date | Change |
 |---|---|
 | June 2026 | File created. Covers optimistic locking (@Version, Hibernate), pessimistic locking (SELECT FOR UPDATE, @Lock), deadlock prevention, when to use each. 8 Q&As (4 Tier 1 + 2 Tier 2 + 2 worked examples). |
+| June 23, 2026 | Added Section: "Isolation Levels and Their Role" — explains READ_COMMITTED, REPEATABLE_READ, SERIALIZABLE + how each interacts with optimistic vs pessimistic locking. Added new Tier 2 Q&A: "What if the database runs at READ_COMMITTED by default?" — critical gotcha for production systems. Total Q&As now 10 (4 Tier 1 + 3 Tier 2 + 3 worked/advanced). |

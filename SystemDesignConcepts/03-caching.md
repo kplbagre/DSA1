@@ -446,6 +446,7 @@ RANDOM                       → Evict a random key
 - **`02-rate-limiting.md`** — The KYC mapping table (API key → business entity) mentioned there should be cached in Redis. Cache invalidation on key rotation is a real operational concern.
 - **`06-distributed-locking.md`** — The stampede protection mutex uses Redis SETNX — the same primitive as distributed locking. The two concepts share the same Redis infrastructure.
 - **`07-cdc-outbox.md`** — Write-behind caching (cache writes, DB writes asynchronously) is related to the outbox pattern — both decouple the write path from the DB commit.
+- **`03-caching_advanced.md`** — For advanced patterns: cache warming (cold start prevention), tag-based invalidation for complex dependencies, negative caching (caching 404s), multi-level cache coherence (Pub/Sub invalidation across servers).
 
 ---
 
