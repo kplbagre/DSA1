@@ -31,7 +31,7 @@ Then pivot to Section 2.
 
 **Q: "Are we building OAuth/OIDC (industry standard) or a proprietary auth system?"**
 - Why ask: OAuth is battle-tested; proprietary auth is custom/risky
-- If OAuth/OIDC → use standard flows (Authorization Code, Client Credentials); libraries handle complexity
+- If OAuth/OIDC (OAuth 2.0 = the open standard for *delegated authorization* — "allow app X to act on your behalf without seeing your password"; OIDC = OpenID Connect, the identity layer built on top of OAuth that adds *authentication* — who you are, not just what you can do) → use standard flows (Authorization Code, Client Credentials); libraries handle complexity
 - If proprietary → design from scratch; higher security risk; not recommended at scale
 
 **Q: "What's the session/token strategy — stateless JWT or stateful session tokens?"**
@@ -46,15 +46,15 @@ Then pivot to Section 2.
 
 **Q: "What's the authorization model — simple RBAC (admin/user) or fine-grained (per-resource)?"**
 - Why ask: RBAC is simple; fine-grained is complex (ACL per document)
-- If RBAC → 5-10 roles; users have role; all resources visible to role
+- If RBAC (Role-Based Access Control — you assign users a role like "admin" or "viewer", and the role defines what actions are allowed; one lookup per request: "what role does this user have?") → 5-10 roles; users have role; all resources visible to role
 - If fine-grained → users have per-document permissions; complex queries
 
 **Q: "How many users, sessions, and concurrent login requests per second?"**
 - Why ask: Drives session store capacity, token generation throughput, auth service scaling
 
-**Q: "Do we need to support SSO (Single Sign-On) for enterprise customers?"**
+**Q: "Do we need to support SSO (Single Sign-On — one login grants access to multiple services; the user authenticates once with a central Identity Provider and all connected apps trust that session without asking for credentials again) for enterprise customers?"**
 - Why ask: SSO adds complexity (SAML, OpenID Connect with custom IdP)
-- If yes → need SAML 2.0 support or OIDC federation; customers use their corporate IdP
+- If yes → need SAML 2.0 support (SAML 2.0 = Security Assertion Markup Language, an XML-based open standard for exchanging authentication data between an Identity Provider like Okta/Azure AD and a Service Provider like DocuSign; the IdP sends a signed XML "assertion" proving who the user is) or OIDC federation; customers use their corporate IdP
 - If no → simpler (just username/password + optional MFA)
 
 ---
@@ -79,6 +79,27 @@ Then pivot to Section 2.
 - Durability: User credentials are encrypted; never plaintext in DB
 - Security: Passwords hashed with bcrypt; tokens signed with RSA; tokens expire (15 min access, 7 day refresh)
 - Compliance: Audit trail of logins (who, when, from where); GDPR (right to deletion = revoke all tokens)
+
+---
+
+## Section 3.5 — 🗂️ Core Entities (~2 minutes)
+
+> **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
+
+| Entity | What it represents | Storage |
+|---|---|---|
+| **User** | Account holder — email, bcrypt password hash, tenant, MFA config | PostgreSQL |
+| **Role** | Named permission bundle — e.g., `admin`, `editor`, `viewer`, `signer`; defines allowed actions | PostgreSQL |
+| **UserRole** | Join record assigning a Role to a User (many-to-many) | PostgreSQL |
+| **ResourcePermission** | Per-document ACL entry — which user has which permission on which specific document | PostgreSQL |
+| **TokenBlacklist** | Set of revoked JWT IDs (`jti`) — checked on every request to detect logged-out tokens | Redis (TTL matches token expiry) |
+| **AccessAuditLog** | Append-only record of every login, failed attempt, token issue, and access denial | PostgreSQL (append-only) |
+
+**Key relationships:**
+- A `User` has many `UserRoles` — roles apply system-wide (e.g., "this user is an editor")
+- A `User` can also have `ResourcePermissions` — per-document overrides (e.g., "viewer on doc X only")
+- Authorization check = "does this user's roles OR resource permissions allow this action on this resource?"
+- `TokenBlacklist` in Redis is the only way to invalidate a stateless JWT before it expires naturally; entries are auto-expired by TTL when the JWT would have expired anyway
 
 ---
 
@@ -380,8 +401,8 @@ public class JwtTokenProvider {
         Instant expiresAt = issuedAt.plus(15, ChronoUnit.MINUTES);
 
         // Header
-        JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.RS256)
-            .keyID("key-1")  // key rotation: point to the key version
+        JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.RS256)  // RS256: RSA signature + SHA-256 hash; the private key signs a SHA-256 fingerprint of the token header+payload; any service with the public key can verify it was us who signed it, without needing the private key
+            .keyID("key-1")  // kid (Key ID): tells the verifier which public key to use for this token; when you rotate keys, new tokens say "key-2", old tokens still say "key-1"; services fetch the matching public key from the JWKS endpoint and both keys work simultaneously during rotation
             .build();
 
         // Payload (claims)
@@ -393,7 +414,7 @@ public class JwtTokenProvider {
             .expirationTime(Date.from(expiresAt))
             .claim("roles", roles)  // custom claim: user's roles
             .claim("tenant_id", tenantId)  // custom claim: which tenant
-            .claim("jti", UUID.randomUUID().toString())  // unique token ID for revocation
+            .claim("jti", UUID.randomUUID().toString())  // jti (JWT ID): a unique identifier for this specific token; when a user logs out, you add their jti to the Redis blacklist; on every request, check "is this jti in the blacklist?" to detect revoked tokens even before expiry
             .build();
 
         // Sign with private key
@@ -470,7 +491,7 @@ Authorization determines what users can access. A bug here could expose document
 |---|---|---|
 | **Option A: Simple RBAC (admin/user roles)** | Simple; 1 DB lookup; fast (O(1)) | Can't handle per-document permissions (all admins see all docs) |
 | **Option B: Fine-grained ACL (per-resource)** | Precise; each user's permissions explicit | Complex queries; slower (O(N) per document if many users) |
-| **Option C: Attribute-Based Access Control (ABAC)** | Most flexible; policies on document attributes (status, owner, date) | Complex; slow; hard to debug |
+| **Option C: Attribute-Based Access Control (ABAC — instead of checking "what role does this user have?", it evaluates policies against attributes of the user, the resource, and the environment at request time; e.g., "allow if user.department == doc.department AND doc.status == 'draft' AND time is business hours"; extremely flexible but each access check runs a policy engine)** | Most flexible; policies on document attributes (status, owner, date) | Complex; slow; hard to debug |
 
 **Decision: Option B (RBAC + ACL).**
 
@@ -483,7 +504,7 @@ Because it balances simplicity (roles) with granularity (per-document permission
 CREATE TABLE users (
     id UUID PRIMARY KEY,
     email VARCHAR(255) NOT NULL UNIQUE,
-    password_hash VARCHAR(255),  -- bcrypt hash
+    password_hash VARCHAR(255),  -- bcrypt hash (bcrypt is a slow, salted password-hashing function; "slow by design" — it takes ~200ms to hash one password, making brute-force of a stolen DB impractical; "salted" means a random value is mixed in before hashing so two users with the same password get different hashes, defeating precomputed rainbow-table attacks)
     tenant_id UUID NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     
@@ -630,8 +651,8 @@ MFA prevents account takeover (common attack vector). At DocuSign scale (10M use
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Option A: Email OTP (One-Time Password)** | Simple; no app required; familiar to users | Slow (users wait for email); email can be delayed; unphishing-proof |
-| **Option B: Authenticator app (TOTP)** | Fast (code is instant); no email dependency; phishing-resistant | Requires app installation; users lose phone = locked out |
+| **Option A: Email OTP (One-Time Password)** | Simple; no app required; familiar to users | Slow (users wait for email); email can be delayed; phishable (attacker creates a fake login page, user types code there, attacker replays it in real-time) |
+| **Option B: Authenticator app (TOTP — Time-based One-Time Password: the app and server share a secret seed; both compute `HMAC(seed, current_30_second_window)` independently and compare; codes expire every 30 seconds; works offline)** | Fast (code is instant); no email dependency; phishing-resistant (codes are bound to the exact origin domain, a fake site gets a code that doesn't work on the real site) | Requires app installation; users lose phone = locked out |
 | **Option C: SMS OTP** | Fast; no app; high UX | Expensive (per-SMS cost); SMS can be intercepted (less secure) |
 
 **Decision: Option A + B (Email for free tier, authenticator app optional for high-security accounts).**
@@ -869,7 +890,7 @@ Auth is the first line of defense. A single bypass could expose 10M users' priva
 
 - **Mistake 1:** "Every request validates token by querying the session table in Postgres." → **Why it's wrong:** At 35K validations/sec, DB becomes bottleneck (typical capacity: 1-2K queries/sec). → **What to say instead:** "Stateless JWT: signature verification is CPU-bound (~1-2ms), not I/O. No DB lookup needed per request. Revocation via Redis blacklist (O(1) lookup)."
 
-- **Mistake 2:** "Store user passwords in plaintext or with simple hash (MD5)." → **Why it's wrong:** Password breach = 10M users compromised. Attackers can rainbow-table simple hashes. → **What to say instead:** "Hash with bcrypt (salted, slow by design ~200ms per hash). Never store plaintext. Even if DB is breached, passwords are useless."
+- **Mistake 2:** "Store user passwords in plaintext or with simple hash (MD5)." → **Why it's wrong:** Password breach = 10M users compromised. Attackers can rainbow-table (a rainbow table is a giant precomputed lookup of hash→password pairs; if you know the hash of "password123" from MD5 is `482c811da5d5b4bc6d497ffa98491e38`, you build a table of billions of such mappings offline; then a stolen DB of MD5 hashes is cracked in seconds by lookup; bcrypt's per-user salt makes each hash unique so no precomputed table can apply) simple hashes. → **What to say instead:** "Hash with bcrypt (salted, slow by design ~200ms per hash). Never store plaintext. Even if DB is breached, passwords are useless."
 
 - **Mistake 3:** "Access token lifetime is 7 days (same as refresh token)." → **Why it's wrong:** If access token is compromised, attacker has 7 days of access. Long-lived tokens are high-risk. → **What to say instead:** "Access token: 15 minutes (if stolen, window of vulnerability is small). Refresh token: 7 days (user doesn't re-login often). Refresh token is more closely guarded (not sent on every request)."
 

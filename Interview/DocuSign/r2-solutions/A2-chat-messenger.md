@@ -157,6 +157,25 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
+## Section 3.5 — 🗂️ Core Entities (~2 minutes)
+
+> **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
+
+| Entity | What it represents | Storage |
+|---|---|---|
+| **User** | Person using the app — profile, device tokens for push, connection state | PostgreSQL |
+| **Conversation** | A 1:1 or group thread — holds metadata (name, participant list, last message preview) | PostgreSQL |
+| **Message** | Individual text/media message within a conversation — the core data object | Cassandra (time-series) |
+| **Participant** | Join record connecting a User to a Conversation, with their last-read cursor | PostgreSQL |
+| **Presence** | User's current online/offline/last_seen status — ephemeral, not source-of-truth | Redis |
+
+**Key relationships:**
+- A `Conversation` has many `Participants` (many-to-many between User and Conversation via Participant)
+- A `Conversation` has many `Messages` (one-to-many; queried time-ordered by `(conversation_id, message_id)`)
+- `Presence` is ephemeral — rebuilt on reconnect; loss on crash is acceptable
+
+---
+
 ## Section 4 — 🔢 Scale Estimation (Minutes 5–10)
 
 **What to do:** Do envelope math out loud. These numbers justify every architecture choice you make in Section 6+. The interviewer wants to see your *thinking*, not just your conclusion.
@@ -260,7 +279,7 @@ If Redis shows Client B has no active connection:
 
 1. **Client A sends message:** WebSocket frame hits Connection Server A. The connection server writes the raw message to a Kafka topic (`messages`).
 2. **Message Service consumes:** Persists the message to Cassandra (partition = `conversation_id`, row = `message_id` TIMEUUID). Gets a durable message_id back.
-3. **Fan-out:** Message Service looks up Client B's current connection server in Redis. If found, sends delivery via gRPC to Connection Server B, which pushes over WebSocket. Atomically, sends a "sent" ACK back to Client A.
+3. **Fan-out:** Message Service looks up Client B's current connection server in Redis. If found, sends delivery via gRPC (Google Remote Procedure Call — a high-performance binary protocol used for internal service-to-service calls; ~5-10× faster than HTTP/JSON for the same payload because it uses compact binary encoding instead of text) to Connection Server B, which pushes over WebSocket. Atomically, sends a "sent" ACK back to Client A.
 4. **Offline delivery:** If Redis shows Client B has no active connection, the Push Notification Service sends an APNs/FCM notification. When Client B comes online, they sync unread messages from Cassandra by querying the last-seen cursor.
 5. **Delivery receipts:** Client B's device sends a "delivered" ACK over WebSocket on receipt; "read" ACK when the user opens the conversation. Each ACK flows back through Message Service, updates the `message_status` in Cassandra, and notifies Client A.
 
@@ -271,7 +290,7 @@ If Redis shows Client B has no active connection:
 - **Cassandra:** write-heavy, append-only access pattern (insert, never update in place for core messages), time-series queries ("last 50 messages for conversation X")
 - **Redis (routing):** maps `user_id → connection_server_id` — O(1) lookup for delivery routing
 - **Redis (presence):** maps `user_id → last_seen_epoch` with TTL; heartbeat from client keeps it alive
-- **Push Notification Service:** delegates to APNs/FCM for offline users; see `07-cdc-outbox.md` for at-least-once delivery pattern
+- **Push Notification Service:** delegates to APNs/FCM (APNs = Apple Push Notification service for iPhones; FCM = Firebase Cloud Messaging for Android devices — both are external gateways that deliver alerts to a device even when the app is closed) for offline users; see `07-cdc-outbox.md` for at-least-once delivery pattern
 
 ---
 
@@ -497,7 +516,7 @@ CREATE TABLE conversation_by_user (
     user_id         UUID,
     conversation_id UUID,
     last_read_id    TIMEUUID,    -- cursor: last message this user has read
-    unread_count    COUNTER,
+    unread_count    COUNTER,     -- Cassandra COUNTER: an atomic distributed increment type; multiple nodes can increment it concurrently without locks or race conditions
     joined_at       TIMESTAMP,
     PRIMARY KEY (user_id, conversation_id)
 );

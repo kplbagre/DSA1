@@ -79,7 +79,28 @@ Then pivot to Section 2 (clarifying questions).
 - Consistency: **Strong consistency required** — document metadata updates are immediately visible (no eventual consistency)
 - Durability: **Immutable audit trail** (downloads logged forever; no purge except via legal hold release)
 - Compliance: SOC 2, GDPR (data residency by user region), e-signature compliance (tamper-proof audit trail)
-- Encryption: at rest (SSE-S3 or KMS), in transit (HTTPS)
+- Encryption: at rest (SSE-S3 — Server-Side Encryption with S3-managed keys: AWS handles key generation and rotation automatically, sufficient for most compliance requirements; or KMS — AWS Key Management Service: you control the key lifecycle and can audit every encryption/decryption operation, meeting stricter compliance bars like BYOK), in transit (HTTPS)
+
+---
+
+## Section 3.5 — 🗂️ Core Entities (~2 minutes)
+
+> **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
+
+| Entity | What it represents | Storage |
+|---|---|---|
+| **Document** | Metadata record for a file — owner, name, type, size, S3 key, current version, soft-delete flag | PostgreSQL |
+| **DocumentVersion** | Immutable snapshot of each edit — S3 key, checksum, uploader, created_at; never updated | PostgreSQL |
+| **DocumentAccess** | Per-document ACL entry — which user has which permissions (read/write/delete) | PostgreSQL |
+| **LegalHold** | A compliance lock on a document — prevents deletion even if owner requests it | PostgreSQL |
+| **AuditLog** | Append-only record of every operation — upload, download, delete, permission change | PostgreSQL (append-only) |
+
+**Key relationships:**
+- A `Document` has many `DocumentVersions`; the latest version is the "current" one (one-to-many)
+- A `Document` has many `DocumentAccess` rows — one per authorized user (one-to-many ACL)
+- A `LegalHold` blocks `Document` deletion regardless of owner permissions
+- `AuditLog` rows are never deleted — even if the document is soft-deleted, its audit trail stays
+- **Important split:** file *bytes* live in S3; `Document` metadata lives in PostgreSQL — the two are joined by `s3_key`
 
 ---
 
@@ -96,7 +117,7 @@ Then pivot to Section 2 (clarifying questions).
 - Total: 50M docs × 5 MB = 250 TB
 - Versions: assume avg 2.5 versions per document → 125M document objects = 625 TB with history
 - Metadata DB: 50M documents × 1 KB metadata = 50 GB (fits in single Postgres instance)
-- Audit logs: 100M reads/day × 200 bytes/log = 20 TB/year (archive after 1 year; S3 Glacier for compliance)
+- Audit logs: 100M reads/day × 200 bytes/log = 20 TB/year (archive after 1 year; S3 Glacier for compliance — AWS cold storage tier: ~$0.004/GB/month vs $0.023/GB for S3 Standard, but retrieval takes 3-12 hours; ideal for compliance archives you almost never need to read)
 
 **Bandwidth:**
 - Inbound (uploads): 10K docs/day × 5 MB = 50 GB/day = 0.6 MB/sec
@@ -208,7 +229,7 @@ SUPPORTING INFRASTRUCTURE
 │  ┌────────────────────────────────────────────────────────┐ │
 │  │ • access_logs (download attempts)                      │ │
 │  │ • version_history (version changes, reverts)           │ │
-│  │ • S3 CloudTrail (S3 API calls, by AWS)                │ │
+│  │ • S3 CloudTrail (AWS service that auto-logs every S3 API call — uploads, downloads, deletions — a free audit trail of all storage operations requiring zero application code)          │ │
 │  │ • Archived to S3 Glacier after 1 year (compliance)    │ │
 │  └────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
@@ -236,8 +257,8 @@ KEY INVARIANT:
 2. API Server generates a unique S3 key: `docs/{owner_id}/{doc_id}/v1.pdf`
 3. **Option A (simple):** API server streams file to S3 directly (works for small files < 100 MB)
    - `s3Client.putObject(bucket, key, file.getInputStream(), metadata)`
-4. **Option B (multipart, resumable):** API initiates multipart upload, returns presigned URLs for each part; client uploads parts in parallel; client notifies API when done
-5. S3 returns ETag (checksum) confirming the upload
+4. **Option B (multipart upload, resumable):** An S3 feature that splits a large file into independently-uploadable chunks (e.g., 10 MB each); each chunk uploads in parallel; if one chunk fails, only that chunk is retried — not the whole file. API initiates the multipart upload, returns presigned URLs for each part; client uploads parts in parallel; client sends a "complete" request to S3 when all parts are done
+5. S3 returns ETag (entity tag — a checksum S3 computes for the uploaded object; compare it against your locally-computed checksum to confirm the bytes arrived intact and nothing was corrupted in transit)
 6. API inserts metadata row into `documents` table:
    ```sql
    INSERT INTO documents (id, owner_id, s3_key, version, is_latest, status, created_at)
@@ -253,7 +274,7 @@ KEY INVARIANT:
    ```
 3. If access denied → 403 Forbidden
 4. If deleted (status = 'DELETED') → check legal_holds table; if legal hold exists, allow access; else 404
-5. **Generate pre-signed URL** (expires in 15 minutes):
+5. **Generate pre-signed URL** (a time-limited URL with AWS credentials embedded as a cryptographic signature in the query string; the client uses it to download directly from S3 with no app server involvement; anyone with the URL can download for up to 15 minutes, after which the signature expires and S3 rejects it):
    ```java
    String presignedUrl = s3Client.generatePresignedUrl(bucket, s3_key, expiryTime);
    ```

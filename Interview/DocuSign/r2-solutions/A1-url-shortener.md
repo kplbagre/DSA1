@@ -124,7 +124,7 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 **Functional Requirements (what the system does):**
 - Users can shorten a long URL and receive a 6–8 character short code (e.g., `bit.ly/abc123`)
-- Users can redirect to the original URL by accessing the short code (HTTP 301/302 redirect)
+- Users can redirect to the original URL by accessing the short code (HTTP 301/302 redirect — **301 = permanent redirect**: browser caches it and skips the server on future clicks from the same user; **302 = temporary redirect**: browser re-asks the server every time. URL shorteners often use **302** to keep analytics working, because a 301 means browsers bypass the server entirely, so click counts are never recorded)
 - Short codes are globally unique — no collisions
 - (Implicit) Short codes are not guessable — random or distributed generation, not sequential
 
@@ -143,6 +143,23 @@ Then immediately go to Section 2. Do NOT start drawing.
 - Availability: 99.99% (< 52 minutes downtime/year)
 - Consistency: short code uniqueness is strict (no duplicates permitted); redirect target is eventually consistent (acceptable)
 - Durability: shortened URL mappings are durable — must survive server restarts
+
+---
+
+## Section 3.5 — 🗂️ Core Entities (~2 minutes)
+
+> **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
+
+| Entity | What it represents | Storage |
+|---|---|---|
+| **ShortURL** | The core record — maps a `short_code` to an `original_url`, with optional TTL and owner | PostgreSQL |
+| **User** | Creator of a short link (optional; anonymous shortening is also allowed) | PostgreSQL |
+| **ClickEvent** | One record per redirect — timestamp, IP, user agent, referrer (analytics trail) | Cassandra / analytics DB |
+
+**Key relationships:**
+- A `User` can create many `ShortURLs` (one-to-many)
+- A `ShortURL` generates many `ClickEvents` over its lifetime (one-to-many)
+- The hot path (redirect) only touches `ShortURL` — via Redis cache; DB is fallback only
 
 ---
 
@@ -237,7 +254,7 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 **Data flow walkthrough (say this out loud):**
 
-1. **Shorten request:** Client POST /shorten with { "long_url": "..." }. API server generates a UUID v4. Encodes it as base62 (6 chars covers ~68B permutations — no collision risk). Writes mapping (short_code → original_url) to Postgres. Populates Redis cache with 1-hour TTL. Returns the short_code.
+1. **Shorten request:** Client POST /shorten with { "long_url": "..." }. API server generates a UUID v4 (Universally Unique Identifier version 4 — a randomly generated 128-bit number; "v4" means the bits are fully random, not derived from a MAC address or clock; any server generates one independently with no central authority, so zero bottleneck). Encodes it as base62 (6 chars covers ~68B permutations — no collision risk). Writes mapping (short_code → original_url) to Postgres. Populates Redis cache with 1-hour TTL. Returns the short_code.
 
 2. **Redirect request:** Client GET /{shortcode}. API server checks Redis first (likely hit, ~1-5ms). On miss, queries Postgres (10-20ms). Populates Redis. Returns HTTP 301 Location header pointing to original_url. Client's browser follows the redirect automatically.
 
@@ -276,7 +293,7 @@ The entire system depends on short codes being globally unique. A collision = tw
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Sequential counter (Redis INCR)** | Deterministic, no collision risk, short codes are sequential (1, 2, 3...) | Bottleneck: single Redis instance, max ~500K increments/sec. At 33 shorten/sec it's fine, but doesn't scale. Also, sequential codes are guessable (security risk). |
+| **Sequential counter (Redis INCR)** (Redis INCR atomically adds 1 to a named counter — every caller gets the next unique integer, like a global ticket dispenser; no two servers ever get the same number even under heavy concurrency) | Deterministic, no collision risk, short codes are sequential (1, 2, 3...) | Bottleneck: single Redis instance, max ~500K increments/sec. At 33 shorten/sec it's fine, but doesn't scale to very high throughput. Also, sequential codes are guessable (security risk). |
 | **UUID v4 → base62 encode** | No collision risk (2^122 space is effectively infinite). Stateless (no central counter). Codes are random (not guessable). | Slightly longer codes (UUID 36 bytes → base62 ~22 chars; could compress to ~13 chars with URL-safe base64). Requires conversion logic. |
 | **Zookeeper/Snowflake-style distributed ID** | Scalable, unique, not guessable. Handles multi-region. | Complex; requires coordination service. Overkill for 33 writes/sec. |
 
@@ -333,7 +350,7 @@ Base62 (0-9, a-z, A-Z) avoids special characters (+, /, =) that require URL enco
 | Option | Pros | Cons |
 |---|---|---|
 | **No cache** | Simplest, no staleness. | DB can't handle 3,300 reads/sec. Latency > 100ms. |
-| **Cache-aside (lazy loading)** | Only cache hot URLs. Memory-efficient. | Writes latency spike on cache miss. Need TTL + invalidation policy. |
+| **Cache-aside (lazy loading)** (the app checks cache first; on a miss, reads from DB and writes the result back into cache before returning it; the application manually manages the cache — there is no automatic sync between cache and DB) | Only cache hot URLs. Memory-efficient. | First-access latency spike on cache miss. Need TTL + invalidation policy. |
 | **Read-through cache** | Hides latency. Client always hits cache layer. | Requires cache-aware data access layer. More code. |
 | **Cache warming (pre-load top URLs)** | Reduces cold misses. | Need background job to track "top" URLs. Doesn't help new URLs. |
 
@@ -353,7 +370,7 @@ Because most URLs are written once, read many times. 1 hour covers bursts of con
 ```
 
 **Memory math:**
-- Assume 20% of URLs get 80% of reads (Zipf distribution)
+- Assume 20% of URLs get 80% of reads (Zipf distribution — the 80/20 phenomenon applied to access patterns: a tiny fraction of items gets the vast majority of traffic; a handful of trending short links get millions of hits while most URLs are rarely clicked after creation)
 - Per year: 1M URLs/day × 365 = 365M total URLs
 - 20% = 73M URLs
 - 73M × 500 bytes = 36.5 GB (if all are cached)
@@ -379,7 +396,7 @@ CREATE TABLE urls (
 ```
 
 **Key schema decisions:**
-- **Primary key = short_code:** Direct lookup by short_code is the critical path. O(1) hash or B-tree lookup. Alternative (auto-increment ID) would require secondary index on short_code, adding latency.
+- **Primary key = short_code:** Direct lookup by short_code is the critical path. O(1) hash or B-tree lookup (B-tree = the default index structure in PostgreSQL; a self-balancing sorted tree that finds any row in O(log N) comparisons — with 365M rows that's ~28 comparisons; hash lookup is O(1) but only supports exact-match queries, not range scans). Alternative (auto-increment ID as PK) would require a secondary index on short_code for redirect lookups, adding an extra index hop per query.
 - **original_url as TEXT:** URLs can be 2KB+. VARCHAR(255) is insufficient.
 - **No user_id:** Assume public API (no authentication). If users were tracked, add user_id + index (user_id, created_at) for "my shortened URLs" queries.
 - **expiry_at nullable:** Some URLs never expire; others have TTL. Nullable allows both patterns without schema complexity.

@@ -76,7 +76,27 @@ Then immediately pivot to Section 2 (clarifying questions).
 - Durability: Notifications are queued durably (SQS/Kafka) — no loss even if service restarts
 - Multi-channel coordination: Fan-out to all configured channels in parallel; fail one channel without blocking others
 - Rate limiting: Max 100 notifications per user per hour (avoid spam)
-- Compliance: GDPR (user can request deletion of notification history), CAN-SPAM (unsubscribe links in emails)
+- Compliance: GDPR (user can request deletion of notification history), CAN-SPAM (the US law requiring commercial emails to include an unsubscribe link and honest sender address; violations risk fines and email provider blacklisting)
+
+---
+
+## Section 3.5 — 🗂️ Core Entities (~2 minutes)
+
+> **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
+
+| Entity | What it represents | Storage |
+|---|---|---|
+| **NotificationRequest** | An incoming request to send a notification — event type, recipient, payload, source service | Kafka / outbox (ephemeral) |
+| **NotificationHistory** | Permanent record of every sent notification — channel, status, timestamp, retry count | PostgreSQL |
+| **UserPreference** | User's opt-in/out settings per channel and do-not-disturb hours | PostgreSQL |
+| **Outbox** | DB-side event queue for guaranteed-delivery pattern — written in the same transaction as the triggering event | PostgreSQL (outbox pattern) |
+| **IdempotencyKey** | Deduplication guard — prevents sending the same notification twice on retry | Redis (short TTL) / PostgreSQL |
+
+**Key relationships:**
+- An upstream event creates a `NotificationRequest` → fan-out to each channel produces one `NotificationHistory` row per channel
+- `UserPreference` is checked before dispatch — if user opted out of email, skip the email channel
+- `Outbox` ensures the event is not lost if the service crashes between receiving the request and publishing to Kafka (dual-write problem solved)
+- `IdempotencyKey` is indexed on `(user_id, event_id, channel)` — the same event_id is never delivered twice to the same user on the same channel
 
 ---
 
@@ -250,9 +270,9 @@ KEY INVARIANT:
 
 **Why each component:**
 - **Kafka (partitioned by user_id)**: Guarantees ordering per user; prevents race conditions; scales to 35K msgs/sec
-- **Outbox pattern**: Atomic DB write + event publish; prevents lost notifications (dual-write problem solved)
+- **Outbox pattern**: Atomic DB write + event publish; prevents lost notifications (dual-write problem — the risk that writing to two systems, DB and Kafka, can have one succeed while the other fails, leaving them permanently inconsistent; the outbox moves both writes into one DB transaction, so they're atomic)
 - **Fan-out service**: Normalizes one incoming event to N channels; fan-out logic is centralized
-- **SQS queues** (per-channel): Decouples notification ingestion from delivery; each channel scales independently
+- **SQS queues** (SQS = AWS Simple Queue Service — a managed, durable message queue; auto-scales, handles retries, supports visibility timeouts so a message is hidden from other consumers while one worker processes it; per-channel): Decouples notification ingestion from delivery; each channel scales independently
 - **Redis cache**: Rate limiting (token bucket), preferences lookup (hot), idempotency keys (fast dedup)
 - **Postgres**: Notification history (audit/compliance), preferences storage, idempotency table (exactly-once guarantees)
 - **DLQ**: Failed notifications don't get lost; ops can manually retry after investigating root cause
@@ -524,7 +544,7 @@ At 35K notifs/sec, you're making 35K API calls per second to SendGrid, Twilio, F
 | Option | Pros | Cons |
 |---|---|---|
 | **Option A: No retry** (send once, fail silently) | Simplest | Loses notifications on transient failures (unacceptable) |
-| **Option B: Fixed retry** (retry N times at fixed interval) | Simple | Thundering herd: all failed requests retry at same time, overwhelming the provider |
+| **Option B: Fixed retry** (retry N times at fixed interval) | Simple | Thundering herd: when all failed requests retry at the exact same fixed interval, they simultaneously hammer the provider the moment it starts recovering — often causing it to fail again in a cycle |
 | **Option C: Exponential backoff + jitter** (1s, 2s, 4s, 8s, 16s, 32s, 64s, + random jitter) | Smooth retry pattern; spreads load over time; recovers from transients | Slightly more complex |
 | **Option D: Adaptive retry** (watch provider response codes, adjust backoff dynamically) | Optimal for provider health | Overkill; too complex for this problem |
 
@@ -623,7 +643,7 @@ public class RetryableEmailDelivery {
 
 ### Key Design Decisions
 
-- **Service-to-service auth:** POST `/v1/notifications` is internal only (called by Document Service, Order Service, etc.). Protect with API key or mTLS.
+- **Service-to-service auth:** POST `/v1/notifications` is internal only (called by Document Service, Order Service, etc.). Protect with API key or mTLS (mutual TLS — both client AND server present certificates to authenticate each other; unlike normal HTTPS where only the server has a cert; stronger than API keys because identity is cryptographically proven, not just a secret string).
 - **Pagination:** GET notifications uses cursor-based pagination (keyset pagination by `created_at DESC, id DESC`) to handle millions of notifications per user.
 - **Quiet hours:** User can specify "don't send notifications between 10 PM and 8 AM." Fan-out service checks this before enqueuing.
 - **Rate limiting:** Global per-tenant, per-user (100 notifs/hour). Excess notifications are dropped silently (no error to caller).

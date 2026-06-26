@@ -158,6 +158,27 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
+## Section 3.5 — 🗂️ Core Entities (~2 minutes)
+
+> **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
+
+| Entity | What it represents | Storage |
+|---|---|---|
+| **Employee** | The person submitting expenses — department, role, manager relationship | PostgreSQL |
+| **ExpenseReport** | A grouped submission of multiple expenses for one period/trip — the main workflow unit | PostgreSQL |
+| **LineItem** | One individual expense within a report — amount, category, receipt attachment | PostgreSQL |
+| **Approval** | Decision record — who approved/rejected, when, and with what comment | PostgreSQL |
+| **ExpensePolicy** | Business rule — spending limits per category per employee tier | PostgreSQL |
+| **AuditLog** | Immutable record of every state change for compliance — never updated, only appended | PostgreSQL (append-only) |
+
+**Key relationships:**
+- An `Employee` submits many `ExpenseReports` (one-to-many)
+- An `ExpenseReport` contains many `LineItems` (one-to-many)
+- An `ExpenseReport` has a chain of `Approvals` as it moves through the workflow (one-to-many)
+- `ExpensePolicy` is looked up by `(department, category)` at submission time to validate amounts
+
+---
+
 ## Section 4 — 🔢 Scale Estimation (Minutes 5–10)
 
 **What to do:** Do envelope math out loud. These numbers justify every architecture choice you make in Section 6+. The interviewer wants to see your *thinking*, not just your conclusion.
@@ -315,7 +336,7 @@ Business rules (employee can spend max $50 on meals) are the core of the system.
 |---|---|---|---|
 | **Hardcoded in app** | Limits are constants in code (MEAL_LIMIT = 50) | Fast (no DB lookup) | Hard to modify; requires code redeploy |
 | **Rules table** | limits table: employee_type, category, limit_amount. App queries before accepting expense. | Flexible (change limits without redeploy) | DB lookup latency; need caching |
-| **Validation engine** | Separate service that evaluates rules (DroolsEngine, etc.) | Highly extensible | Overkill for this scale; adds complexity |
+| **Validation engine** | Separate service that evaluates rules (e.g., Drools — a Java-based rules engine that lets you define business rules in declarative rule files, evaluated at runtime without code redeployment; powerful but complex) | Highly extensible | Overkill for this scale; adds complexity |
 
 **Decision: Rules table with caching**
 Because business rules change frequently (company adjusts meal limits) and shouldn't require code redeployment. Cache in application memory (invalidate cache on rule changes).
@@ -465,7 +486,7 @@ CREATE TABLE expense_reports (
     title           VARCHAR(255),
     period          VARCHAR(7),   -- YYYY-MM
     approval_state  VARCHAR(20) CHECK (approval_state IN ('draft', 'submitted', 'manager_approved', 'finance_approved', 'reimbursed', 'rejected')),
-    total_amount    DECIMAL(10, 2) GENERATED AS (SELECT SUM(amount) FROM expense_line_items WHERE report_id = id),  -- computed
+    total_amount    DECIMAL(10, 2) GENERATED AS (SELECT SUM(amount) FROM expense_line_items WHERE report_id = id),  -- computed column: DB calculates this value automatically from the expression; you never insert or update it manually — the DB derives it fresh on every read
     created_at      TIMESTAMP DEFAULT NOW(),
     updated_at      TIMESTAMP DEFAULT NOW(),
     submitted_at    TIMESTAMP,
@@ -475,7 +496,7 @@ CREATE TABLE expense_reports (
 -- Expense Line Items
 CREATE TABLE expense_line_items (
     id              UUID PRIMARY KEY,
-    report_id       UUID NOT NULL REFERENCES expense_reports(id) ON DELETE CASCADE,
+    report_id       UUID NOT NULL REFERENCES expense_reports(id) ON DELETE CASCADE,  -- ON DELETE CASCADE: if the parent expense_report row is deleted, all its child line_item rows are auto-deleted; without this, deleting a report would leave orphaned line items with no parent
     date            DATE NOT NULL,
     category        VARCHAR(20),  -- meals, flights, hotels, transport
     amount          DECIMAL(10, 2) NOT NULL,
@@ -500,7 +521,7 @@ CREATE TABLE approvals (
 
 -- Audit Log
 CREATE TABLE audit_log (
-    id              SERIAL PRIMARY KEY,
+    id              SERIAL PRIMARY KEY,  -- SERIAL: PostgreSQL auto-increment; equivalent to INTEGER NOT NULL DEFAULT nextval(); each new row gets the next sequential integer automatically
     resource_type   VARCHAR(50),
     resource_id     UUID,
     action          VARCHAR(20),

@@ -34,14 +34,14 @@ Then pivot to Section 2.
 - If full-text → need Elasticsearch + OCR for PDFs (expensive); limited to excerpts
 - If metadata + title/snippet → simpler; metadata DB + search index
 
-**Q: "What's the ranking priority — relevance score (TF-IDF), recency (newer first), or popularity (most viewed)?"**
+**Q: "What's the ranking priority — relevance score (TF-IDF — Term Frequency × Inverse Document Frequency: how often the term appears in *this* doc, divided by how commonly it appears across *all* docs; rare words that appear often in a doc rank highest), recency (newer first), or popularity (most viewed)?"**
 - Why ask: Ranking algorithm drives index schema and query complexity
 - If relevance → need tf-idf scoring; ranked queries slower
 - If recency → simple date sort; very fast
 - If mixed → need multi-field scoring; compute-heavy
 
 **Q: "Do we need autocomplete suggestions (prefix matching) as a separate feature?"**
-- Why ask: Autocomplete requires a trie or prefix index; adds latency/complexity
+- Why ask: Autocomplete requires a trie (a tree where each node is one character of a word; traversing "c→o→n→t→r" leads directly to all words starting with "contr"; O(prefix-length) lookup with no wasted comparisons) or prefix index; adds latency/complexity
 - If yes → separate trie structure; 10ms latency for 100M suggestions
 - If no → simple keyword search only
 
@@ -78,6 +78,25 @@ Then pivot to Section 2.
 - Consistency: **Eventual consistency acceptable** (search index lag ~1-2 seconds behind document creation)
 - Durability: Search index is derived (not source of truth); can be rebuilt from metadata DB
 - Index freshness: New/updated documents searchable within 5 seconds
+
+---
+
+## Section 3.5 — 🗂️ Core Entities (~2 minutes)
+
+> **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
+
+| Entity | What it represents | Storage |
+|---|---|---|
+| **Document** (metadata) | Title, snippet, author, type, tenant, created_at — what gets indexed; NOT the file bytes | PostgreSQL (source of truth) |
+| **SearchIndex** | Inverted index of all terms across all documents — derived from Document metadata | Elasticsearch (derived, rebuildable) |
+| **AutocompleteTrie** | Prefix → top-N completions scored by popularity — e.g., `trie:contr → ["contract", "contractor"]` | Redis sorted sets (cached, TTL-based) |
+| **SearchQuery** (analytics) | Log of queries, clicked results, zero-result searches — used for ranking feedback and relevance tuning | Analytics DB / S3 (write-only) |
+
+**Key relationships:**
+- `Document` in PostgreSQL is the source of truth; `SearchIndex` in Elasticsearch is a derived copy (eventual consistency ~1-2s lag is acceptable)
+- When a `Document` is created or updated → Kafka event → Indexing Processor updates `SearchIndex`
+- `AutocompleteTrie` is built from `SearchIndex` term aggregations and cached in Redis — rebuilt on TTL expiry
+- **Critical**: if Elasticsearch is corrupted or lost, it can be fully rebuilt by re-indexing all rows from PostgreSQL; PostgreSQL is never replaced by Elasticsearch
 
 ---
 
@@ -250,7 +269,7 @@ KEY INVARIANT:
 1. Document Service saves doc to Postgres
 2. Publishes to Kafka `documents.indexed` topic (outbox pattern)
 3. Indexing Processor consumes: extracts title, snippet, metadata
-4. Builds inverted index: `{"contract": [doc-1, doc-5, doc-42], "nda": [doc-1, doc-3]}`
+4. Builds inverted index (a lookup table that maps each word → the list of documents containing it; think of it as the index at the back of a textbook — instead of reading every page to find "contract", you flip to "contract" and get the exact page list instantly): `{"contract": [doc-1, doc-5, doc-42], "nda": [doc-1, doc-3]}`
 5. Sends to Elasticsearch (1-2 second lag acceptable)
 6. Elasticsearch stores in appropriate shard (based on doc_id hash)
 
@@ -259,14 +278,14 @@ KEY INVARIANT:
 2. API checks Redis cache (key = "search:contract:tenant123:alice:2026-01-01")
 3. Cache hit (80% baseline) → return cached results (< 5ms latency)
 4. Cache miss → query Elasticsearch (BM25 scoring)
-5. Elasticsearch queries all 50 shards in parallel (scatter-gather)
+5. Elasticsearch queries all 50 shards in parallel (scatter-gather — the coordinating node "scatters" the query to every shard simultaneously, waits for each to return its top-N results, then "gathers" and merges them into the final ranked list)
 6. Shards return top 10 results each, coordinating node merges + re-ranks
 7. Cache results in Redis (TTL = 5 minutes)
 8. Return to client with cursor for pagination
 
 **Flow 3 — Autocomplete:**
 1. User types "contr"
-2. API hits Redis trie: `ZRANGE trie:contr 0 10` (top 10 suggestions by popularity)
+2. API hits Redis trie: `ZRANGE trie:contr 0 10` (ZRANGE = Redis command that returns elements from a sorted set by rank; `trie:contr` is the key for all words starting with "contr", each scored by popularity; `0 10` = get the top 11 elements by rank; effectively "give me the 10 most popular completions of this prefix")
 3. Return instantly (< 50ms)
 4. If trie cache expired, rebuild from Elasticsearch `terms` aggregation (slow, 200ms)
 

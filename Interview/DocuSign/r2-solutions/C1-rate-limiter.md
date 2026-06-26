@@ -147,6 +147,26 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
+## Section 3.5 — 🗂️ Core Entities (~2 minutes)
+
+> **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
+
+> **Note:** A rate limiter is mostly middleware, not a data-heavy domain — the key "entities" are the config rules and ephemeral counters, not persisted business objects.
+
+| Entity | What it represents | Storage |
+|---|---|---|
+| **APIClient** | The caller being rate limited — identified by API key, IP, or user ID | PostgreSQL (config) |
+| **RateLimitPolicy** | The rule applied to a tier — e.g., "standard = 1,000 req/min, premium = 10,000 req/min" | PostgreSQL / Redis config |
+| **RateLimitCounter** | Ephemeral rolling count of requests for a given key in the current window | Redis (TTL-based, never persisted) |
+| **ViolationLog** | Optional: record of rate limit breaches for abuse detection and billing disputes | PostgreSQL / append-only log |
+
+**Key relationships:**
+- An `APIClient` has one `RateLimitPolicy` (tier assignment)
+- A `RateLimitCounter` is scoped to `(api_key, window_timestamp)` — dies when TTL expires
+- `ViolationLog` is write-only (append); never updated, only queried for analytics
+
+---
+
 ## Section 4 — 🔢 Scale Estimation (Minutes 5–10)
 
 **What to do:** Do envelope math out loud. These numbers justify every architecture choice you make in Section 6+. The interviewer wants to see your *thinking*, not just your conclusion.
@@ -189,7 +209,7 @@ Then immediately go to Section 2. Do NOT start drawing.
 | "10M API keys instead of 100K" | Shard Redis cluster by key hash (consistent hashing); each shard holds ~10% of keys. Route rate limit decision to shard based on hash(api_key). | 10M keys × 100 bytes = 1 GB storage. Single Redis instance can hold it, but 350K requests/sec to a single Redis bottlenecks. Sharding distributes load. |
 | "IP-based rate limiting, not API-key-based" | Per-IP counters; IP extracted from request headers or socket. Whitelist trusted proxies. Add logic to detect NAT ranges. | IP is simpler (no auth required) but fails when multiple users behind same proxy. Need proxy detection to avoid false collisions. |
 | "Eventual consistency OK (allow overages temporarily)" | Local in-memory counters per server; async sync to Redis every 10 seconds. Requests don't hit Redis on every call. | Strong consistency requires synchronous writes to Redis (latency cost). Eventual consistency allows local counters + periodic aggregation. Overages are temporary (until next sync). |
-| "Whitelist / blacklist per pattern" | Add pattern matcher: if request matches pattern X, bypass rate limiter. Store patterns in Redis with fast lookup (bloom filter or trie). | Whitelisting specific clients (by IP, user agent, API endpoint) prevents false blocks. Bloom filter gives O(1) lookup without false negatives. |
+| "Whitelist / blacklist per pattern" | Add pattern matcher: if request matches pattern X, bypass rate limiter. Store patterns in Redis with fast lookup (bloom filter — a probabilistic O(1) data structure that answers "is this item in the set?"; has a small false positive rate but zero false negatives — perfect for whitelisting trusted IPs; or trie — a tree where each node is one character, enabling O(prefix-length) URL pattern matching). | Whitelisting specific clients (by IP, user agent, API endpoint) prevents false blocks. Bloom filter gives O(1) lookup without false negatives. |
 | "Stricter limits on free tier (10 req/min instead of 100)" | Fetch user tier from cache/DB; apply corresponding limit. Add penalty: if user exceeds free tier limit, throttle for 1 hour. | Tiering encourages paid upgrades. Penalties deter abuse. Storage cost for tier metadata is negligible. |
 
 ---
@@ -549,7 +569,7 @@ quota:api_key_12345 → { tier: "standard", limit: 1000, burst: 100 }
 > Good catch. This is the fixed-window edge case. At the boundary, the counter resets. A user *could* send 1000 requests in the last second of minute 1, then 1000 in the first second of minute 2, exceeding the minute limit. To prevent: implement a sliding window by tracking requests in multiple windows (current + last window) and enforcing aggregate limit. Alternatively, use a longer TTL on the counter (e.g., 120 seconds) to overlap windows. In an interview: "I'd use a sliding window approach: track the last 60 seconds explicitly, not just the current minute boundary. This prevents boundary abuse."
 
 **Q: "The Redis cluster is sharded by api_key hash. But what if one key is heavily abused (attacker uses 10,000 requests/sec with one key) — does it overwhelm a single shard?"**
-> Yes. A single Redis shard would see 10,000 requests/sec from one key, which is feasible (500K max), but it monopolizes that shard's capacity. To prevent: (A) per-key rate limiting (my design does this — 1000 req/min per key), (B) add per-IP or per-origin limits on top (detect abuse pattern), (C) implement circuit breakers (if a key consistently hits limits, block it for 1 hour). In an interview: "Per-key quotas naturally prevent single-key abuse. If a key tries 10,000 req/sec, after 1000 requests it's rejected. The attacker must use many keys, which spreads the load across shards."
+> Yes. A single Redis shard would see 10,000 requests/sec from one key, which is feasible (500K max), but it monopolizes that shard's capacity. To prevent: (A) per-key rate limiting (my design does this — 1000 req/min per key), (B) add per-IP or per-origin limits on top (detect abuse pattern), (C) implement circuit breakers (a pattern where after N consecutive failures or limit violations, you "trip the breaker" and reject all requests from that key for a cooldown period — like a real circuit breaker cutting power to protect a circuit; prevents repeated abuse from burning Redis capacity on hopeless requests). In an interview: "Per-key quotas naturally prevent single-key abuse. If a key tries 10,000 req/sec, after 1000 requests it's rejected. The attacker must use many keys, which spreads the load across shards."
 
 ### Cross-Concept Probe (Tier 3 — separates senior candidates)
 
@@ -572,7 +592,7 @@ quota:api_key_12345 → { tier: "standard", limit: 1000, burst: 100 }
 
 - **Mistake 4:** Designing for strong consistency but not mentioning what happens if Redis is down → **Why wrong:** You sound like you didn't think about failure modes. **Say instead:** "Strong consistency requires Redis. If Redis fails, I fall back to local in-memory counters (approximate fairness, ~5-10% temporary overages). When Redis recovers, local state syncs back."
 
-- **Mistake 5:** Not distinguishing between different "rate limiting" use cases (API quotas, DDoS protection, leaky bucket backpressure) → **Why wrong:** These require different algorithms. You sound like you have one hammer for all nails. **Say instead:** "I'm assuming rate limiting for API quotas (fair distribution of access). For DDoS protection, I'd use token bucket at the ingress (network level) to drop packets before reaching the app. For backpressure, I'd use a leaky bucket + queue."
+- **Mistake 5:** Not distinguishing between different "rate limiting" use cases (API quotas, DDoS protection, leaky bucket backpressure) → **Why wrong:** These require different algorithms. You sound like you have one hammer for all nails. **Say instead:** "I'm assuming rate limiting for API quotas (fair distribution of access). For DDoS protection, I'd use token bucket at the ingress (network level) to drop packets before reaching the app. For backpressure, I'd use a leaky bucket (requests enter a queue at any rate but drain at a fixed constant rate, like water through a hole at the bottom — spikes smooth out; unlike token bucket, excess requests queue rather than get dropped immediately) + a worker pool processing at the drain rate."
 
 ---
 

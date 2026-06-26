@@ -34,7 +34,7 @@ Then pivot immediately to Section 2 (clarifying questions). Do NOT start drawing
 - If sequential → workflow engine with role-based approval (expensive but common in enterprises)
 - If parallel → simpler; just track who has signed and who hasn't
 
-**Q: "Who generates and manages the signing keys — the user (BYOK), or DocuSign (we generate and hold)?"**
+**Q: "Who generates and manages the signing keys — the user (BYOK — Bring Your Own Key: the user generates their own RSA key pair offline and uploads only the public key; DocuSign never sees the private key), or DocuSign (we generate, hold, and sign on behalf of the user)?"**
 - Why ask: Key management at scale is massive. Self-signed certs = each user's RSA key pair. Hosted = DocuSign manages a CA.
 - If BYOK → complexity jumps; you must validate certificate chains at signing time
 - If hosted → you control the lifecycle, easier, but higher security responsibility
@@ -78,7 +78,27 @@ Then pivot immediately to Section 2 (clarifying questions). Do NOT start drawing
 - Consistency: **Strong consistency required** — once a document is signed, that fact cannot be contradicted; signatures are append-only (no deletes or edits)
 - Durability: Audit trail is immutable forever (legal requirement for 7+ years)
 - Multi-tenant: DocuSign serves enterprise customers; strict data isolation required (customer A can't see customer B's docs)
-- Legal compliance: SOC 2, GDPR, e-signature compliance (e.g., ESIGN Act in US)
+- Legal compliance: SOC 2, GDPR, e-signature compliance (e.g., ESIGN Act — the US Electronic Signatures in Global and National Commerce Act; the federal law that gives electronic signatures the same legal standing as handwritten "wet ink" signatures in commercial transactions)
+
+---
+
+## Section 3.5 — 🗂️ Core Entities (~2 minutes)
+
+> **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
+
+| Entity | What it represents | Storage |
+|---|---|---|
+| **Document** | The file requiring signatures — metadata (title, owner, tenant), status, S3 reference | PostgreSQL |
+| **SigningSession** | One complete signing workflow for a document — tracks all signers, order, overall status | PostgreSQL |
+| **Signer** | A participant in a signing session — their role, signing status, timestamp when they signed | PostgreSQL |
+| **UserCertificate** | User's RSA public key + certificate chain — used to verify their signature is genuine | PostgreSQL |
+| **AuditEvent** | Cryptographically tamper-proof record of every action — signed, viewed, rejected, webhook sent | PostgreSQL (append-only) |
+
+**Key relationships:**
+- A `Document` has one active `SigningSession` (one-to-one; could have future re-sign sessions)
+- A `SigningSession` has many `Signers` — sequential or parallel depending on config (one-to-many)
+- Each `Signer` action creates an `AuditEvent` — this is the legal proof of non-repudiation
+- `UserCertificate` is looked up during signature verification to confirm the key belonged to that user at signing time
 
 ---
 
@@ -238,7 +258,7 @@ This is where the system's legal binding and trust come from. A signature verifi
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Option A: DocuSign-hosted CA** (we generate user RSA key pairs, store private keys in HSM, sign on user's behalf) | Seamless UX; no BYOK complexity; we control the entire cert lifecycle | High security risk (private keys at rest); users don't own their signing identity; auditors question "non-repudiation" (who actually signed?) |
+| **Option A: DocuSign-hosted CA** (we generate user RSA key pairs, store private keys in HSM — Hardware Security Module, a tamper-proof physical device that stores private keys; keys cannot be extracted even with physical access to the hardware — and sign on user's behalf) | Seamless UX; no BYOK complexity; we control the entire cert lifecycle | High security risk (private keys at rest on our hardware); users don't own their signing identity; auditors question "non-repudiation" (who actually signed?) |
 | **Option B: User BYOK** (user generates RSA key pair offline, uploads public key, signs locally with their private key, sends us the signature) | User owns their private key; cryptographically cleaner non-repudiation (they sign); auditors accept it | Complex UX (users must manage keys); key rotation requires re-uploading; if user loses private key, can't sign anymore |
 | **Option C: Hybrid** (DocuSign issues certificates to users, but users hold private keys in secure enclave / TPM on device) | Best of both: DocuSign manages cert lifecycle; user owns private key | Device-dependent (works on desktop, tricky on mobile); requires SE/TPM support |
 
@@ -288,6 +308,9 @@ public class SignatureVerificationService {
         PublicKey publicKey = userCert.getPublicKey();  // RSA public key
         
         // Step 4: Verify the signature (this re-hashes the document and compares)
+        // SHA256withRSA: first hash the document with SHA-256 (produces a 256-bit fingerprint),
+        // then the private key "signs" that hash (encrypts it with RSA math);
+        // the verifier decrypts with the public key and checks whether the hashes match
         Signature verifier = Signature.getInstance("SHA256withRSA");
         verifier.initVerify(publicKey);
         verifier.update(documentBytes);
@@ -527,7 +550,7 @@ Many enterprise documents require multiple signers (sequential: CEO signs, then 
 
 **Decision: Option B (State machine with workflow).**
 
-Because e-signature laws (ESIGN, GDPR, eIDAS) expect ordered signing workflows with explicit approval/rejection states. Enterprises also expect "if signer rejects, the document goes back to signer 0" — Option A can't do this efficiently.
+Because e-signature laws (ESIGN, GDPR, eIDAS — the EU regulation for Electronic IDentification, Authentication and trust Services; the European equivalent of the US ESIGN Act, legally recognising electronic signatures across all EU member states) expect ordered signing workflows with explicit approval/rejection states. Enterprises also expect "if signer rejects, the document goes back to signer 0" — Option A can't do this efficiently.
 
 **Implementation sketch:**
 
@@ -761,7 +784,7 @@ CREATE TABLE user_certificates (
     user_id UUID NOT NULL,
     tenant_id UUID NOT NULL,
     certificate_serial VARCHAR(255) NOT NULL,
-    certificate_pem TEXT NOT NULL,  -- PEM-encoded public key + cert
+    certificate_pem TEXT NOT NULL,  -- PEM-encoded (Privacy Enhanced Mail format): Base64 text bounded by -----BEGIN CERTIFICATE----- and -----END CERTIFICATE----- headers; the standard text format for X.509 certificates and public keys — copy-pasteable, human-readable, and universally supported
     certificate_subject_dn TEXT,
     
     issued_at TIMESTAMP WITH TIME ZONE,
@@ -867,7 +890,7 @@ DocuSign IS a digital signature company. Their entire business depends on the le
 
 **Q: "What if the HSM (Hardware Security Module) storing users' private keys is compromised or fails? How does that affect the signature's legal validity, and what's your recovery strategy?"**
 
-> If the HSM fails, we can't sign new documents — signing is blocked (safe-fail: availability loss, not security loss). If an attacker compromises the HSM, all private keys are exposed. Here's the recovery: (1) immediately revoke all certificates (update user_certificates.revoked_at = now()), (2) issue new certificates + re-generate key pairs on a fresh HSM, (3) notify all customers that signatures created during [breach window] must be re-done (we provide a way to re-send docs). Legally, old signatures may be questioned because the private key was potentially compromised. This is why HSM security is critical (FIPS 140-2 Level 3 hardware, 24/7 monitoring, air-gapped backup).
+> If the HSM fails, we can't sign new documents — signing is blocked (safe-fail: availability loss, not security loss). If an attacker compromises the HSM, all private keys are exposed. Here's the recovery: (1) immediately revoke all certificates (update user_certificates.revoked_at = now()), (2) issue new certificates + re-generate key pairs on a fresh HSM, (3) notify all customers that signatures created during [breach window] must be re-done (we provide a way to re-send docs). Legally, old signatures may be questioned because the private key was potentially compromised. This is why HSM security is critical (FIPS 140-2 Level 3 — a US government standard for cryptographic hardware; Level 3 requires tamper-resistance AND tamper-response: the device zeroizes its keys if opened or attacked; the de-facto minimum bar for a production key-management HSM; 24/7 monitoring, air-gapped backup).
 
 ### Tier 3 — Cross-Concept Probe (Can you reason across concepts?)
 

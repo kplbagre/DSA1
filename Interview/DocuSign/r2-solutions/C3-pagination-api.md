@@ -157,6 +157,23 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
+## Section 3.5 — 🗂️ Core Entities (~2 minutes)
+
+> **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
+
+> **Note:** Pagination is a generic pattern — the "entities" here are the paginated resource and the cursor mechanism, not a complex domain model.
+
+| Entity | What it represents | Storage |
+|---|---|---|
+| **Item** | The generic resource being paginated — could be documents, orders, users, invoices | PostgreSQL (any table with an index) |
+| **PaginationCursor** | An encoded pointer to the last-seen position — client sends it back on next request | Client-held (not stored server-side) |
+
+**Key insight to say out loud:**
+- The cursor is **not a server-side session** — it is a stateless pointer that encodes `(last_seen_id, last_seen_created_at)` and is held by the client; the server reconstructs page position from it on every request with no server memory
+- The `Item` table needs a **composite index on `(created_at DESC, id DESC)`** — without it, cursor queries become full table scans at O(N) instead of O(log N) seeks
+
+---
+
 ## Section 4 — 🔢 Scale Estimation (Minutes 5–10)
 
 **What to do:** Do envelope math out loud. These numbers justify every architecture choice you make in Section 6+.
@@ -263,7 +280,7 @@ The cursor is the contract between client and server. Wrong encoding = cursors a
 |---|---|---|---|
 | **Opaque base64** | Encrypt(last_id + last_created_at) | Tamper-proof (encrypted). Secure against client forging cursors. | Requires encryption overhead. Cursors are large. |
 | **Plain base64** | Base64(JSON({last_id, last_created_at})) | Simple, readable for debugging. Fast encoding/decoding. | Client can forge cursors. Cursors may be leaked in logs. |
-| **Signed base64** | HMAC(JSON({last_id, last_created_at})) | Tamper-proof via signature. Smaller than encrypted. Can decode for debugging. | Signature adds bytes. Still human-readable (privacy concern). |
+| **Signed base64** | HMAC(JSON({last_id, last_created_at})) — HMAC (Hash-based Message Authentication Code) is a keyed cryptographic hash: it proves the data wasn't tampered with because only the server holding the secret key can produce or verify the signature | Tamper-proof via signature. Smaller than encrypted. Can decode for debugging. | Signature adds bytes. Still human-readable (privacy concern). |
 | **Database cursor ID** | Generate opaque cursor ID; store in cache with metadata | Opaque to client; server controls validity. | Extra cache lookup per request. Cache management complexity. |
 
 **Decision: Signed base64**
@@ -313,7 +330,7 @@ At 1M records, offset pagination (LIMIT/OFFSET) becomes slow. Query planner must
 |---|---|---|---|
 | **Offset** | SELECT * FROM items LIMIT 50 OFFSET 2500 | O(OFFSET + LIMIT) = O(2550 rows scanned) | Small datasets (< 10K); random access |
 | **Cursor** | SELECT * FROM items WHERE created_at < ? OR (created_at = ? AND id < ?) LIMIT 50 | O(LIMIT) = O(50 rows scanned) | Large datasets; sequential access |
-| **Keyset** | WHERE id > last_id ORDER BY id LIMIT 50 | O(LIMIT) = O(50 rows scanned) | Very large datasets; simple ordering |
+| **Keyset** | WHERE id > last_id ORDER BY id LIMIT 50 (keyset: instead of skipping N rows with OFFSET, you filter on the last-seen value — the "key" you've already seen — so the DB index-seeks directly to the right position; O(1) not O(N)) | O(LIMIT) = O(50 rows scanned) | Very large datasets; simple single-column ordering |
 
 **Decision: Cursor pagination with compound key**
 Because at 1M records, offset becomes O(N) and unacceptable. Cursor is O(1) lookups with proper indexing.
@@ -383,7 +400,7 @@ Scenario 3: Record updated (timestamp changes)
 
 The design acknowledges that pagination is a snapshot at a point in time. If data changes (adds/deletes), small gaps or duplicates are acceptable. Alternative (strict snapshot isolation) would require:
 - Lock the entire table during pagination (unacceptable overhead)
-- Use database snapshots (Postgres MVCC) to freeze the view (works, but limits scalability)
+- Use database snapshots (Postgres MVCC — Multi-Version Concurrency Control: the DB keeps multiple row versions simultaneously so a transaction sees a consistent point-in-time snapshot without blocking other writers; every PostgreSQL query already uses MVCC under the hood) to freeze the view for the entire pagination session (works, but long-lived transactions hold old row versions in memory, which can balloon storage and slow vacuuming)
 
 **In an interview:** "Pagination under concurrent mutations is inherently eventual consistent. If a record is deleted while I'm paging, I won't see it (missing). If a record is added at the head, I won't see it (missing). This is acceptable for most use cases (user browse, audit logs). If strict consistency is required, I'd use snapshot isolation (Postgres MVCC), but this limits scalability."
 
