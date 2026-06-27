@@ -61,6 +61,22 @@ Medium-depth concept notes on core backend/system design topics that appear in S
 | `31-cqrs-read-write-separation.md` | CQRS (Command-Query separation, eventual consistency, projections) | ✅ Done |
 | `32-elasticsearch-inverted-index.md` | Elasticsearch (inverted index, sharding, full-text search, ELK stack) | ✅ Done |
 | `33-grpc-protocol-buffers.md` | gRPC & Protocol Buffers (HTTP/2, multiplexing, streaming, binary) | ✅ Done |
+| `34-cap-theorem-consistency-models.md` | CAP Theorem & Consistency Models | ✅ Done |
+| `35-retry-exponential-backoff-patterns.md` | Retry & Exponential Backoff Patterns | ✅ Done |
+| `36-two-phase-commit-vs-saga.md` | Two-Phase Commit vs Saga | ✅ Done |
+| `37-consensus-algorithms-raft-vs-paxos.md` | Consensus Algorithms — Raft vs Paxos | ✅ Done |
+| `38-sharding-strategy.md` | Sharding Strategy | ✅ Done |
+| `39-bulkheads-resource-isolation.md` | Bulkheads & Resource Isolation | ✅ Done |
+| `40-multi-region-geo-failover.md` | Multi-Region & Geo-Failover | ✅ Done |
+| `41-isolation-levels-dirty-reads.md` | Isolation Levels & Dirty Reads | ✅ Done |
+| `42-inventory-management-booking.md` | Inventory Management & Booking | ✅ Done |
+| `43-pagination-cursor-based.md` | Pagination — Cursor-Based | ✅ Done |
+| `44-graceful-degradation-fallbacks.md` | Graceful Degradation & Fallbacks | ✅ Done |
+| `45-hot-partition-problem.md` | Hot Partition Problem (write salting, hot-key caching) | ✅ Done |
+| `46-push-notifications-fanout.md` | Push Notifications / Fanout at Scale (APNs, FCM, Kafka fan-out, dead tokens) | ✅ Done |
+| `47-job-scheduling-at-scale.md` | Job Scheduling at Scale (CAS claim, heartbeat, delayed jobs, exactly-once) | ✅ Done |
+| `48-feature-flags-ab-testing.md` | Feature Flags / A/B Testing (deterministic bucketing, sticky assignment, flag lifecycle) | ✅ Done |
+| `49-state-machines-workflows.md` | State Machines in Workflows (FSM transitions, CAS enforcement, compensation) | ✅ Done |
 
 > **Advanced Companion Files (Optional Deepeners):**
 > Companion advanced files (named `NN-concept_advanced.md`) cover variant-heavy topics. These are optional deepeners — NOT required for interview prep, but useful for readers wanting algorithmic variants and advanced patterns beyond core material. Currently available: `02-rate-limiting_advanced.md`, `03-caching_advanced.md`, `04-idempotency_advanced.md`, `09-counters_advanced.md`. See `GAP-CLOSURE-PLAN.md` for closure strategy.
@@ -135,3 +151,4 @@ Copy of the full checklist from `notes-standards.md` — abbreviated for fast re
 | June 25, 2026 | **Concepts 16-23 Complete.** Created 8 new system design concepts with proper two-diagram topology architecture (full system stack + component detail): 16-connection-pooling, 17-load-balancing, 18-service-discovery, 19-message-queues, 20-circuit-breaker, 21-leader-election, 22-event-sourcing, 23-saga-pattern. All follow strict notes-standards format. Total: ~8,200 lines, ~8 hours effort. |
 | June 25, 2026 | **Concepts 24-26 Complete — New Two-Diagram Topology Standard (June 25).** Created 3 critical architecture concepts with mandatory system topology diagrams (showing complete stack hierarchy Client → CDN → LB → Services → Cache → DB) plus component detail diagrams: 24-api-gateway-pattern, 25-monitoring-observability-fundamentals, 26-websocket-real-time-communication. Updated notes-standards.md Section 3 to enforce two-diagram requirement for all architectural concepts. Total: ~4,800 lines, ~8 hours effort (24: 2.5h, 25: 3h, 26: 2.5h). Resources updated with curated references for all three. |
 | June 25, 2026 | **Concepts 27-33 Complete — Week 2-3 Full Stack Coverage.** Created 7 advanced system design concepts, all following two-diagram topology + component detail standard: 27-auth-authz (JWT, OAuth, RBAC, bcrypt/RS256), 28-cdn (edge caching, TTL, invalidation), 29-db-replication (WAL, sync/async, RPO/RTO, failover), 30-distributed-tracing (trace ID, spans, sampling, OpenTelemetry), 31-cqrs (command-query separation, projections, eventual consistency), 32-elasticsearch (inverted index, sharding, full-text search, ELK), 33-grpc (Protocol Buffers, HTTP/2 multiplexing, streaming). Total: ~12,000 lines, ~16 hours effort (27: 3h, 28: 2h, 29: 2.5h, 30: 2h, 31: 2h, 32: 2.5h, 33: 2h). Resources added for all 7. |
+| June 26, 2026 | **Concepts 45-49 Complete — Gap Closure: 5 High-Priority Missing Concepts.** Gap audit identified 5 production-critical concepts absent from the knowledge base. Written: 45-hot-partition-problem (write salting, hot-key caching, partition lag monitoring), 46-push-notifications-fanout (APNs/FCM, Kafka fan-out topology, dead token cleanup), 47-job-scheduling-at-scale (CAS claim, heartbeat TTL, delayed jobs via Redis ZADD, SKIP LOCKED), 48-feature-flags-ab-testing (deterministic bucketing, sticky assignment, ops kill switch, zombie flags), 49-state-machines-workflows (FSM transition table, CAS enforcement, saga compensation states). All 5 follow full 10-section notes-standards format with two-diagram topology requirement. Total: ~5 files, ~2,000 lines. |

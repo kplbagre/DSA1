@@ -80,11 +80,17 @@ Tree problem
 
 ## 🧭 Pattern 1: Top-Down DFS — Pass Info Down ⭐
 
+**What this solves:** Problems where the answer at a node depends on information coming from the root (a running sum, valid range, or accumulated path). The parent tells each child something it needs to know before the child can compute its answer.
+
 **Recognition cues — reach for this when:**
 - "Root-to-leaf path sum"
 - "Validate BST" (pass min/max bounds down)
 - "All root-to-leaf paths"
 - Any problem where the parent tells the child something
+
+**Brute force:** For each node, recompute all necessary context from scratch by re-traversing from the root. O(n²) time for a balanced tree, O(n²) for skewed — every node re-walks its path.
+
+**Key insight:** Pass context as a parameter. The parent computes the child's version of the context in O(1) and passes it down — each node is visited exactly once, reducing total cost to O(n).
 
 **The template:**
 
@@ -152,11 +158,15 @@ private boolean validate(TreeNode node, long min, long max) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space — visit every node once; recursion stack depth = tree height h (O(log n) balanced, O(n) skewed).
+
 **🏷️ Problems:** LC 112 (Path Sum), LC 98 (Validate BST), LC 257 (Binary Tree Paths — collect all root-to-leaf), LC 129 (Sum Root to Leaf Numbers).
 
 ---
 
 ## 🧭 Pattern 2: Bottom-Up DFS — Return Info Up ⭐
+
+**What this solves:** Problems where the answer at a node requires combining results from both left and right subtrees — height, diameter, balance, maximum path. The leaves compute their answers first and pass them upward.
 
 **Recognition cues — reach for this when:**
 - "Height / depth of tree"
@@ -164,6 +174,10 @@ private boolean validate(TreeNode node, long min, long max) {
 - "Is tree balanced?"
 - "Maximum path sum"
 - Any problem where you need info from BOTH subtrees to compute the answer at a node
+
+**Brute force:** For each node, call a separate `height()` function on both subtrees to get their heights. O(n²) time — each node triggers two O(n) sub-traversals.
+
+**Key insight:** Ask children first via recursion, then combine at the parent. Each node receives its subtrees' answers as return values — no re-traversal needed. Every node is visited exactly once: O(n).
 
 **The template:**
 
@@ -252,11 +266,15 @@ private int checkHeight(TreeNode node) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space — single traversal; recursion stack = tree height.
+
 **🏷️ Problems:** LC 104 (Max Depth), LC 543 (Diameter), LC 110 (Balanced Tree), LC 124 (Max Path Sum — advanced dual-purpose), LC 226 (Invert Tree).
 
 ---
 
 ## 🧭 Pattern 3: BFS — Level Order Traversal ⭐
+
+**What this solves:** Problems where the answer depends on which level a node is at — level order output, right side view, averages per level, minimum depth, zigzag traversal. DFS visits nodes depth-first and loses level structure; BFS preserves it naturally.
 
 **Recognition cues — reach for this when:**
 - "Level order traversal"
@@ -265,6 +283,10 @@ private int checkHeight(TreeNode node) {
 - "Minimum depth" (BFS finds it FIRST — faster than DFS)
 - "Zigzag level order"
 - Any problem mentioning "level" or "layer"
+
+**Brute force:** Run DFS and track depth as a parameter; group nodes by depth into a map. O(n) time, O(n) space — works but loses the natural level-at-a-time processing order.
+
+**Key insight:** A queue processes nodes in FIFO order. Snapshot `queue.size()` before the inner loop — this is exactly how many nodes are in the current level. Process that many, then the queue contains only the next level.
 
 **The template:**
 
@@ -341,17 +363,25 @@ public List<Integer> rightSideView(TreeNode root) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(w) space — where w = max width of the tree (worst case O(n) for a perfect binary tree's last level).
+
 **🏷️ Problems:** LC 102 (Level Order), LC 199 (Right Side View), LC 637 (Average of Levels), LC 103 (Zigzag Level Order), LC 111 (Minimum Depth — BFS is optimal).
 
 ---
 
 ## 🧭 Pattern 4: BST Property — Inorder = Sorted
 
+**What this solves:** Problems on Binary Search Trees where the sorted ordering of values matters — finding the Kth smallest, validating structure, or converting to/from sorted arrays. The BST invariant gives you a sorted sequence for free via inorder traversal.
+
 **Recognition cues — reach for this when:**
 - "Kth smallest in BST"
 - "Validate BST" (alternative to Pattern 1)
 - "Convert BST to sorted list"
 - Any BST problem where sorted order matters
+
+**Brute force:** Collect all node values into a list via any traversal, sort the list, return the Kth element. O(n log n) time, O(n) space.
+
+**Key insight:** Inorder traversal (left → root → right) of a BST visits nodes in ascending order — a free sorted sequence without sorting. The Kth node visited is the Kth smallest. O(n) time, O(h) space.
 
 **The key insight:** Inorder traversal (left → root → right) of a BST visits nodes in **ascending order**. So "Kth smallest" = "the Kth node visited during inorder."
 
@@ -380,15 +410,23 @@ private void inorder(TreeNode node, int k) {
 }
 ```
 
+**Complexity (optimal):** O(k) time (early exit after k nodes), O(h) space — recursion stack = tree height.
+
 **🏷️ Problems:** LC 230 (Kth Smallest in BST), LC 98 (Validate BST — inorder approach), LC 108 (Sorted Array to BST), LC 235 (LCA of BST — use BST property).
 
 ---
 
 ## 🧭 Pattern 5: Lowest Common Ancestor (LCA)
 
+**What this solves:** Finding the deepest node that is an ancestor of two given nodes. Used directly in LCA problems and as a sub-step in distance-between-nodes problems.
+
 **Recognition cues — reach for this when:**
 - "Find lowest common ancestor"
 - "Distance between two nodes" (LCA + depth computation)
+
+**Brute force:** Record the root-to-p path and root-to-q path in two lists, then find the last common node. O(n) time, O(n) space.
+
+**Key insight:** Bottom-up DFS returns a node when it finds p or q. If both left and right subtrees return non-null, the current node is the LCA — p and q split here. Otherwise bubble up whichever side found something.
 
 **The elegant bottom-up approach:**
 
@@ -434,6 +472,8 @@ public TreeNode lcaBST(TreeNode root, TreeNode p, TreeNode q) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space — single traversal; recursion stack = tree height.
+
 **🏷️ Problems:** LC 236 (LCA of Binary Tree), LC 235 (LCA of BST).
 
 ---
@@ -441,6 +481,9 @@ public TreeNode lcaBST(TreeNode root, TreeNode p, TreeNode q) {
 ## 🔬 Canonical Problem — LC 543: Diameter of Binary Tree
 
 > **Problem:** Given the root of a binary tree, return the length of the diameter (longest path between any two nodes, measured in edges).
+
+> **Brute force:** For each node, compute `height(left) + height(right)` where `height()` is a separate O(n) traversal. Take the maximum across all nodes. O(n²) time, O(h) space.
+> **Key insight:** The function that computes height already visits every node — attach a diameter update as a side effect. One traversal computes both height (for the parent) and diameter (the actual answer). O(n) total.
 
 ### Step 1 — Read and identify triggers
 
@@ -517,6 +560,8 @@ Answer: 3 ✅ (path: 4 → 2 → 1 → 3)
 
 > **Problem:** Return the maximum depth (number of nodes along the longest root-to-leaf path). Single node = depth 1.
 
+> **Brute force:** BFS counting levels — not really a "brute force" since it's already O(n), but it requires O(w) queue space vs O(h) recursion stack for DFS.
+> **Key insight:** Bottom-up: a leaf has height 1. Every parent's height is `1 + max(left, right)`. Recursion naturally computes this bottom-up in one pass.
 > **Approach:** Bottom-up. Height = `1 + max(leftHeight, rightHeight)`. Null → 0.
 
 ```java
@@ -525,12 +570,16 @@ if (root == null) return 0;
 return 1 + Math.max(maxDepth(root.left), maxDepth(root.right));
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space.
+
 ---
 
 ### LC 226: Invert Binary Tree
 
 > **Problem:** Mirror/flip a binary tree. Every left child becomes right child and vice versa, recursively.
 
+> **Brute force:** BFS level by level, swap children at each node. O(n) time, O(w) space — both approaches are O(n), DFS just uses less space on a balanced tree.
+> **Key insight:** Post-order (bottom-up) — invert the subtrees first, then swap. Or pre-order (top-down) — swap first, then recurse. Either works; the swap at each node is the only operation needed.
 > **Approach:** Bottom-up. Swap left and right children at each node.
 
 ```java
@@ -542,11 +591,16 @@ invertTree(root.left);
 invertTree(root.right);
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space.
+
 ---
 
 ### LC 543: Diameter of Binary Tree
 
 > **Problem:** Find the length of the longest path between any two nodes (in edges). Path doesn't have to go through root. `[1,2,3,4,5]` → 3 (path 4→2→1→3).
+
+> **Brute force:** For each node, compute `height(left) + height(right)` where `height()` is a separate O(n) traversal. Take the max across all n nodes. O(n²) time, O(h) space.
+> **Key insight:** The height function already visits every node — attach a diameter update as a side effect. One pass computes both height (for the parent) and diameter (the actual answer) simultaneously.
 
 > **Approach:** Bottom-up dual-purpose. Return height to parent. Side-effect: update global diameter = `leftHeight + rightHeight`.
 
@@ -557,11 +611,16 @@ maxDiameter = Math.max(maxDiameter, left + right);
 return 1 + Math.max(left, right);
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space.
+
 ---
 
 ### LC 110: Balanced Binary Tree
 
 > **Problem:** Determine if a binary tree is height-balanced (left and right subtrees differ in height by at most 1, at every node).
+
+> **Brute force:** For each node, call `height(left)` and `height(right)` separately, check `|left - right| > 1`. Recurse on children. O(n²) time — each node triggers two O(n) subtree scans.
+> **Key insight:** Return `-1` as a sentinel to signal imbalance. One bottom-up pass simultaneously computes height and propagates the first imbalance upward — no re-traversal needed.
 
 > **Approach:** Bottom-up. Return height normally, but return `-1` to signal "unbalanced." Early exit if child is -1.
 
@@ -573,11 +632,16 @@ if (Math.abs(left - right) > 1) return -1;
 return 1 + Math.max(left, right);
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space.
+
 ---
 
 ### LC 102: Binary Tree Level Order Traversal
 
 > **Problem:** Return node values level by level, left to right. `[3,9,20,null,null,15,7]` → `[[3],[9,20],[15,7]]`.
+
+> **Brute force:** DFS tracking depth as a parameter; store nodes in a `Map<Integer, List>` keyed by depth. O(n) time, O(n) space — works, but requires building the full map and ordering by depth key.
+> **Key insight:** BFS naturally visits all level-k nodes before any level-(k+1) node. Snapshot `queue.size()` before the inner loop — that is exactly how many nodes belong to the current level.
 
 > **Approach:** BFS. `size = queue.size()` tells you how many nodes are in the current level. Inner for-loop processes one level.
 
@@ -594,11 +658,16 @@ for (int i = 0; i < size; i++) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(w) space — where w = max width of the tree.
+
 ---
 
 ### LC 199: Binary Tree Right Side View
 
 > **Problem:** Imagine standing on the right side of the tree. Return the node values you can see (rightmost node at each level). `[1,2,3,null,5,null,4]` → `[1,3,4]`.
+
+> **Brute force:** DFS tracking depth; for each depth, overwrite a `Map<depth, value>` with the current node's value (last write wins = rightmost). O(n) time, O(h) space — works but requires DFS to visit all nodes before the rightmost is known.
+> **Key insight:** BFS processes all nodes in a level before the next level. The last node polled in the inner for-loop is always the rightmost at that level — add it directly without any map.
 
 > **Approach:** BFS. Same as level order, but only add the LAST node of each level to result.
 
@@ -607,11 +676,16 @@ for (int i = 0; i < size; i++) {
 if (i == size - 1) result.add(node.val);
 ```
 
+**Complexity (optimal):** O(n) time, O(w) space.
+
 ---
 
 ### LC 98: Validate Binary Search Tree
 
 > **Problem:** Determine if a binary tree is a valid BST (left < root < right, recursively for all subtrees).
+
+> **Brute force:** Collect all values via inorder traversal into a list, then check if the list is strictly increasing. O(n) time, O(n) space — requires materializing the entire list.
+> **Key insight:** Pass valid range `(min, max)` top-down. Every left child inherits the current node as its new upper bound; every right child inherits it as its new lower bound. O(n) time, O(h) space — no list needed.
 
 > **Approach:** Top-down. Pass valid range `(min, max)` down. Each node must be strictly within bounds. Use `long` to handle edge values.
 
@@ -622,11 +696,16 @@ if (node.val <= min || node.val >= max) return false;
 return validate(node.left, min, node.val) && validate(node.right, node.val, max);
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space.
+
 ---
 
 ### LC 112: Path Sum
 
 > **Problem:** Given a target sum, determine if there's a root-to-leaf path where node values sum to target. `[5,4,8,11,null,13,4,7,2,...], target=22` → true (5→4→11→2).
+
+> **Brute force:** Enumerate all root-to-leaf paths, sum each path, compare to target. O(n) time, O(n) space — path storage makes it O(h) to O(n) extra space.
+> **Key insight:** Pass the remaining target down instead of storing a path. At a leaf, remaining equals the leaf's value if this path sums to target. One pass, O(h) extra space.
 
 > **Approach:** Top-down. Pass remaining target down. At leaf: check if `target == node.val`.
 
@@ -638,11 +717,16 @@ return hasPathSum(root.left, targetSum - root.val)
     || hasPathSum(root.right, targetSum - root.val);
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space.
+
 ---
 
 ### LC 230: Kth Smallest Element in a BST
 
 > **Problem:** Return the Kth smallest value in a BST. `[3,1,4,null,2], k=1` → 1.
+
+> **Brute force:** Collect all BST values into a list via any traversal, sort the list, return the Kth element. O(n log n) time, O(n) space.
+> **Key insight:** Inorder traversal visits a BST in ascending order — sorting is free. Count during traversal and stop at K. O(k) time (early exit), O(h) space.
 
 > **Approach:** Inorder traversal of BST visits nodes in ascending order. Count during traversal, stop at K.
 
@@ -655,11 +739,16 @@ if (count == k) { result = node.val; return; }
 inorder(node.right, k);
 ```
 
+**Complexity (optimal):** O(k) time (early exit after k nodes), O(h) space.
+
 ---
 
 ### LC 236: Lowest Common Ancestor of a Binary Tree
 
 > **Problem:** Given two nodes `p` and `q`, find their lowest common ancestor (the deepest node that has both as descendants). Both nodes are guaranteed to exist.
+
+> **Brute force:** Record root-to-p and root-to-q paths in two lists, find the last common node. O(n) time, O(n) space — path storage required.
+> **Key insight:** Bottom-up — return a node when you find p or q. When both subtrees return non-null, the current node is the first place p and q meet (the LCA). No path storage needed.
 
 > **Approach:** Bottom-up. If a node IS p or q, return it. If left and right both return non-null, THIS node is the LCA.
 
@@ -673,11 +762,16 @@ if (left != null && right != null) return root;
 return (left != null) ? left : right;
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space.
+
 ---
 
 ### LC 257: Binary Tree Paths
 
 > **Problem:** Return all root-to-leaf paths as strings. Example: tree `[1,2,3,null,5]` → `["1->2->5", "1->3"]`.
+
+> **Brute force:** BFS tracking full path strings in a parallel queue alongside nodes. O(n) time, O(n) space — string concatenation at every level creates many intermediate strings.
+> **Key insight:** Top-down DFS passes the current path string as a parameter. At each leaf, the full path is already built. O(n) time, O(h) space for the call stack (excluding output).
 
 > **Approach:** Top-down DFS. Pass the current path string down. At a leaf, add the path to results.
 
@@ -691,11 +785,16 @@ void dfs(TreeNode node, String path, List<String> result) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space (excluding output).
+
 ---
 
 ### LC 129: Sum Root to Leaf Numbers
 
 > **Problem:** Each root-to-leaf path forms a number (e.g., 1→2→3 = 123). Return the sum of all such numbers. Example: tree `[1,2,3]` → `12 + 13 = 25`.
+
+> **Brute force:** Enumerate all root-to-leaf paths, form each number from the digit sequence, sum them. O(n) time, O(n) space — storing all paths requires O(n) extra space.
+> **Key insight:** Pass the running number as a parameter: `num * 10 + node.val`. At each leaf the number is already fully formed. Sum up leaf return values — no paths to store, O(h) extra space.
 
 > **Approach:** Top-down DFS. Pass running number `num * 10 + node.val` down. At a leaf, return the number. Sum across all paths.
 
@@ -711,11 +810,16 @@ int dfs(TreeNode node, int num) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space.
+
 ---
 
 ### LC 124: Binary Tree Maximum Path Sum
 
 > **Problem:** A path can start and end at any node (doesn't have to pass through root). Find the maximum path sum. Nodes can have negative values. Example: tree `[-10,9,20,null,null,15,7]` → `42` (path `15→20→7`).
+
+> **Brute force:** Enumerate all paths (every pair of nodes as start/end), compute path sums. O(n²) time — exponential combinations of paths in the general case.
+> **Key insight:** The max path through any node = `left gain + node.val + right gain`, where gains are clamped to 0 (negative subtrees only hurt). Return the single-branch max upward so parents can extend the path in one direction.
 
 > **Approach:** Bottom-up DFS with dual-purpose return. Return the max single-branch gain (for parent's use). Side-effect: update global max with `left + right + node.val` (path through this node). See `trees-and-bfs-dfs.md` Pattern 2.
 
@@ -733,11 +837,16 @@ int dfs(TreeNode node) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space.
+
 ---
 
 ### LC 103: Binary Tree Zigzag Level Order Traversal
 
 > **Problem:** BFS level-by-level, but alternate left-to-right and right-to-left. Example: tree `[3,9,20,null,null,15,7]` → `[[3],[20,9],[15,7]]`.
+
+> **Brute force:** Standard BFS, collect all levels normally, then manually reverse alternate levels at the end. O(n) time, O(n) space — the reversal is O(w) per level but conceptually a post-processing step.
+> **Key insight:** Same BFS — call `Collections.reverse()` on odd-indexed levels before adding to result. Or use a `LinkedList` and `addFirst` on odd levels to build the reversed list in-place during traversal.
 
 > **Approach:** Standard BFS level order. On even levels, add left→right. On odd levels, reverse the level list (or use `addFirst`).
 
@@ -748,11 +857,16 @@ result.add(levelList);
 level++;
 ```
 
+**Complexity (optimal):** O(n) time, O(w) space.
+
 ---
 
 ### LC 637: Average of Levels in Binary Tree
 
 > **Problem:** Return the average value of nodes on each level. Example: tree `[3,9,20,null,null,15,7]` → `[3.0, 14.5, 11.0]`.
+
+> **Brute force:** DFS collecting all nodes per level into a `Map<Integer, List>`, then iterate the map to compute averages. O(n) time, O(n) space — requires materializing the full map.
+> **Key insight:** BFS naturally groups nodes by level. Sum during the inner for-loop and divide by `size` immediately — no map needed, O(w) extra space.
 
 > **Approach:** Standard BFS. At each level, sum all node values and divide by level size.
 
@@ -770,11 +884,16 @@ for (int i = 0; i < size; i++) {
 result.add(sum / size);
 ```
 
+**Complexity (optimal):** O(n) time, O(w) space.
+
 ---
 
 ### LC 111: Minimum Depth of Binary Tree
 
 > **Problem:** Find the minimum depth (shortest path from root to any leaf). Example: tree `[3,9,20,null,null,15,7]` → `2` (path `3→9`).
+
+> **Brute force:** DFS tracking depth; return the minimum depth seen at any leaf. O(n) time, O(h) space — must visit every node to guarantee finding the shallowest leaf.
+> **Key insight:** BFS finds the shallowest leaf FIRST — return immediately when the first leaf is dequeued. No need to traverse the entire tree.
 
 > **Approach:** BFS is best — return the level when you first hit a leaf. DFS works too but BFS guarantees you find the shallowest leaf first.
 
@@ -793,11 +912,16 @@ while (!queue.isEmpty()) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(w) space — BFS may exit early for shallow answers but O(n) worst case.
+
 ---
 
 ### LC 108: Convert Sorted Array to Binary Search Tree
 
 > **Problem:** Given a sorted array, convert it to a height-balanced BST. Example: `[-10,-3,0,5,9]` → a BST with root `0`.
+
+> **Brute force:** Insert each element of the sorted array into a BST one by one. O(n log n) time average — but produces a skewed tree (right-only chain) because the array is sorted, not balanced.
+> **Key insight:** Always pick the middle element as root — the left and right halves are equal-sized (±1), guaranteeing a height-balanced tree. Recurse on both halves. O(n) time.
 
 > **Approach:** Recursion. Pick the middle element as root. Left half → left subtree. Right half → right subtree. Base case: `lo > hi → null`.
 
@@ -815,11 +939,16 @@ TreeNode build(int[] nums, int lo, int hi) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(h) space.
+
 ---
 
 ### LC 235: LCA of a Binary Search Tree
 
 > **Problem:** Find the lowest common ancestor in a **BST** (not generic binary tree). Example: BST, `p = 2, q = 8` → LCA = `6`.
+
+> **Brute force:** Use the generic LCA algorithm (Pattern 5) — bottom-up DFS traversing the entire tree. O(n) time, O(h) space.
+> **Key insight:** BST property eliminates half the tree at each step. If both p and q are smaller, LCA is in the left subtree; both larger, in the right. The first split point (or match) is the LCA. O(h) time — no full traversal needed.
 
 > **Approach:** Use BST property. If both `p` and `q` are less than root → go left. Both greater → go right. Otherwise, root IS the LCA (split point). No need for full tree traversal — O(h) time.
 
@@ -834,6 +963,8 @@ while (node != null) {
     else return node;
 }
 ```
+
+**Complexity (optimal):** O(h) time, O(1) space — iterative BST traversal, no recursion stack.
 
 ---
 
@@ -928,3 +1059,4 @@ For LC 543 (Diameter), explain in one sentence: what does the function RETURN vs
 | Date | Change |
 | --- | --- |
 | May 2026 | **File created.** Interview Playbook for Trees & BFS/DFS. 5 patterns: top-down DFS, bottom-up DFS (+ dual-purpose), BFS level-order, BST inorder, LCA. Canonical walkthrough (LC 543 Diameter), 10-problem bank, dual-purpose pattern explanation. |
+| June 2026 | **Brute Force / Key Insight pass.** Added What this solves, Brute force, Key insight to all 5 pattern blocks and canonical section (LC 543). Added > Brute force, > Key insight to all 18 problem bank entries. Added Complexity (optimal) after every code block. |

@@ -116,11 +116,17 @@ String problem
 
 ## 🧭 Pattern 1: Frequency Array — `int[26]` ⭐
 
+**What this solves:** Problems comparing character composition of strings — anagram checks, permutation detection, group-by-character-frequency. An `int[26]` maps each lowercase letter to an index, letting you build, compare, or slide a character frequency count in O(n) time.
+
 **Recognition cues — reach for this when:**
 - "Valid anagram"
 - "Check if one string is a permutation of another"
 - "Find all anagrams in a string" (+ sliding window)
 - "Group anagrams" (+ HashMap with frequency as key)
+
+**Brute force:** Sort both strings and compare the sorted versions. O(n log n) per string.
+
+**Key insight:** Two strings are anagrams iff their frequency arrays are identical. Build the difference in one O(n) pass (increment for s, decrement for t), then check all-zeros in O(26) — far faster than sorting.
 
 **Why `int[26]` instead of HashMap?** For lowercase English letters, `int[26]` is faster (no boxing/unboxing), uses less memory, and the comparison is `Arrays.equals(freq1, freq2)`.
 
@@ -189,16 +195,24 @@ public List<Integer> findAnagrams(String s, String p) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space — `int[26]` is fixed size regardless of input length.
+
 **🏷️ Problems:** LC 242 (Valid Anagram), LC 438 (Find All Anagrams), LC 567 (Permutation in String), LC 49 (Group Anagrams — key is sorted or freq).
 
 ---
 
 ## 🧭 Pattern 2: Palindrome Check — Two Pointers ⭐
 
+**What this solves:** Problems verifying whether a string reads the same forwards and backwards, or finding the longest such substring. Two-pointer approach handles simple checks in O(1) space; expand-from-center handles finding the longest palindromic substring in O(n²) time.
+
 **Recognition cues — reach for this when:**
 - "Is this a palindrome?"
 - "Valid palindrome" (ignoring non-alphanumeric)
 - "Longest palindromic substring"
+
+**Brute force:** Check every substring for the palindrome property — O(n²) substrings, each O(n) to verify. O(n³) total for the longest palindrome.
+
+**Key insight:** Every palindrome is symmetric around a center. Expanding from each possible center (2n-1 options for odd + even lengths) covers all palindromes in O(n²) total — no substring re-checking, and each expansion immediately tells you the palindrome's length.
 
 **For simple palindrome check:**
 
@@ -265,16 +279,24 @@ private int expandFromCenter(String s, int left, int right) {
 }
 ```
 
+**Complexity (optimal):** O(n) for simple check; O(n²) for longest palindromic substring. Both use O(1) space.
+
 **🏷️ Problems:** LC 125 (Valid Palindrome), LC 5 (Longest Palindromic Substring), LC 647 (Palindromic Substrings — count all, same expand technique), LC 680 (Valid Palindrome II — allow one deletion).
 
 ---
 
 ## 🧭 Pattern 3: String Reversal — In-Place or Stack
 
+**What this solves:** Problems requiring reversal of characters, words, or specific segments — either in-place on a `char[]` or by building a new result from reversed order. The two-pointer swap handles character-level reversal; `split` + iterate-in-reverse handles word-level reversal.
+
 **Recognition cues — reach for this when:**
 - "Reverse a string"
 - "Reverse words in a string"
 - "Reverse only certain characters"
+
+**Brute force:** Build a new string or array by appending characters/words in reverse order. O(n) extra space.
+
+**Key insight:** Two converging pointers swap characters in-place in a single pass using O(1) extra space. For word reversal: `trim().split("\\s+")` handles all whitespace edge cases, then iterate in reverse — or use the double-reversal trick (reverse all chars, then reverse each word).
 
 **Reverse Characters — Two Pointers:**
 
@@ -310,16 +332,24 @@ public String reverseWords(String s) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) extra space for in-place char swap; O(n) space if using split/StringBuilder.
+
 **🏷️ Problems:** LC 344 (Reverse String), LC 151 (Reverse Words in a String), LC 541 (Reverse String II).
 
 ---
 
 ## 🧭 Pattern 4: StringBuilder for Construction ⭐
 
+**What this solves:** Problems that build a result string incrementally — encoding schemes, compression, string transformation. The rule: any loop that appends to a string must use StringBuilder, not `String +=`.
+
 **Recognition cues — reach for this when:**
 - Building a result string character by character
 - Any loop that appends to a string
 - "Encode/decode" string problems
+
+**Brute force:** Use `String +=` in a loop — each `+=` creates a new String and copies all previous characters. O(n²) total for n appends.
+
+**Key insight:** StringBuilder writes to an existing internal buffer; each character is written exactly once, giving O(n) total regardless of how many `append()` calls there are.
 
 **The performance rule:** `String +=` in a loop is O(n²) total because every `+=` creates a new String and copies all previous characters. `StringBuilder.append()` is amortized O(1).
 
@@ -364,16 +394,24 @@ public List<String> decode(String s) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space — output string is at most as long as input.
+
 **🏷️ Problems:** LC 271 (Encode and Decode Strings), LC 394 (Decode String — with stack), LC 443 (String Compression).
 
 ---
 
 ## 🧭 Pattern 5: Subsequence Check — Two-Pointer Walk
 
+**What this solves:** Problems where characters of one string must appear in another in the same order, but not necessarily contiguously. "Is `s` a subsequence of `t`?" — the characters of `s` must appear in `t` from left to right with possibly other characters in between.
+
 **Recognition cues — reach for this when:**
 - "Is `s` a subsequence of `t`?"
 - "Number of matching subsequences"
 - Characters don't need to be contiguous — just in order
+
+**Brute force:** Try all C(n, m) combinations of index positions in `t` to pick m positions that match `s`'s characters in order. Exponential time.
+
+**Key insight:** Two pointers — advance the subsequence pointer only on a match, always advance the text pointer. The text pointer's job is to find the next matching character; skipping non-matches is free because order is preserved automatically.
 
 **Steps in plain English:**
 
@@ -394,6 +432,8 @@ public boolean isSubsequence(String s, String t) {
     return i == s.length();
 }
 ```
+
+**Complexity (optimal):** O(n) time, O(1) space — single pass through `t`.
 
 **🏷️ Problems:** LC 392 (Is Subsequence), LC 792 (Number of Matching Subsequences).
 
@@ -476,6 +516,8 @@ Output: [["eat","tea","ate"], ["tan","nat"], ["bat"]] ✅
 
 > **Problem:** Given two strings `s` and `t`, return true if `t` is an anagram of `s`. `"anagram","nagaram"` → true.
 
+> **Brute force:** Sort both strings and compare. O(n log n) time.
+> **Key insight:** Increment/decrement a single `int[26]` in one pass — anagrams cancel perfectly to all-zeros; no sorting needed.
 > **Approach:** Single `int[26]` array. Increment for `s`, decrement for `t`. All zeros at end → anagram.
 
 ```java
@@ -491,12 +533,16 @@ for (int f : freq) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 125: Valid Palindrome
 
 > **Problem:** Given a string, determine if it's a palindrome considering only alphanumeric characters and ignoring case. `"A man, a plan, a canal: Panama"` → true.
 
+> **Brute force:** Clean the string (remove non-alphanumeric, lowercase), reverse it, compare to original. O(n) time but O(n) extra space for the cleaned copy.
+> **Key insight:** Two converging pointers skip non-alphanumeric characters in-place — no cleaned copy needed, O(1) extra space.
 > **Approach:** Two pointers converging. Skip non-alphanumeric, compare lowercase.
 
 ```java
@@ -507,12 +553,16 @@ while (left < right && !Character.isLetterOrDigit(s.charAt(right))) right--;
 if (Character.toLowerCase(s.charAt(left)) != Character.toLowerCase(s.charAt(right))) return false;
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 5: Longest Palindromic Substring
 
 > **Problem:** Return the longest palindromic substring. `"babad"` → `"bab"` or `"aba"`.
 
+> **Brute force:** Check all n² substrings for palindrome property. O(n³) time.
+> **Key insight:** Every palindrome has a center — expanding from each of the 2n-1 possible centers covers all palindromes in O(n²) total without re-checking any substring.
 > **Approach:** Expand from center. Try each index as center for odd-length AND between indices for even-length palindromes.
 
 ```java
@@ -521,12 +571,16 @@ int len2 = expandFromCenter(s, i, i + 1);   // even
 // expandFromCenter: while chars match, expand outward
 ```
 
+**Complexity (optimal):** O(n²) time, O(1) space.
+
 ---
 
 ### LC 647: Palindromic Substrings
 
 > **Problem:** Count the number of palindromic substrings. `"abc"` → 3 (each char), `"aaa"` → 6.
 
+> **Brute force:** Check all n² substrings for palindrome property. O(n³) time.
+> **Key insight:** Expand from each center — every successful expansion step counts as one palindrome. Same O(n²) technique as LC 5, but counting instead of tracking max length.
 > **Approach:** Same expand-from-center as LC 5, but COUNT palindromes instead of tracking longest.
 
 ```java
@@ -534,12 +588,16 @@ int len2 = expandFromCenter(s, i, i + 1);   // even
 count += expandAndCount(s, i, i) + expandAndCount(s, i, i + 1);
 ```
 
+**Complexity (optimal):** O(n²) time, O(1) space.
+
 ---
 
 ### LC 3: Longest Substring Without Repeating Characters
 
 > **Problem:** Find length of longest substring without repeating characters. `"abcabcbb"` → 3.
 
+> **Brute force:** Check all O(n²) substrings for uniqueness. O(n³) or O(n²) with a set per substring.
+> **Key insight:** Variable sliding window — when a duplicate enters, shrink the left boundary until the duplicate is removed. Each character enters and leaves the window at most once → O(n) total.
 > **Approach:** Variable sliding window + HashSet. Shrink while duplicate exists.
 
 ```java
@@ -550,12 +608,16 @@ window.add(s.charAt(right));
 best = Math.max(best, right - left + 1);
 ```
 
+**Complexity (optimal):** O(n) time, O(min(n, charset)) space.
+
 ---
 
 ### LC 438: Find All Anagrams in a String
 
 > **Problem:** Given strings `s` and `p`, find all start indices in `s` where a substring is an anagram of `p`. `s="cbaebabacd", p="abc"` → `[0, 6]`.
 
+> **Brute force:** For each window of size p.length(), sort the window and compare to sorted p. O(n · k log k) time.
+> **Key insight:** Fixed window slides one step at a time — add the incoming char, remove the outgoing char, compare frequency arrays in O(26) = O(1). Total O(n).
 > **Approach:** Fixed sliding window of size `p.length()` + `int[26]` frequency comparison at each slide.
 
 ```java
@@ -567,12 +629,16 @@ wFreq[s.charAt(right - p.length()) - 'a']--;
 if (Arrays.equals(pFreq, wFreq)) result.add(right - p.length() + 1);
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 20: Valid Parentheses
 
 > **Problem:** Given string with `()[]{}`, determine if brackets are valid. `"()[]{}"` → true, `"(]"` → false.
 
+> **Brute force:** For each close bracket, scan backward for its matching open bracket. O(n²) time.
+> **Key insight:** Push the expected close bracket when you see an open — then the pop check is one equality comparison (`pop() != c`) and the stack naturally enforces nesting order.
 > **Approach:** Stack. Push expected close bracket for each open. Pop and compare on close.
 
 ```java
@@ -582,12 +648,16 @@ if (c == '(') stack.push(')');
 else if (stack.isEmpty() || stack.pop() != c) return false;
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 271: Encode and Decode Strings
 
 > **Problem:** Design an algorithm to encode a list of strings into a single string, and decode it back. Must handle any character including `#`, newlines, etc.
 
+> **Brute force:** Use a delimiter that doesn't appear in strings — fragile, fails if the delimiter is present in a string.
+> **Key insight:** Length-prefix encoding `"len#data"` is unambiguous regardless of content — the length field tells you exactly how many characters to read, making the `#` separator safe even if strings contain `#`.
 > **Approach:** Length-prefix encoding. `"abc"` → `"3#abc"`. Decode by reading length, skipping `#`, extracting substring.
 
 ```java
@@ -595,12 +665,16 @@ else if (stack.isEmpty() || stack.pop() != c) return false;
 // Decode: int len = parseInt(s.substring(i, j)); result.add(s.substring(j+1, j+1+len));
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space — n = total characters across all strings.
+
 ---
 
 ### LC 392: Is Subsequence
 
 > **Problem:** Given strings `s` and `t`, return true if `s` is a subsequence of `t` (characters in order, not necessarily contiguous). `"ace","abcde"` → true.
 
+> **Brute force:** Try all C(n, m) combinations of positions in `t` to match `s`'s characters. Exponential time.
+> **Key insight:** Two pointers — advance the subsequence pointer only on a match, always advance the text pointer. A single left-to-right pass finds all characters in order without backtracking.
 > **Approach:** Two-pointer walk. Pointer `i` on `s`, pointer `j` on `t`. Advance `j` always; advance `i` only when chars match.
 
 ```java
@@ -609,12 +683,16 @@ j++;
 return i == s.length();
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space — single pass through `t`.
+
 ---
 
 ### LC 680: Valid Palindrome II
 
 > **Problem:** Given a string, return true if it can be a palindrome after deleting **at most one** character. `"abca"` → true (delete 'b' or 'c').
 
+> **Brute force:** Try deleting each of the n characters one by one, check if the resulting string is a palindrome. O(n²) time.
+> **Key insight:** Two pointers on the original string — on the first mismatch, try skipping the left character OR the right character; only one deletion allowed, so check both subproblems directly.
 > **Approach:** Two pointers. On first mismatch, try skipping LEFT or skipping RIGHT. If either resulting substring is palindrome → true.
 
 ```java
@@ -624,12 +702,16 @@ if (s.charAt(l) != s.charAt(r)) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 567: Permutation in String
 
 > **Problem:** Given `s1` and `s2`, return true if `s2` contains a permutation of `s1`. Example: `s1 = "ab", s2 = "eidbaooo"` → `true` (substring "ba" is a permutation of "ab").
 
+> **Brute force:** For each window of size s1.length() in s2, sort the window and compare to sorted s1. O(n · k log k) time.
+> **Key insight:** Fixed sliding window + frequency arrays — slide one character at a time; frequency comparison is O(26) = O(1) per step. Total O(n). Identical algorithm to LC 438, just returns boolean.
 > **Approach:** Fixed sliding window of size `s1.length()`. Compare `int[26]` frequency arrays. Same as LC 438 but returns boolean. See `two-pointers-and-sliding-window.md`.
 
 ```java
@@ -646,12 +728,16 @@ for (int i = 0; i < s2.length(); i++) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 49: Group Anagrams
 
 > **Problem:** Group strings that are anagrams of each other. Example: `["eat","tea","tan","ate","nat","bat"]` → `[["bat"],["nat","tan"],["ate","eat","tea"]]`.
 
+> **Brute force:** Compare every pair of strings to check anagram relationship, union-find to group them. O(n² · k) time.
+> **Key insight:** Canonical key — sorted characters map all anagrams to the same string. HashMap groups them automatically; no pairwise comparison needed.
 > **Approach:** Canonical key pattern. Sort each word's characters → anagrams produce the same sorted key. Use HashMap `<String, List<String>>`.
 
 ```java
@@ -670,12 +756,16 @@ for (String s : strs) {
 return new ArrayList<>(map.values());
 ```
 
+**Complexity (optimal):** O(n · k log k) time, O(n · k) space — n strings, each sorted in O(k log k).
+
 ---
 
 ### LC 344: Reverse String
 
 > **Problem:** Reverse a character array in-place. Example: `['h','e','l','l','o']` → `['o','l','l','e','h']`.
 
+> **Brute force:** Create a new array and fill it in reverse order. O(n) extra space.
+> **Key insight:** Two converging pointers swap characters in-place — O(1) extra space, single pass.
 > **Approach:** Two pointers converging. Swap `s[left]` and `s[right]`, then move inward. O(n) time, O(1) space.
 
 ```java
@@ -690,12 +780,16 @@ while (lo < hi) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 151: Reverse Words in a String
 
 > **Problem:** Reverse the order of words in a string. Multiple spaces between words, leading/trailing spaces. Example: `"  hello world  "` → `"world hello"`.
 
+> **Brute force:** Manual character-by-character scan to collect words, reverse the list, rejoin. Verbose but O(n) time.
+> **Key insight:** `trim().split("\\s+")` handles all whitespace edge cases (leading/trailing/multiple spaces) in one line; then iterate in reverse for word-order reversal. O(n) and clean.
 > **Approach:** Split by whitespace, filter empties, reverse the list, join with single space. Or: reverse entire string, then reverse each word individually.
 
 ```java
@@ -713,12 +807,16 @@ for (int i = words.length - 1; i >= 0; i--) {
 return sb.toString();
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 541: Reverse String II
 
 > **Problem:** Reverse the first `k` characters for every `2k` chunk of the string. Example: `s = "abcdefg", k = 2` → `"bacdfeg"`.
 
+> **Brute force:** Build new char array by manually tracking which positions get reversed per chunk. O(n) space.
+> **Key insight:** Walk in steps of 2k; at each chunk, apply two-pointer swap to just the first k chars (capping at array end). In-place on `toCharArray()`, O(1) extra space per chunk.
 > **Approach:** Walk in steps of `2k`. For each chunk, reverse the first `k` characters (or remaining if fewer than `k`).
 
 ```java
@@ -736,12 +834,16 @@ for (int i = 0; i < arr.length; i += 2 * k) {
 return new String(arr);
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space — `toCharArray()` creates a copy.
+
 ---
 
 ### LC 394: Decode String
 
 > **Problem:** Decode encoded strings like `"3[a2[c]]"` → `"accaccacc"`. Number before brackets means repeat that many times.
 
+> **Brute force:** Repeatedly find the innermost `[...]` pair, expand it, replace in string, repeat until no brackets. O(n · depth) time.
+> **Key insight:** Two stacks (count + string-so-far) save and restore state at each nesting level — `[` saves current context and starts fresh, `]` restores outer context and applies the repetition.
 > **Approach:** Use a stack. Push current string and count when hitting `[`. On `]`, pop and repeat. See `stacks-and-queues.md` for stack-based approach.
 
 ```java
@@ -751,12 +853,16 @@ Deque<StringBuilder> strStack = new ArrayDeque<>();
 Deque<Integer> numStack = new ArrayDeque<>();
 ```
 
+**Complexity (optimal):** O(output length) time — proportional to the decoded string size.
+
 ---
 
 ### LC 443: String Compression
 
 > **Problem:** Compress `['a','a','b','b','c','c','c']` → `['a','2','b','2','c','3']` in-place. Return new length. If count is 1, don't write the count.
 
+> **Brute force:** Build compressed result in a separate array, then copy back. O(n) extra space.
+> **Key insight:** Two-pointer in-place — `read` scans runs, `write` writes the compact form. The write pointer never overtakes the read pointer (compressed form ≤ original length), so in-place is always safe.
 > **Approach:** Two pointers. `read` scans groups of same chars, `write` writes the char and count (if > 1). Convert count to chars digit by digit.
 
 ```java
@@ -781,12 +887,16 @@ while (read < chars.length) {
 return write;
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 792: Number of Matching Subsequences
 
 > **Problem:** Given a string `s` and an array of words, count how many words are subsequences of `s`. Example: `s = "abcde", words = ["a","bb","acd","ace"]` → `3`.
 
+> **Brute force:** For each word, run the two-pointer subsequence check. O(n · m) total where n = length of s, m = total characters in all words.
+> **Key insight:** Same two-pointer subsequence check per word (Pattern 5). Optimization: bucket words by their next expected character — walk `s` once and advance only matching buckets; avoids re-scanning `s` per word.
 > **Approach:** For each word, use the subsequence two-pointer check (Pattern 5). Optimization: bucket words by their current character to avoid re-scanning `s` per word.
 
 ```java
@@ -800,6 +910,8 @@ while (sPtr < s.length() && wPtr < word.length()) {
 // If wPtr reached the end, all chars of word were found in order
 return wPtr == word.length();
 ```
+
+**Complexity (optimal):** O(n + m) time with bucket optimization, O(m) space — n = length of s, m = total chars in all words.
 
 ---
 
@@ -877,3 +989,4 @@ Write, from memory:
 | --- | --- |
 | May 2026 | **File created.** Interview Playbook for Strings. 5 patterns: frequency array, palindrome check, reversal, StringBuilder, subsequence. Canonical walkthrough (LC 49 Group Anagrams), 10-problem bank, char arithmetic traps. |
 | May 2026 | **Lambda/fallback pass.** Added `computeIfAbsent` to Essential Methods. Added 🔄 Lambda section. Inline comments + `🔄 Fallback` at both `computeIfAbsent` usage points (canonical walkthrough + LC 49 problem bank). |
+| June 2026 | **Brute Force / Key Insight pass.** Added `**What this solves**`, `**Brute force**`, `**Key insight**`, `**Complexity (optimal)**` to all 5 pattern blocks. Added `> **Brute force**`, `> **Key insight**`, `**Complexity (optimal)**` to all 17 problem bank entries. |

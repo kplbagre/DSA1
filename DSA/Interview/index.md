@@ -118,8 +118,28 @@ What does the problem involve?
 │   ├── "Subset sum" / "partition" / "knapsack"
 │   │   └── 📄 dp.md (0/1 Knapsack)
 │   │
-│   └── "Count ways" / "decode" / "partition into parts"
-│       └── 📄 dp.md (Counting DP)
+│   ├── "Count ways" / "decode" / "partition into parts"
+│   │   └── 📄 dp.md (Counting DP)
+│   │
+│   ├── "Longest increasing subsequence" / "maximum nesting" / "max chain"
+│   │   └── 📄 dp-advanced.md (LIS O(n²) and O(n log n) patience sort)
+│   │
+│   └── "Burst balloons" / "optimal cost for a range" / "minimum cuts/merges"
+│       └── 📄 dp-advanced.md (Interval DP)
+│
+├── TRIE
+│   │
+│   ├── "Implement autocomplete" / "prefix search" / "startsWith"
+│   │   └── 📄 trie.md (Insert + Search + startsWith)
+│   │
+│   ├── "Search with wildcard (. matches any character)"
+│   │   └── 📄 trie.md (Wildcard DFS)
+│   │
+│   ├── "Find all words from a list in a 2D character grid"
+│   │   └── 📄 trie.md (DFS + Trie — Word Search II)
+│   │
+│   └── "Replace words with shortest dictionary root"
+│       └── 📄 trie.md (Shortest Prefix Walk)
 │
 └── BACKTRACKING
     │
@@ -153,8 +173,10 @@ What does the problem involve?
 | `backtracking.md` | Subsets, Permutations, Constraint Satisfaction, Partitioning | LC 78, 46, 51, 131 |
 | `intervals.md` | Merge, Insert, Overlap Count, Greedy Scheduling | LC 56, 57, 253, 435 |
 | `dp.md` | Linear, Grid, String, 0/1 Knapsack, Counting | LC 198, 62, 1143, 416, 91 |
+| `dp-advanced.md` | LIS O(n²), LIS O(n log n) Patience Sort, 2D LIS, Interval DP | LC 300, 354, 312, 516 |
 | `greedy.md` | Jump/Reach, Circular, Interval Schedule, Partition, Consecutive Groups | LC 55, 134, 435, 763, 846 |
 | `graphs.md` | Grid BFS/DFS, Topological Sort, Clone, Union-Find, Dijkstra | LC 200, 207, 133, 323, 743 |
+| `trie.md` | Insert+Search, Prefix/startsWith, Wildcard DFS, DFS+Trie Grid, Shortest Prefix | LC 208, 211, 212, 648, 720 |
 
 ---
 
@@ -166,7 +188,7 @@ If you have **2 days:** Day 1: arrays → two-pointers → strings → binary-se
 
 If you have **3+ days:** All files in this order:
 1. `arrays-and-hashing.md` (foundation — HashMap is everywhere)
-2. `two-pointers-and-sliding-window.md` (builds on sorted arrays)
+2. `two-pointers-and-sliding-window.md` (builds on sorted arrays; Pattern 6 = monotonic deque)
 3. `strings.md` (applies array + two-pointer patterns to strings)
 4. `binary-search.md` (extends sorted-array thinking)
 5. `linked-list.md` (pointer manipulation — distinct skill)
@@ -178,6 +200,8 @@ If you have **3+ days:** All files in this order:
 11. `intervals.md` (small, distinct, fast to review)
 12. `dp.md` (save for last — builds on all patterns above)
 13. `greedy.md` (hardest to template — review for intuition)
+14. `trie.md` (Meta/Google must-know — DFS+Trie grid search is the key pattern)
+15. `dp-advanced.md` (Google hard rounds — LIS + interval DP; read dp.md first)
 
 ---
 
@@ -197,3 +221,4 @@ If you have **3+ days:** All files in this order:
 | Date | Change |
 | --- | --- |
 | May 2026 | **File created.** Master index for 13 Interview Playbook files with decision tree, quick reference table, and suggested study order. |
+| June 2026 | **FAANG gap fill.** Added `trie.md` and `dp-advanced.md` to decision tree, quick reference table, and study order (positions 14–15). Added TRIE branch to the decision tree. Extended DYNAMIC PROGRAMMING branch with LIS and Interval DP routes. |

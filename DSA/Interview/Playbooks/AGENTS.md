@@ -18,17 +18,19 @@
 | --- | --- | --- |
 | `binary-search.md` | ✅ All 5 | ✅ All 14 |
 | `heaps.md` | ✅ All 5 | ✅ All 13 |
-| `arrays-and-hashing.md` | ❌ | ❌ |
-| `two-pointers-and-sliding-window.md` | ❌ | ❌ |
-| `trees-and-bfs-dfs.md` | ❌ | ❌ |
+| `arrays-and-hashing.md` | ✅ All 6 | ✅ All 21 |
+| `two-pointers-and-sliding-window.md` | ✅ All 6 (Pattern 6: Monotonic Deque added June 2026) | ✅ All 19 |
+| `trees-and-bfs-dfs.md` | ✅ All 5 | ✅ All 18 |
 | `graphs.md` | ✅ All 5 | ✅ All 10 |
-| `backtracking.md` | ❌ | ❌ |
-| `intervals.md` | ❌ | ❌ |
+| `backtracking.md` | ✅ All 4 | ✅ All 13 |
+| `intervals.md` | ✅ All 4 | ✅ All 8 |
 | `dp.md` | ✅ All 5 | ✅ All 10 |
-| `greedy.md` | ❌ | ❌ |
-| `linked-list.md` | ❌ | ❌ |
-| `stacks-and-queues.md` | ❌ | ❌ |
-| `strings.md` | ❌ | ❌ |
+| `greedy.md` | ✅ All 5 | ✅ All 10 |
+| `linked-list.md` | ✅ All 5 | ✅ All 16 |
+| `stacks-and-queues.md` | ✅ All 5 | ✅ All 15 |
+| `strings.md` | ✅ All 5 | ✅ All 17 |
+| `trie.md` | ✅ All 5 | ✅ All 7 |
+| `dp-advanced.md` | ✅ All 4 | ✅ All 7 |
 
 ### How to continue
 
@@ -45,7 +47,9 @@
 
 One `.md` file per DSA topic. Each file is a **pattern-recognition playbook** — not a tutorial, not a cheatsheet. The reader opens it 1-2 days before an interview to calibrate "which pattern do I reach for when I see X?"
 
-Current files: `arrays-and-hashing.md`, `binary-search.md`, `two-pointers-and-sliding-window.md`, `trees-and-bfs-dfs.md`, `graphs.md`, `heaps.md`, `backtracking.md`, `intervals.md`, `dp.md`, `greedy.md`, `linked-list.md`, `stacks-and-queues.md`, `strings.md`
+Current files: `arrays-and-hashing.md`, `binary-search.md`, `two-pointers-and-sliding-window.md`, `trees-and-bfs-dfs.md`, `graphs.md`, `heaps.md`, `backtracking.md`, `intervals.md`, `dp.md`, `dp-advanced.md`, `greedy.md`, `linked-list.md`, `stacks-and-queues.md`, `strings.md`, `trie.md`
+
+> **Note:** `bit-manipulation-reference.md` lives in `DSA/Reference/` (toolkit format, not playbook format).
 
 ---
 
@@ -196,3 +200,8 @@ Run this BEFORE delivering any edit to a playbook file. This extends (not replac
 | Date | Change |
 | --- | --- |
 | June 2026 | **AGENTS.md created.** Locks the pattern block and problem bank entry formats agreed on after the Salesforce R1 experience. Main additions: mandatory `**What this solves**`, `**Brute force**`, `**Key insight**` before code; mandatory `**Complexity (optimal)**` after code. Applied first to `binary-search.md` (all 5 patterns + 14 problem bank entries). Format to be applied to all 13 playbooks. |
+| June 2026 | **Brute Force / Key Insight pass — batch 1.** Completed `arrays-and-hashing.md` (6 patterns, 21 problem bank entries), `two-pointers-and-sliding-window.md` (5 patterns, 19 problem bank entries), and `trees-and-bfs-dfs.md` (5 patterns, 18 problem bank entries). Status table updated. |
+| June 2026 | **Brute Force / Key Insight pass — batch 2.** Completed `backtracking.md` (4 patterns, 13 problem bank entries) and `intervals.md` (4 patterns, 8 problem bank entries). Status table updated. |
+| June 2026 | **Brute Force / Key Insight pass — batch 3.** Completed `greedy.md` (5 patterns, 10 problem bank entries), `linked-list.md` (5 patterns, 16 problem bank entries), and `stacks-and-queues.md` (5 patterns, 15 problem bank entries). Status table updated. |
+| June 2026 | **Brute Force / Key Insight pass — batch 4 (COMPLETE).** Completed `strings.md` (5 patterns, 17 problem bank entries). All 13 playbook files now fully upgraded. Status table 100% ✅. |
+| June 2026 | **FAANG gap fill — 4 additions.** Created `trie.md` (5 patterns, 7 problem bank entries — highest-priority gap, covers Meta/Google trie questions). Created `dp-advanced.md` (4 patterns: LIS O(n²), LIS O(n log n) patience sort, 2D LIS Russian Doll Envelopes, Interval DP — covers Google hard rounds). Added Pattern 6 Monotonic Deque to `two-pointers-and-sliding-window.md` (LC 239 sliding window max). Created `bit-manipulation-reference.md` in `DSA/Reference/` (toolkit cheatsheet — 5 trick families, 10 canonical problems). |

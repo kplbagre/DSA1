@@ -187,10 +187,16 @@ KEY INVARIANT:
 
 ## 🧭 Pattern 1: Merge Intervals ⭐
 
+**What this solves:** Problems where intervals may overlap and need to be combined into non-overlapping ranges covering the same span. Sorting brings overlapping intervals adjacent so a single linear scan can merge them greedily.
+
 **Recognition cues — reach for this when:**
 - "Merge all overlapping intervals"
 - "Return non-overlapping intervals that cover all ranges"
 - Input is a list of intervals, output is a merged list
+
+**Brute force:** Compare every pair of intervals — if they overlap, merge them, then repeat until no more merges are possible. O(n²) per pass, multiple passes in the worst case → O(n³) time.
+
+**Key insight:** Sort by start time — overlapping intervals are now adjacent. One linear scan with a "last merged interval" tracker either extends it on overlap or starts a new one on a gap. O(n log n) total.
 
 **Steps in plain English:**
 
@@ -223,16 +229,24 @@ public int[][] merge(int[][] intervals) {
 }
 ```
 
+**Complexity (optimal):** O(n log n) time — sorting dominates. O(n) space for the output list.
+
 **🏷️ Problems:** LC 56 (Merge Intervals), LC 986 (Interval List Intersections — see Pattern 4 variant).
 
 ---
 
 ## 🧭 Pattern 2: Insert Interval
 
+**What this solves:** Given a sorted, non-overlapping list of intervals, insert a new interval at the right position and merge with any overlapping existing intervals. The input is already sorted — no full re-sort is needed.
+
 **Recognition cues — reach for this when:**
 - "Insert a new interval into a sorted non-overlapping list"
 - "Merge with existing intervals if overlapping"
 - Input is already sorted and non-overlapping, plus one new interval
+
+**Brute force:** Append the new interval to the list, sort by start, then run Merge Intervals. O(n log n) time — correct but wastes the already-sorted property.
+
+**Key insight:** Three-phase linear scan exploits the sorted order: (1) copy all intervals ending before the new one starts, (2) merge all overlapping intervals into the new one by expanding its bounds, (3) copy the rest. O(n) — no sort needed.
 
 **Steps in plain English:**
 
@@ -265,16 +279,24 @@ public int[][] insert(int[][] intervals, int[] newInterval) {
 }
 ```
 
+**Complexity (optimal):** O(n) time — single pass, no sort needed since input is already sorted. O(n) space for output.
+
 **🏷️ Problems:** LC 57 (Insert Interval).
 
 ---
 
 ## 🧭 Pattern 3: Overlap Count (Meeting Rooms) ⭐
 
+**What this solves:** Problems that ask how many intervals overlap simultaneously — minimum rooms needed, maximum concurrent events, or whether any two intervals overlap at all. The answer is the peak count of intervals active at the same point in time.
+
 **Recognition cues — reach for this when:**
 - "Minimum number of meeting rooms"
 - "Maximum number of overlapping intervals at any point"
 - "Can a person attend all meetings?" (simpler: just check ANY overlap)
+
+**Brute force:** For each interval, count how many other intervals overlap with it. Take the maximum count across all intervals. O(n²) time, O(1) space.
+
+**Key insight (min-heap):** Sort by start. A min-heap holds end times of active meetings. When the next meeting starts after the earliest-ending meeting's end, that room is freed (poll). Heap size at any moment = rooms in use.
 
 **Two approaches:**
 
@@ -338,18 +360,24 @@ public int minMeetingRooms(int[][] intervals) {
 }
 ```
 
+**Complexity (optimal):** O(n log n) time — sorting + heap operations. O(n) space for the heap.
+
 **🏷️ Problems:** LC 252 (Meeting Rooms — just check any overlap), LC 253 (Meeting Rooms II — count).
 
 ---
 
 ## 🧭 Pattern 4: Greedy Interval Scheduling (Remove Minimum Overlaps)
 
+**What this solves:** Problems asking for the maximum set of non-overlapping intervals you can keep, or equivalently the minimum to remove. The greedy choice — keep the interval that ends earliest — provably maximizes future options.
+
 **Recognition cues — reach for this when:**
 - "Minimum number of intervals to remove so the rest don't overlap"
 - "Maximum number of non-overlapping intervals"
 - "Activity selection problem" — attend the most events possible
 
-**The key insight:** Sort by END time. Always keep the interval that finishes earliest — this leaves the most room for future intervals.
+**Brute force:** Try all 2^n subsets of intervals, check which are non-overlapping, return the largest subset size. O(n · 2^n) time.
+
+**Key insight:** Sort by end time. Always keep the interval that finishes earliest — this leaves the most room for future intervals. Every overlap forces exactly one removal; keep the earlier-ending one (the one we already have as `prevEnd`).
 
 **Steps in plain English:**
 
@@ -376,6 +404,8 @@ public int eraseOverlapIntervals(int[][] intervals) {
     return removed;
 }
 ```
+
+**Complexity (optimal):** O(n log n) time — sorting dominates. O(1) extra space.
 
 **🏷️ Problems:** LC 435 (Non-overlapping Intervals), LC 452 (Minimum Number of Arrows to Burst Balloons).
 
@@ -450,6 +480,8 @@ class Solution {
 
 > **Problem:** Merge all overlapping intervals. Example: `[[1,3],[2,6],[8,10],[15,18]]` → `[[1,6],[8,10],[15,18]]`.
 
+> **Brute force:** Compare every pair of intervals; if they overlap, merge them and repeat until stable. O(n²) per pass — O(n³) worst case.
+> **Key insight:** Sort by start so overlapping intervals are adjacent. One linear scan with a running "last merged interval" handles all merges in O(n) after the sort.
 > **Approach:** Sort by start. Scan: if `last.end >= curr.start`, extend. Otherwise, new interval.
 
 ```java
@@ -459,12 +491,16 @@ if (last[1] >= curr[0]) last[1] = Math.max(last[1], curr[1]);
 else merged.add(curr);
 ```
 
+**Complexity (optimal):** O(n log n) time, O(n) space.
+
 ---
 
 ### LC 57: Insert Interval
 
 > **Problem:** Insert a new interval into a sorted non-overlapping list, merging if necessary. Example: `intervals = [[1,3],[6,9]], newInterval = [2,5]` → `[[1,5],[6,9]]`.
 
+> **Brute force:** Append the new interval, re-sort, then run Merge Intervals. O(n log n) time — correct but discards the already-sorted property.
+> **Key insight:** Three-phase linear scan: add all intervals ending before newInterval starts, merge all overlapping by expanding newInterval's bounds, add the rest. O(n) — no sort.
 > **Approach:** Three phases: (1) add all before, (2) merge all overlapping with newInterval, (3) add all after.
 
 ```java
@@ -479,12 +515,16 @@ while (i < n && intervals[i][0] <= newInterval[1]) {
 result.add(newInterval);
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 252: Meeting Rooms
 
 > **Problem:** Given an array of meeting time intervals, determine if a person could attend all meetings (no overlaps). Example: `[[0,30],[5,10],[15,20]]` → `false`.
 
+> **Brute force:** Compare every pair of intervals for overlap. O(n²) time.
+> **Key insight:** Sort by start — any overlap must be between adjacent intervals after sorting. One linear check: if `next.start < prev.end`, return false.
 > **Approach:** Sort by start. If any `intervals[i].start < intervals[i-1].end`, there's an overlap → return false.
 
 ```java
@@ -498,12 +538,16 @@ for (int i = 1; i < intervals.length; i++) {
 return true;
 ```
 
+**Complexity (optimal):** O(n log n) time, O(1) extra space.
+
 ---
 
 ### LC 253: Meeting Rooms II
 
 > **Problem:** Find the minimum number of meeting rooms required. Example: `[[0,30],[5,10],[15,20]]` → `2`.
 
+> **Brute force:** For each interval, count how many other intervals overlap with it. The maximum count is the answer. O(n²) time.
+> **Key insight:** Sort by start, min-heap of end times. If the next meeting starts at or after the earliest-ending active meeting, that room is freed (poll + offer). Heap size = active rooms.
 > **Approach:** Pattern 3 — sort by start, min-heap of end times. If `peek() <= start`, reuse room (poll). Add current end. Answer = max heap size.
 
 ```java
@@ -514,12 +558,16 @@ pq.offer(interval[1]);
 // Answer: pq.size() at the end = peak number of concurrent meetings
 ```
 
+**Complexity (optimal):** O(n log n) time — sorting + heap operations. O(n) space for the heap.
+
 ---
 
 ### LC 435: Non-overlapping Intervals
 
 > **Problem:** Find the minimum number of intervals to remove so the remaining intervals don't overlap. Example: `[[1,2],[2,3],[3,4],[1,3]]` → `1` (remove [1,3]).
 
+> **Brute force:** Try all 2^n subsets, find the largest non-overlapping subset, removals = n - subset size. O(n · 2^n) time.
+> **Key insight:** Sort by end time. Greedily keep the interval that ends earliest — it maximizes room for future intervals. Every overlap forces one removal; always discard the later-ending one (the one we haven't committed to yet).
 > **Approach:** Pattern 4 — sort by END time. Greedily keep intervals that don't overlap with the last kept one. Count removals.
 
 ```java
@@ -529,12 +577,16 @@ Arrays.sort(intervals, (a, b) -> a[1] - b[1]);
 // Keep if interval[0] >= prevEnd, else remove (increment count)
 ```
 
+**Complexity (optimal):** O(n log n) time, O(1) extra space.
+
 ---
 
 ### LC 452: Minimum Number of Arrows to Burst Balloons
 
 > **Problem:** Balloons are `[start, end]` on a wall. An arrow at x bursts all balloons where `start ≤ x ≤ end`. Find minimum arrows to burst all balloons. Example: `[[10,16],[2,8],[1,6],[7,12]]` → `2`.
 
+> **Brute force:** Try all possible arrow positions, find the minimum set that covers all balloons. NP-hard without the greedy insight.
+> **Key insight:** Sort by end. Shoot an arrow at the end of the first balloon — it covers all overlapping balloons. Each non-overlapping group requires exactly one new arrow. Identical greedy logic to LC 435.
 > **Approach:** Same as LC 435 — sort by end. Group overlapping balloons. Each non-overlapping group needs one arrow.
 
 ```java
@@ -552,12 +604,16 @@ for (int i = 1; i < points.length; i++) {
 }
 ```
 
+**Complexity (optimal):** O(n log n) time, O(1) extra space.
+
 ---
 
 ### LC 986: Interval List Intersections
 
 > **Problem:** Given two sorted lists of non-overlapping intervals, return their intersection. Example: `A = [[0,2],[5,10]], B = [[1,5],[8,12]]` → `[[1,2],[5,5],[8,10]]`.
 
+> **Brute force:** For each interval in A, check every interval in B for intersection. O(m·n) time.
+> **Key insight:** Both lists are sorted — use two pointers. Advance the pointer whose interval ends first (it can't intersect anything after the current partner interval). O(m+n) total.
 > **Approach:** Two pointers (one per list). Intersection exists when `max(a.start, b.start) ≤ min(a.end, b.end)`. Advance the pointer with the smaller end.
 
 ```java
@@ -572,12 +628,16 @@ if (A[i][1] < B[j][1]) i++;
 else j++;
 ```
 
+**Complexity (optimal):** O(m + n) time — one pass through each list. O(1) extra space (excluding output).
+
 ---
 
 ### LC 1288: Remove Covered Intervals
 
 > **Problem:** Remove intervals that are covered by another interval. Interval `[a,b]` is covered by `[c,d]` if `c ≤ a` and `b ≤ d`. Return the count of remaining intervals. Example: `[[1,4],[3,6],[2,8]]` → `2`.
 
+> **Brute force:** For each interval, check if any other interval covers it. O(n²) time.
+> **Key insight:** Sort by start ascending, then by end descending for ties (widest first). Track the farthest end seen. If the current interval's end ≤ farthest end, it's covered by a previous interval — skip it.
 > **Approach:** Sort by start (ascending), then by end (descending — so the widest interval comes first). Track the farthest end seen. If current end ≤ farthest end, it's covered.
 
 ```java
@@ -598,6 +658,8 @@ for (int[] interval : intervals) {
 }
 return count;
 ```
+
+**Complexity (optimal):** O(n log n) time, O(1) extra space.
 
 ---
 
@@ -663,3 +725,4 @@ What changes if the problem asks for "minimum intervals to remove" instead of "m
 | --- | --- |
 | May 2026 | **File created.** Intervals Interview Playbook — 4 patterns (Merge, Insert, Overlap Count, Greedy Scheduling), canonical walkthrough (LC 56 Merge Intervals), 8 problems with expanded definitions. |
 | May 2026 | **Lambda & Fallback pass.** Added 🔄 Lambda section with explanations for `Arrays.sort` comparator lambdas, `list.toArray()`, and complex comparators. Added inline English comments + 🔄 Fallback at all 8 usage points across templates and problem bank. |
+| June 2026 | **Brute Force / Key Insight pass.** Added What this solves, Brute force, Key insight to all 4 pattern blocks. Added > Brute force, > Key insight to all 8 problem bank entries. Added Complexity (optimal) after every code block. |

@@ -141,11 +141,17 @@ if (freq.containsKey(card)) {
 
 ## 🧭 Pattern 1: Jump / Reachability ⭐
 
+**What this solves:** Problems where each position has a jump length and you must determine if the end is reachable or find the minimum jumps. The greedy insight: always track the farthest reachable position — no backtracking or path-recording needed.
+
 **Recognition cues — reach for this when:**
 - "Can you reach the last index?"
 - "Minimum number of jumps to reach the end"
 - Each position has a "reach" or "range" you can cover
 - The greedy choice: always extend your farthest reachable position
+
+**Brute force:** DFS/BFS — from each position, try every possible jump length and explore all reachable paths. O(n²) time.
+
+**Key insight:** You never need to commit to a specific path. Tracking just `farthest = max(farthest, i + nums[i])` at each step is sufficient — if `i > farthest` at any point, no sequence of jumps can reach position `i`.
 
 **Steps in plain English (Jump Game I — can you reach?):**
 
@@ -216,18 +222,24 @@ KEY INVARIANT:
    the farthest we can reach in the NEXT jump. So each jump is optimal.
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 **🏷️ Problems:** LC 55 (Jump Game), LC 45 (Jump Game II).
 
 ---
 
 ## 🧭 Pattern 2: Circular Greedy (Gas Station)
 
+**What this solves:** Problems asking whether you can complete a circular route given a surplus/deficit at each stop. The greedy insight: if the total resource is non-negative, a valid start always exists — and you can find it in a single pass without simulating every possible start.
+
 **Recognition cues — reach for this when:**
 - "Circular route" — start somewhere, visit all stations, return to start
 - "Enough fuel/resources to complete a loop?"
 - Track surplus/deficit as you go around
 
-**The key insight:** If total gas ≥ total cost, a solution MUST exist. The starting point is where the running surplus is at its lowest (or equivalently, where it first becomes non-negative after a reset).
+**Brute force:** Try each station as the start, simulate the full circuit, check if you run dry. O(n²) time, O(1) space.
+
+**Key insight:** If total gas ≥ total cost, a solution must exist. The last index where the running surplus drops below zero is the reset point — everything before it was a "bad prefix," so the optimal start is immediately after.
 
 **Steps in plain English:**
 
@@ -255,16 +267,24 @@ public int canCompleteCircuit(int[] gas, int[] cost) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 **🏷️ Problems:** LC 134 (Gas Station).
 
 ---
 
 ## 🧭 Pattern 3: Interval Scheduling (Activity Selection)
 
+**What this solves:** Problems where you have a set of intervals and need to select the maximum non-overlapping subset or find the minimum removals to eliminate all overlaps. The greedy insight: always prefer the interval that ends earliest — it leaves maximum room for future intervals.
+
 **Recognition cues — reach for this when:**
 - "Maximum number of non-overlapping intervals"
 - "Minimum intervals to remove"
 - "Minimum arrows / rooms" (see `intervals.md` for full coverage)
+
+**Brute force:** Try all 2^n subsets of intervals, check each for overlaps, return the largest non-overlapping set. O(2^n) time.
+
+**Key insight:** Sort by end time and greedily keep the earliest-ending interval — any other choice leaves equal or less room for future intervals (exchange argument: swapping out the earliest-ending for any other can only make things worse).
 
 **This pattern is fully covered in `../Interview/intervals.md` Pattern 4.** The short version: sort by end time, greedily keep intervals that don't overlap.
 
@@ -284,17 +304,25 @@ for (int i = 1; i < intervals.length; i++) {
 }
 ```
 
+**Complexity (optimal):** O(n log n) time, O(1) space — dominated by the sort.
+
 **🏷️ Problems:** LC 435 (Non-overlapping Intervals), LC 452 (Minimum Arrows).
 
 ---
 
 ## 🧭 Pattern 4: Partition by Boundary ⭐
 
+**What this solves:** Problems asking you to split a string or array into the maximum number of parts such that no element appears in more than one part. The greedy insight: the partition boundary is determined by the farthest last-occurrence of any element seen so far — you can cut exactly when you've passed every element's last occurrence.
+
 **Recognition cues — reach for this when:**
 - "Partition string/array into maximum parts"
 - "Each element appears in at most one part"
 - "Divide so that no element spans two groups"
 - The greedy choice: extend the current partition until all elements in it are fully contained
+
+**Brute force:** Try all 2^(n-1) possible split points, validate each split by checking that no character appears in two different parts. O(2^n · n) time.
+
+**Key insight:** Record each character's last occurrence index upfront. As you scan left-to-right, extend the current partition's end to the farthest last-occurrence seen. When `i == end`, every character in the current window ends here — safe to cut.
 
 **Steps in plain English:**
 
@@ -347,16 +375,24 @@ KEY INVARIANT:
    occurrence within this range — safe to cut here.
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space — the lastIndex array is fixed at 26 elements.
+
 **🏷️ Problems:** LC 763 (Partition Labels).
 
 ---
 
 ## 🧭 Pattern 5: Consecutive Group Matching
 
+**What this solves:** Problems where you must partition a collection into groups of exactly K consecutive integers. The greedy insight: always start a new group from the smallest remaining element — if the smallest element can't start a group, no rearrangement can save it.
+
 **Recognition cues — reach for this when:**
 - "Divide into groups of consecutive integers"
 - "Hand of straights" / "reorganize into groups of size K"
 - Need to form sequences like [1,2,3], [4,5,6] from a bag of numbers
+
+**Brute force:** Try all possible groupings via backtracking — assign each element to a group in every possible order. Exponential time.
+
+**Key insight:** The smallest available element must start a group right now — it can never be the middle or end of any group. A TreeMap provides the smallest key in O(log n), and if any element in the required consecutive run is missing, we fail immediately.
 
 **Steps in plain English:**
 
@@ -398,6 +434,8 @@ public boolean isNStraightHand(int[] hand, int groupSize) {
     return true;
 }
 ```
+
+**Complexity (optimal):** O(n log n) time, O(n) space — TreeMap insertions and lookups are O(log n) each.
 
 **🏷️ Problems:** LC 846 (Hand of Straights), LC 1296 (Divide Array in Sets of K Consecutive Numbers).
 
@@ -472,6 +510,8 @@ class Solution {
 
 > **Problem:** Can you reach the last index? Each element is max jump length. Example: `[2,3,1,1,4]` → `true`.
 
+> **Brute force:** DFS/BFS from index 0 — try every possible jump length at each position and explore all reachable paths. O(2^n) time, O(n) space.
+> **Key insight:** You never need to commit to a specific path — tracking `farthest = max(farthest, i + nums[i])` in one pass is sufficient. If `i > farthest`, no sequence of prior jumps can reach `i`.
 > **Approach:** Track farthest reachable. If `i > farthest` at any point, stuck.
 
 ```java
@@ -487,12 +527,16 @@ for (int i = 0; i < nums.length; i++) {
 return true;
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 45: Jump Game II
 
 > **Problem:** Minimum number of jumps to reach the last index. Guaranteed reachable. Example: `[2,3,1,1,4]` → `2`.
 
+> **Brute force:** BFS — explore all positions reachable in 1 jump, then all positions reachable in 2 jumps, etc. O(n²) time, O(n) space.
+> **Key insight:** At each jump boundary, the farthest reachable position in the next jump is already tracked via `farthest` — no need to explore all paths; just commit when you hit `currentEnd`.
 > **Approach:** Track `currentEnd` (boundary of current jump) and `farthest` (best of next jump). When `i == currentEnd`, jump.
 
 ```java
@@ -510,12 +554,16 @@ for (int i = 0; i < nums.length - 1; i++) {
 return jumps;
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 134: Gas Station
 
 > **Problem:** Circular route with gas stations. At station `i`, get `gas[i]` fuel, cost `cost[i]` to next station. Find the starting station to complete the circuit, or -1. Example: `gas = [1,2,3,4,5], cost = [3,4,5,1,2]` → `3`.
 
+> **Brute force:** Try each of the n stations as start, simulate the full n-station circuit. O(n²) time, O(1) space.
+> **Key insight:** If total gas ≥ total cost, a valid start is guaranteed. The last index where the running surplus went negative marks a "bad prefix" — the optimal start is right after it.
 > **Approach:** Pattern 2 — if `totalSurplus >= 0`, solution exists. Start where `currentSurplus` resets (goes negative → start = i+1).
 
 ```java
@@ -526,12 +574,16 @@ if (currentSurplus < 0) {
 return totalSurplus >= 0 ? start : -1;
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 763: Partition Labels
 
 > **Problem:** Partition a string so each letter appears in at most one part. Maximize the number of parts. Return the sizes. Example: `"ababcbacadefegdehijhklij"` → `[9,7,8]`.
 
+> **Brute force:** Try all 2^(n-1) possible cut points, validate each split by checking no character spans two parts. Exponential time.
+> **Key insight:** A cut at position i is safe only when every character seen so far ends at or before i — tracking the running max of last-occurrences tells you exactly when to cut, in one pass.
 > **Approach:** Pattern 4 — record last occurrence of each char. Extend current partition end to the farthest last occurrence. Cut when `i == end`.
 
 ```java
@@ -544,12 +596,16 @@ if (i == end) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 846: Hand of Straights
 
 > **Problem:** Given a hand of cards, can you rearrange into groups of `groupSize` consecutive cards? Example: `hand = [1,2,3,6,2,3,4,7,8], groupSize = 3` → `true` ([1,2,3],[2,3,4],[6,7,8]).
 
+> **Brute force:** Try all ways to partition the hand into groups via backtracking — assign each card to every possible group. Exponential time.
+> **Key insight:** The smallest available card must start a group right now — it can never be in the middle or end of a consecutive group. TreeMap gives that smallest key in O(log n).
 > **Approach:** Pattern 5 — TreeMap for sorted frequencies. Start from smallest, form consecutive groups of size K. If any member missing, return false.
 
 ```java
@@ -559,17 +615,23 @@ TreeMap<Integer, Integer> freq = new TreeMap<>();
 // Start from freq.firstKey(), try to form [start, start+groupSize)
 ```
 
+**Complexity (optimal):** O(n log n) time, O(n) space.
+
 ---
 
 ### LC 1296: Divide Array in Sets of K Consecutive Numbers
 
 > **Problem:** Same as LC 846 but with an array of integers instead of cards. Example: `nums = [1,2,3,3,4,4,5,6], k = 4` → `true`.
 
+> **Brute force:** Backtracking — try all groupings of k consecutive numbers. Exponential time.
+> **Key insight:** Same as LC 846 — the smallest remaining element must start a group. Identical algorithm, different variable names.
 > **Approach:** Identical to LC 846 — TreeMap + greedy from smallest.
 
 ```java
 // Same as Hand of Straights — exact same algorithm
 ```
+
+**Complexity (optimal):** O(n log n) time, O(n) space.
 
 ---
 
@@ -577,6 +639,8 @@ TreeMap<Integer, Integer> freq = new TreeMap<>();
 
 > **Problem:** Given a string with `(`, `)`, and `*` (which can be `(`, `)`, or empty), check if it's valid. Example: `"(*)"` → `true`.
 
+> **Brute force:** Try all 3^k substitutions for each `*` (replace with `(`, `)`, or empty), check validity of each resulting string. O(3^n) time.
+> **Key insight:** Instead of committing to each `*`, track the range [lo, hi] of possible open-paren counts — any count in this range is achievable. Clip lo at 0 to discard impossible states early.
 > **Approach:** Track range `[lo, hi]` of possible open-paren counts. `(` → both++. `)` → both--. `*` → lo--, hi++. Keep `lo ≥ 0`. If `hi < 0`, invalid.
 
 ```java
@@ -598,12 +662,16 @@ for (char c : s.toCharArray()) {
 return lo == 0;
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 135: Candy
 
 > **Problem:** Children in a line, each has a rating. Give candies so: each child gets ≥1, higher-rated child gets more candy than their neighbor. Minimize total candies. Example: `ratings = [1,0,2]` → `5` (candies = [2,1,2]).
 
+> **Brute force:** Repeatedly scan the array and increment any child's candy count that violates a neighbor constraint, until no violations remain. O(n²) time, O(n) space.
+> **Key insight:** Left-neighbor and right-neighbor constraints are independent — satisfy each in a separate pass, then take `max` at each position to satisfy both simultaneously.
 > **Approach:** Two-pass greedy. Left-to-right: if `rating[i] > rating[i-1]`, `candy[i] = candy[i-1]+1`. Right-to-left: if `rating[i] > rating[i+1]`, `candy[i] = max(candy[i], candy[i+1]+1)`.
 
 ```java
@@ -625,12 +693,16 @@ for (int i = n - 2; i >= 0; i--) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 435: Non-overlapping Intervals
 
 > **Problem:** Find the minimum number of intervals to remove so the rest don't overlap. Example: `[[1,2],[2,3],[3,4],[1,3]]` → `1` (remove `[1,3]`).
 
+> **Brute force:** Try all 2^n subsets of intervals, check each for overlaps, return the largest non-overlapping set; removals = n - that size. O(2^n) time.
+> **Key insight:** Sort by end time and always keep the earliest-ending non-overlapping interval — it leaves maximum room for future intervals (exchange argument: any other kept interval can only end later, crowding out more future intervals).
 > **Approach:** Sort by END time. Greedily keep intervals that don't overlap with the last kept one. Count removals. See `intervals.md` Pattern 4 for full coverage.
 
 ```java
@@ -652,12 +724,16 @@ for (int[] interval : intervals) {
 }
 ```
 
+**Complexity (optimal):** O(n log n) time, O(1) space.
+
 ---
 
 ### LC 452: Minimum Number of Arrows to Burst Balloons
 
 > **Problem:** Balloons are `[start, end]`. An arrow at x bursts all balloons where `start ≤ x ≤ end`. Find minimum arrows. Example: `[[10,16],[2,8],[1,6],[7,12]]` → `2`.
 
+> **Brute force:** For each balloon's endpoint as a candidate arrow position, check how many balloons it bursts; greedily pick the best position per round. O(n²) time.
+> **Key insight:** After sorting by end, any maximal group of overlapping balloons shares a common point at the leftmost end — one arrow there bursts all of them. A new group starts when a balloon begins after the current end boundary.
 > **Approach:** Same as LC 435 — sort by end. Each non-overlapping group needs one arrow. Use `Integer.compare` to avoid overflow.
 
 ```java
@@ -678,6 +754,8 @@ for (int i = 1; i < points.length; i++) {
     }
 }
 ```
+
+**Complexity (optimal):** O(n log n) time, O(1) space.
 
 ---
 
@@ -740,3 +818,4 @@ Solve LC 763 (Partition Labels) from memory. Time yourself.
 | --- | --- |
 | May 2026 | **File created.** Greedy Algorithms Interview Playbook — 5 patterns (Jump/Reachability, Circular Greedy, Interval Scheduling, Partition by Boundary, Consecutive Group Matching), canonical walkthrough (LC 55 Jump Game), 9 problems with expanded definitions. |
 | May 2026 | **Lambda & Fallback pass.** Added `freq.merge()` and `Integer.compare()` to Essential Methods table. Added 🔄 Lambda section with 4 explanations (sort-by-end lambda, Integer.compare overflow safety, TreeMap, freq.merge). Added inline English comments + 🔄 Fallback at 6 usage points: Pattern 3 sort, Pattern 5 TreeMap + merge, LC 846 TreeMap, LC 435 sort, LC 452 Integer.compare. |
+| June 2026 | **Brute Force / Key Insight pass.** Added `**What this solves**`, `**Brute force**`, `**Key insight**`, `**Complexity (optimal)**` to all 5 pattern blocks. Removed old `**The key insight:**` paragraph from Pattern 2. Added `> **Brute force**`, `> **Key insight**`, `**Complexity (optimal)**` to all 10 problem bank entries. |

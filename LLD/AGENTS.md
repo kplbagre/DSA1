@@ -4,6 +4,20 @@
 
 ---
 
+## Mandatory Pre-Work (Do This Before Writing Any Note)
+
+1. **Read `notes-standards.md`** — the complete format for pattern notes and problem notes, section order, and pre-publish checklist.
+2. **Read `resources.md`** — curated primary and supplementary resources per pattern and per problem. Before writing `📚 Further Reading` in any note, check here for already-vetted resources. Do NOT invent recommendations.
+3. **Read the root `AGENTS.md`** — universal formatting rules (code style, ASCII visuals, emoji palette, first-use term gloss).
+4. **Check existing files** before writing — avoid duplicating content that belongs as a cross-reference.
+5. **Read `oop-concepts.md`** — 4 OOP pillars with interview framing. Check here before explaining Encapsulation/Abstraction/Polymorphism/Inheritance in a problem note.
+6. **Read `design-principles.md`** — KISS, DRY, YAGNI, SoC, Law of Demeter. Check here before writing a Design Decisions section.
+7. **Read `concurrency-deep-dive.md`** — race conditions, deadlock, wait/notify, BlockingQueue. Check here before writing a Concurrency section in any problem note. (`java-building-blocks-for-lld.md` covers WHICH primitive; this file covers WHY.)
+
+> **Rule: When a new reference file is added to this folder that AI should consult, AGENTS.md Mandatory Pre-Work must be updated in the same step — never separately.**
+
+---
+
 ## 🎯 What This Folder Contains
 
 Low-Level Design (LLD) knowledge for senior backend interviews. Two types of content:
@@ -103,3 +117,6 @@ Run before finalizing any LLD note, in addition to the universal checklist:
 | Date | Change |
 |---|---|
 | June 2026 | LLD folder created. Standards defined. Study order: interleaved (pattern → problem). |
+| June 2026 | **resources.md created.** Two primaries locked in: ashishps1/awesome-low-level-design (⭐) and hellointerview.com LLD. Per-pattern and per-problem resource table added. Mandatory Pre-Work section added to AGENTS.md to enforce reading resources.md before writing any note. |
+| June 2026 | **interview-execution-guide.md updated.** Three additions from multi-source review: (1) Explicit "Core Entities" step (minute 5-10) — identify nouns, name IS-A/HAS-A relationships. (2) SOLID principle naming required alongside pattern naming — added principle drop-in phrases section. (3) Pre-coding use-case walkthrough in design phase — validate the flow before committing to code. |
+| June 2026 | **6 new foundation files created** from hellointerview curriculum gap analysis: `DesignPatterns/03-command.md`, `DesignPatterns/04-builder.md`, `DesignPatterns/06-singleton.md`, `concurrency-deep-dive.md`, `design-principles.md`, `oop-concepts.md`. Mandatory Pre-Work updated to reference oop-concepts, design-principles, and concurrency-deep-dive. |

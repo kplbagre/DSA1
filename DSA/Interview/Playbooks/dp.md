@@ -8,7 +8,19 @@
 
 DP problems are the most feared interview topic. But 80% of interview DP problems fall into just 5 families. If you can identify which family a problem belongs to in 30 seconds, the template writes itself. This file builds that instinct.
 
-**Prerequisite:** You should have read `DSA/DeepDive/dp-fundamentals.md` through at least Family 2. If you haven't — read that first, then come back here.
+**Prerequisite — CRITICAL:** This file is a pattern-recognition playbook, NOT a learning resource. It shows you templates to recognize fast — it does NOT teach you how to arrive at the recursion.
+
+**For each pattern you're about to study, read the corresponding Family in `DSA/DeepDive/dp-fundamentals.md` FIRST:**
+
+| This file's pattern | Read in dp-fundamentals.md FIRST |
+| --- | --- |
+| Pattern 1 — Linear DP | Family 1 (1D Linear) — House Robber recursion tree |
+| Pattern 2 — Grid DP | Family 2 (2D Grid) — right/down DFS tree |
+| Pattern 3 — String DP | **Family 5 (LCS / Strings DP)** — LCS match/mismatch decision tree visual |
+| Pattern 4 — 0/1 Knapsack | **Family 3 (0/1 Knapsack)** — take/skip tree, Aditya Verma's insight |
+| Pattern 5 — Counting DP | Family 1 + Family 4 (Unbounded variants) |
+
+If you can't mentally derive the recursion for a pattern — **stop, go to dp-fundamentals.md for that Family, come back here after**. Using this file as a shortcut before understanding the recursion is how you memorize patterns without understanding them.
 
 ---
 
@@ -243,6 +255,27 @@ public int uniquePaths(int m, int n) {
 
 **Complexity (optimal):** O(m × n) time, O(m × n) space (or O(n) with a 1D rolling row).
 
+**Space optimization — 1D rolling row:**
+> **Mental model:** `dp[r][c]` only needs the row directly above (`dp[r-1][c]`) and the cell to its left (`dp[r][c-1]`). Once row `r` is computed, row `r-1` is never needed again — so a single 1D array updated in-place replaces the full 2D table.
+> `dp[j]` before overwriting = previous row's value at column j (= "cell above"). `dp[j-1]` already updated this iteration = "cell to the left".
+
+```java
+public int uniquePaths(int m, int n) {
+    int[] dp = new int[n];
+    // Seed: first row — only one path to any cell in row 0
+    Arrays.fill(dp, 1);
+    for (int r = 1; r < m; r++) {
+        for (int c = 1; c < n; c++) {
+            // dp[c] is still the value from the row above; dp[c-1] is already the left
+            dp[c] = dp[c] + dp[c - 1];
+        }
+    }
+    return dp[n - 1];
+}
+```
+
+> **When to mention in an interview:** After stating your 2D solution — say *"We can reduce space to O(n) with a rolling row since each cell only depends on the row above and the cell to its left."*
+
 ---
 
 ## 🧭 Pattern 3: String DP (Two Strings) ⭐
@@ -300,6 +333,9 @@ public int longestCommonSubsequence(String text1, String text2) {
 ```
 
 **Complexity (optimal):** O(m × n) time, O(m × n) space (or O(min(m, n)) with a 1D rolling row).
+
+**Space optimization — 1D rolling row:**
+> **Mental model:** Same principle as Grid DP — `dp[i][j]` only needs the row above and the diagonal cell (`dp[i-1][j-1]`). Process the shorter string as columns. One row of size `n+1` replaces the full table. Tip: make `s2` the shorter string so you allocate `O(min(m,n))` not `O(max)`.
 
 ---
 
@@ -893,3 +929,4 @@ From memory, write the recurrence for House Robber with space optimization (prev
 | June 2026 | **Brute force / Key insight pass.** Added `**What this solves**`, `**Brute force**`, `**Key insight**`, `**Complexity (optimal)**` to all 5 patterns and all 10 problem bank entries. Format matches `binary-search.md` and `heaps.md`. |
 | June 2026 | **Recursion bridge (Option B).** Added naked recursion code sketch to each of the 5 pattern Brute force sections. Expanded canonical walkthrough (LC 198) to show all 4 stages: brute recursion → memoization (top-down) → tabulation (bottom-up) → space optimization. |
 | June 2026 | **Practice mistakes logged.** Added lesson-learned callout after Stage 2 in canonical walkthrough (memoization template + array sizing). Extended rookie mistakes list from 3 to 5: stage contamination + memoization template improvisation. |
+| June 2026 | **Space optimization callouts added.** Added 1D rolling-row mental model + code to Pattern 2 (Grid DP) and a brief note to Pattern 3 (String DP). Pattern 1 and Pattern 4 already carried space optimization. Triggered by LC 64 follow-up question. |

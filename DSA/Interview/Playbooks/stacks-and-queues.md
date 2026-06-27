@@ -60,11 +60,17 @@ Problem involves...
 
 ## 🧭 Pattern 1: Bracket Matching ⭐
 
+**What this solves:** Problems requiring validation of nested or matched sequences — brackets, tags, any open/close pairs — ensuring every opener has a corresponding closer in the correct order. The stack enforces nesting naturally because it's LIFO (last in, first out — the most recent opener must be closed first).
+
 **Recognition cues — reach for this when:**
 - "Valid parentheses"
 - "Match opening and closing brackets"
 - "Remove outermost parentheses"
 - Any nesting / matching problem
+
+**Brute force:** For each close bracket, scan backward to find its matching open bracket and check for mismatches. O(n²) time.
+
+**Key insight:** Push the EXPECTED close bracket when you see an open. Then when you see a close bracket, a single `stack.pop() != c` comparison validates the match — no need for a mapping table, and the stack automatically enforces nesting order (the innermost open must close first).
 
 **Steps in plain English:**
 
@@ -99,11 +105,15 @@ public boolean isValid(String s) {
 
 **Why push the EXPECTED close bracket?** Instead of pushing `'('` and later checking "does `')'` match `'('`?", push `')'` directly. Then the pop comparison is just `stack.pop() != c` — one check instead of three.
 
+**Complexity (optimal):** O(n) time, O(n) space — stack holds at most n/2 unmatched open brackets.
+
 **🏷️ Problems:** LC 20 (Valid Parentheses), LC 1249 (Minimum Remove to Make Valid), LC 32 (Longest Valid Parentheses — advanced).
 
 ---
 
 ## 🧭 Pattern 2: Monotonic Stack (Next Greater / Smaller) ⭐
+
+**What this solves:** Problems asking "for each element, find the nearest greater or smaller element to its right (or left)." The stack maintains a set of unresolved elements — elements whose answer hasn't been found yet — and resolves them in bulk when a new element breaks the monotonic order.
 
 **Recognition cues — reach for this when:**
 - "Next greater element"
@@ -111,6 +121,10 @@ public boolean isValid(String s) {
 - "Largest rectangle in histogram"
 - "Stock span" (consecutive days ≤ today's price)
 - Any problem asking "for each element, find the next element that is greater/smaller"
+
+**Brute force:** For each element, scan right to find the first element that is greater. O(n²) time.
+
+**Key insight:** Elements waiting on the stack all share a common fate — when a new larger element arrives, it is the answer for ALL of them at once, so they're popped in bulk. Since each index is pushed once and popped once, the total work is O(n).
 
 **The core idea:** Maintain a stack of "unresolved" elements (we haven't found their answer yet). When a new element arrives that resolves the top of the stack, pop and record the answer.
 
@@ -164,16 +178,24 @@ public int[] dailyTemperatures(int[] temperatures) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space — each index is pushed and popped at most once.
+
 **🏷️ Problems:** LC 739 (Daily Temperatures), LC 496 (Next Greater Element I), LC 503 (Next Greater Element II — circular, iterate 2×n), LC 84 (Largest Rectangle in Histogram — advanced).
 
 ---
 
 ## 🧭 Pattern 3: Expression Evaluation
 
+**What this solves:** Problems involving arithmetic or string expression parsing — postfix notation, nested decode, or calculator with parentheses. The stack separates "pending" values/state from the active computation at the current nesting level.
+
 **Recognition cues — reach for this when:**
 - "Evaluate reverse Polish notation"
 - "Basic calculator"
 - "Decode string" (nested brackets)
+
+**Brute force:** Build a full recursive AST (abstract syntax tree — a tree where each node is an operator and its children are its operands) and evaluate it with a tree traversal. O(n) but requires constructing the tree first.
+
+**Key insight:** Numbers wait on the stack until an operator arrives to consume exactly 2 of them — pop order preserves operand order, and the stack eliminates the need to build an explicit AST.
 
 ### Reverse Polish Notation (LC 150):
 
@@ -238,17 +260,25 @@ public String decodeString(String s) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space — stack holds at most n/2 values at peak nesting depth.
+
 **🏷️ Problems:** LC 150 (Evaluate Reverse Polish Notation), LC 394 (Decode String), LC 224 (Basic Calculator — advanced).
 
 ---
 
 ## 🧭 Pattern 4: Stack as History (Undo / Backtrack)
 
+**What this solves:** Problems where a new element can cancel or undo the most recently accumulated one — backspaces, duplicate removal, directory navigation with `..`, or collision events. The stack IS the current state: push to extend it, pop to undo the last step.
+
 **Recognition cues — reach for this when:**
 - "Simplify file path" (Unix path with `.` and `..`)
 - "Remove all adjacent duplicates"
 - "Backspace string compare"
 - "Asteroid collision"
+
+**Brute force:** Multiple passes — for example, repeatedly scan the string for adjacent duplicates and remove them until no more are found. O(n²) in the worst case (many rounds of removal).
+
+**Key insight:** The stack always holds the "settled" state — characters or directory names that have survived all undos so far. When a new element triggers an undo (backspace, `..`, matching duplicate), one pop resolves it immediately with no re-scanning.
 
 The stack tracks "the current state." New elements either add to it or undo the last addition.
 
@@ -297,16 +327,24 @@ public String removeDuplicates(String s) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space — single pass, stack holds at most n elements.
+
 **🏷️ Problems:** LC 71 (Simplify Path), LC 1047 (Remove All Adjacent Duplicates), LC 844 (Backspace String Compare), LC 735 (Asteroid Collision).
 
 ---
 
 ## 🧭 Pattern 5: Design — Min Stack / Queue Using Stacks
 
+**What this solves:** Design problems requiring O(1) min/max retrieval from a stack, or FIFO semantics built from LIFO structures. Standard data structures can't do both simultaneously without extra bookkeeping.
+
 **Recognition cues — reach for this when:**
 - "Design a stack that supports getMin in O(1)"
 - "Implement queue using stacks"
 - "Design" + stack/queue in the title
+
+**Brute force (Min Stack):** Scan the entire main stack to find the minimum each time `getMin()` is called. O(n) per query.
+
+**Key insight:** A parallel min stack records the running minimum at each depth level — when you push x, the new min is `min(x, previous min)`. Since push and pop are always synchronized, `getMin()` is always a single `minStack.peek()` call.
 
 ### Min Stack (LC 155):
 
@@ -342,6 +380,8 @@ class MinStack {
     }
 }
 ```
+
+**Complexity (optimal):** O(1) for all operations — push, pop, top, getMin each touch only the top of their respective stacks.
 
 **🏷️ Problems:** LC 155 (Min Stack), LC 232 (Implement Queue using Stacks), LC 225 (Implement Stack using Queues).
 
@@ -423,6 +463,8 @@ Result: [1, 1, 4, 2, 1, 1, 0, 0] ✅
 
 > **Problem:** Given a string containing `()[]{}`, determine if brackets are valid (every open has a matching close in correct order). `"()[]{}"` → true, `"(]"` → false.
 
+> **Brute force:** For each close bracket, scan backward to find its matching open bracket and check for mismatches. O(n²) time.
+> **Key insight:** Push expected close bracket for each open — then the pop comparison is one line (`pop() != c`), and the stack automatically enforces nesting order (innermost must close first).
 > **Approach:** Stack. Push the expected close bracket for each open. On close bracket, pop and compare.
 
 ```java
@@ -434,12 +476,16 @@ else if (c == '[') stack.push(']');
 else if (stack.isEmpty() || stack.pop() != c) return false;
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 739: Daily Temperatures
 
 > **Problem:** Given daily temperatures, for each day find how many days until a warmer temperature. `[73,74,75,71,69,72,76,73]` → `[1,1,4,2,1,1,0,0]`.
 
+> **Brute force:** For each day, scan right to find the first warmer day. O(n²) time.
+> **Key insight:** Monotonic stack resolves multiple cold days at once when a warmer day arrives — each index is pushed once and popped once, giving O(n) total.
 > **Approach:** Monotonic stack of indices. Pop when current temp > stack top's temp. Distance = `i - popped index`.
 
 ```java
@@ -453,12 +499,16 @@ while (!stack.isEmpty() && temps[i] > temps[stack.peek()]) {
 stack.push(i);
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 496: Next Greater Element I
 
 > **Problem:** `nums1` is a subset of `nums2`. For each element in `nums1`, find the next greater element in `nums2`. `nums1=[4,1,2], nums2=[1,3,4,2]` → `[-1,3,-1]`.
 
+> **Brute force:** For each element in nums1, scan nums2 right from its position to find the next greater. O(m·n) time.
+> **Key insight:** Precompute "next greater" for every element in nums2 using a monotonic stack and store in a HashMap; then each nums1 lookup is O(1).
 > **Approach:** Build a `value → next greater` map from `nums2` using monotonic stack. Then look up each element in `nums1`.
 
 ```java
@@ -466,12 +516,16 @@ stack.push(i);
 // For each x in nums1: result = map.getOrDefault(x, -1)
 ```
 
+**Complexity (optimal):** O(m+n) time, O(n) space — one pass over nums2, one lookup per nums1 element.
+
 ---
 
 ### LC 150: Evaluate Reverse Polish Notation
 
 > **Problem:** Evaluate postfix expression. `["2","1","+","3","*"]` → `((2+1)*3)` = 9. Operators: `+ - * /`.
 
+> **Brute force:** Build a full recursive AST (abstract syntax tree — each node is an operator, its children are operands), then evaluate via tree traversal. O(n) but requires constructing the tree.
+> **Key insight:** Numbers wait on the stack; each operator pops exactly 2 operands and pushes 1 result — pop order (b first, then a) preserves the correct operand order for `-` and `/`.
 > **Approach:** Numbers push to stack. Operators pop two operands, compute, push result. Note: pop order matters for `-` and `/`.
 
 ```java
@@ -481,12 +535,16 @@ int a = stack.pop();
 stack.push(a + b); // or -, *, /
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 394: Decode String
 
 > **Problem:** Decode encoded string. `"3[a2[c]]"` → `"accaccacc"`. Number before `[` means repeat the enclosed content that many times.
 
+> **Brute force:** Repeatedly find the innermost `[...]` pair, expand it, replace in string, repeat until no brackets remain. O(n · max_depth) time.
+> **Key insight:** Two stacks (count + string-so-far) save and restore state at each nesting level — `[` saves current state and starts fresh, `]` restores the outer state and applies the repetition.
 > **Approach:** Two stacks: count stack + string stack. On `[` push both and reset. On `]` pop and repeat.
 
 ```java
@@ -508,12 +566,16 @@ else if (c == ']') {
 }
 ```
 
+**Complexity (optimal):** O(output length) time — the loop runs proportional to the final decoded string size.
+
 ---
 
 ### LC 155: Min Stack
 
 > **Problem:** Design a stack that supports push, pop, top, and retrieving the minimum element — all in O(1) time.
 
+> **Brute force:** Scan the entire main stack on each `getMin()` call. O(n) per query.
+> **Key insight:** Parallel min stack records the running minimum at each depth level — on push, new min = `min(val, minStack.peek())`; since push/pop are always synchronized, `getMin()` is always O(1).
 > **Approach:** Two parallel stacks. Main stack stores values. Min stack stores the running minimum at each level.
 
 ```java
@@ -524,12 +586,16 @@ public void push(int val) {
 }
 ```
 
+**Complexity (optimal):** O(1) for all operations.
+
 ---
 
 ### LC 84: Largest Rectangle in Histogram
 
 > **Problem:** Given array of bar heights, find the area of the largest rectangle that fits under the histogram. `[2,1,5,6,2,3]` → 10 (5×2 rectangle at heights 5,6).
 
+> **Brute force:** For each bar, expand left and right to find the widest rectangle at that height. O(n²) time.
+> **Key insight:** A shorter bar to the right terminates all rectangles taller than it — pop and compute their areas using current index as right boundary and new stack top as left boundary.
 > **Approach:** Monotonic stack. Pop when current height is less than stack top. Width = distance between current index and new stack top.
 
 ```java
@@ -542,12 +608,16 @@ while (!stack.isEmpty() && heights[i] < heights[stack.peek()]) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 71: Simplify Path
 
 > **Problem:** Given a Unix file path, simplify it. `"/a/./b/../../c/"` → `"/c"`. `.` = current dir, `..` = parent dir.
 
+> **Brute force:** Multiple passes — find and remove each `..` and its preceding directory in the string repeatedly until stable. O(n²) time.
+> **Key insight:** Stack IS the current path — push directory names to descend, pop on `..` to ascend. The stack's contents at the end form the simplified path directly.
 > **Approach:** Stack as history. Split by `/`. Push directory names, pop on `..`, skip `.` and empty strings.
 
 ```java
@@ -563,12 +633,16 @@ else if (!".".equals(part) && !part.isEmpty()) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 1047: Remove All Adjacent Duplicates in String
 
 > **Problem:** Repeatedly remove pairs of adjacent duplicate characters. `"abbaca"` → remove `bb` → `"aaca"` → remove `aa` → `"ca"`.
 
+> **Brute force:** Repeatedly scan for adjacent duplicate pairs and remove them until no more exist. O(n²) in the worst case.
+> **Key insight:** Stack represents the "surviving" characters so far. When a new character matches the top, they cancel immediately (both destroyed) without re-scanning the string.
 > **Approach:** Stack as history. If top matches current char → pop (cancel). Else push. Build result from remaining stack.
 
 ```java
@@ -582,12 +656,16 @@ else {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 232: Implement Queue using Stacks
 
 > **Problem:** Implement a FIFO queue using only two stacks. Support push, pop, peek, and empty.
 
+> **Brute force:** Transfer ALL elements from input to output on every push (so pop is O(1)) — O(n) per push.
+> **Key insight:** Lazy transfer — only move input to output when output is empty. Each element is transferred at most once in its lifetime, giving amortized O(1) per operation.
 > **Approach:** Two stacks: `input` and `output`. Push goes to input. Pop/peek checks output first; if empty, transfer ALL from input to output (reverses order → FIFO).
 
 ```java
@@ -603,12 +681,16 @@ public int pop() {
 }
 ```
 
+**Complexity (optimal):** O(1) amortized per operation, O(n) space.
+
 ---
 
 ### LC 1249: Minimum Remove to Make Valid Parentheses
 
 > **Problem:** Remove the minimum number of parentheses to make the string valid. Example: `"lee(t(c)o)de)"` → `"lee(t(c)o)de"`.
 
+> **Brute force:** Try all subsets of indices to remove, check validity, return the smallest valid removal set. Exponential time.
+> **Key insight:** Stack tracks indices of unmatched `(`. Unmatched `)` are identified immediately (stack empty), and leftover indices in the stack at the end are unmatched `(` — together they form the exact minimal removal set.
 > **Approach:** Stack stores indices of unmatched `(`. Walk string: on `)`, if stack empty → mark for removal, else pop (matched). After walk, stack holds unmatched `(` indices → also remove those.
 
 ```java
@@ -633,12 +715,16 @@ while (!stack.isEmpty()) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 32: Longest Valid Parentheses
 
 > **Problem:** Find the length of the longest valid (well-formed) parentheses substring. Example: `"(()"` → `2`. `")()())"` → `4`.
 
+> **Brute force:** Try all substrings, check if each is valid, track the maximum length. O(n³) time.
+> **Key insight:** Stack with sentinel index -1 as the boundary before the first valid sequence. On each `)`, popping and measuring the distance to the new stack top gives the current valid run length — no substring re-checking needed.
 > **Approach:** Stack stores indices. Push -1 as base. On `(`, push index. On `)`, pop — if stack empty push current index as new base, else `length = i - stack.peek()`.
 
 ```java
@@ -662,12 +748,16 @@ for (int i = 0; i < s.length(); i++) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 503: Next Greater Element II (Circular)
 
 > **Problem:** Given a circular array, find the next greater element for each element. Example: `[1,2,1]` → `[2,-1,2]` (after 1 at index 2, we wrap around to 2 at index 1).
 
+> **Brute force:** For each element, scan right (wrapping around) to find the first greater element. O(n²) time.
+> **Key insight:** Same monotonic stack as LC 739 — iterate `2n` times using `i % n` to simulate the circular wrap. Only push indices in the first n iterations; the second n resolve the remaining unmatched indices.
 > **Approach:** Same as LC 496/739 monotonic stack but iterate `2*n` times (simulate circular with `i % n`). Only assign results in first pass.
 
 ```java
@@ -689,12 +779,16 @@ for (int i = 0; i < 2 * n; i++) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 224: Basic Calculator
 
 > **Problem:** Evaluate a string expression with `+`, `-`, `(`, `)`, and spaces. Example: `"(1+(4+5+2)-3)+(6+8)"` → `23`.
 
+> **Brute force:** Recursive expression parser that builds an AST and evaluates it. O(n) but more complex to implement.
+> **Key insight:** Stack saves (result, sign) on `(` and restores on `)` — when you close a parenthesis, you apply the saved sign to the inner result and add to the saved outer result, handling nesting without explicit precedence rules.
 > **Approach:** Stack-based. Track `result` and `sign`. On `(`, push result and sign, reset. On `)`, pop and apply. Numbers can be multi-digit — parse digit by digit.
 
 ```java
@@ -702,12 +796,16 @@ for (int i = 0; i < 2 * n; i++) {
 // On ')': result = stack.pop() * sign + result (apply saved sign) + stack.pop() (saved result)
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 844: Backspace String Compare
 
 > **Problem:** Two strings with `#` as backspace. Return true if they're equal after processing. Example: `"ab#c", "ad#c"` → `true` (both become `"ac"`).
 
+> **Brute force:** Build result strings using stacks for both inputs (Pattern 4), then compare them. O(n) time but O(n) space.
+> **Key insight:** Walk both strings backwards with skip counters — each `#` increments skip, each letter with skip > 0 is discarded (decrements skip), surviving letters are compared directly. O(1) extra space, no stack needed.
 > **Approach:** Process from RIGHT with skip counters. When `#`, increment skip. When letter with skip > 0, skip it. Compare remaining chars. O(1) space.
 
 ```java
@@ -734,12 +832,16 @@ while (i >= 0 || j >= 0) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 735: Asteroid Collision
 
 > **Problem:** Asteroids in a row. Positive = moving right, negative = moving left. When they collide, smaller one explodes. Equal = both explode. Return final state. Example: `[5,10,-5]` → `[5,10]`.
 
+> **Brute force:** Simulate all collisions with multiple passes — scan for colliding adjacent pairs (+ followed by -) and resolve them until no more exist. O(n²) in the worst case.
+> **Key insight:** Stack represents all right-moving asteroids not yet destroyed. A left-moving asteroid battles them in reverse order — last-pushed is closest, so LIFO naturally handles the collision chain.
 > **Approach:** Stack. For each asteroid: if positive, push. If negative, pop positive asteroids that are smaller. If equal, both destroyed. If stack empty or top is negative, push.
 
 ```java
@@ -768,12 +870,16 @@ for (int a : asteroids) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space — each asteroid is pushed and popped at most once.
+
 ---
 
 ### LC 225: Implement Stack using Queues
 
 > **Problem:** Implement a LIFO stack using only two queues. Support push, pop, top, empty.
 
+> **Brute force:** Two queues — push to queue1, transfer all but the last element to queue2, then swap names. O(n) per push.
+> **Key insight:** One-queue approach — after adding a new element, rotate all previous elements to the back so the newest is always at the front (FIFO front acts as LIFO top). O(n) push, O(1) pop.
 > **Approach:** One-queue approach: on `push`, add to queue then rotate all previous elements to the back (so newest is at front).
 
 ```java
@@ -787,6 +893,8 @@ public void push(int x) {
 }
 public int pop() { return queue.poll(); }
 ```
+
+**Complexity (optimal):** O(n) push, O(1) pop/top/empty.
 
 ---
 
@@ -868,3 +976,4 @@ For Valid Parentheses, write the 3 push lines and the else-if check line. Why is
 | Date | Change |
 | --- | --- |
 | May 2026 | **File created.** Interview Playbook for Stacks & Queues. 5 patterns: bracket matching, monotonic stack, expression eval, history/undo, design. Canonical walkthrough (LC 739), 10-problem bank, ArrayDeque vs Stack trap. |
+| June 2026 | **Brute Force / Key Insight pass.** Added `**What this solves**`, `**Brute force**`, `**Key insight**`, `**Complexity (optimal)**` to all 5 pattern blocks. Added `> **Brute force**`, `> **Key insight**`, `**Complexity (optimal)**` to all 15 problem bank entries. |

@@ -595,7 +595,8 @@ class TrieNode {
 | Longest palindrome | Expand around center |
 | Window-based char problem | Sliding window + freq map / array |
 | Compare strings | `.equals()` — never `==` |
-| Convert digit char to int | `c - '0'` |
+| Convert digit char to int | `c - '0'` — e.g. `'7' - '0'` = 7 |
+| Two adjacent chars → 2-digit int | `(s.charAt(i) - '0') * 10 + (s.charAt(i+1) - '0')` — place value: tens × 10 + units |
 
 ---
 

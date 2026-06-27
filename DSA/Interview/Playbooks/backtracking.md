@@ -120,11 +120,17 @@ KEY INVARIANT:
 
 ## 🧭 Pattern 1: Subsets / Combinations ⭐
 
+**What this solves:** Problems that ask for all possible selections from a set — subsets, combinations that sum to a target, combinations of a specific size. Unlike permutations, order doesn't matter; a `start` index prevents revisiting earlier elements so each unique selection appears exactly once.
+
 **Recognition cues — reach for this when:**
 - "Generate all subsets" / "power set"
 - "All combinations that sum to target"
 - "All combinations of size K from N elements"
 - "All subsequences" (not substring — subsequence can skip elements)
+
+**Brute force:** Enumerate all 2^n subsets using bitmasks — for each integer 0 to 2^n-1, set bits indicate included elements; check each against the condition. O(n · 2^n) time, O(n) space.
+
+**Key insight:** A `start` index ensures we only consider elements at or after the last chosen position — producing order-independent combinations without a deduplication set. Recording at every node yields subsets; recording only at a condition (size == k, sum == target) yields combinations.
 
 **Steps in plain English:**
 
@@ -195,17 +201,25 @@ private void backtrack(int[] candidates, int start, int target, List<Integer> pa
 }
 ```
 
+**Complexity (optimal):** O(n · 2^n) time for subsets — 2^n subsets, each O(n) to copy. O(k · C(n,k)) for size-k combinations. O(n) recursion depth.
+
 **🏷️ Problems:** LC 78 (Subsets), LC 90 (Subsets II), LC 77 (Combinations), LC 39 (Combination Sum), LC 40 (Combination Sum II).
 
 ---
 
 ## 🧭 Pattern 2: Permutations ⭐
 
+**What this solves:** Problems that ask for all possible orderings of elements — every element appears exactly once in each result. Unlike subsets, [1,2] and [2,1] are distinct. No `start` index is used; instead a `used[]` array tracks which indices are in the current path.
+
 **Recognition cues — reach for this when:**
 - "Generate all permutations"
 - "All arrangements of N elements"
 - "Every possible ordering"
 - Every element must appear exactly once in each result
+
+**Brute force:** Generate all n! orderings by repeated removal from the input list — at each step, pick any remaining element and append. O(n · n!) time, O(n) extra space per recursion path.
+
+**Key insight:** A `used[]` boolean array lets every recursion level scan ALL indices (no start index) while skipping those already in the path. This produces every ordering because position matters — any element can fill any slot.
 
 **Steps in plain English:**
 
@@ -264,6 +278,8 @@ private void backtrack(int[] nums, boolean[] used, List<Integer> path, List<List
 }
 ```
 
+**Complexity (optimal):** O(n · n!) time — n! permutations, each O(n) to copy. O(n) recursion depth.
+
 ### 🎨 Visual — Why `!used[i-1]` Prevents Duplicate Permutations
 
 ```
@@ -293,11 +309,17 @@ KEY INVARIANT:
 
 ## 🧭 Pattern 3: Constraint Satisfaction (N-Queens, Sudoku)
 
+**What this solves:** Problems requiring valid placement on a board or grid where every choice must satisfy global constraints — no two queens attack each other, every Sudoku row/column/box has unique digits. Most branches are pruned immediately, making this tractable despite the large search space.
+
 **Recognition cues — reach for this when:**
 - "Place N items on a board with constraints"
 - "Solve a puzzle" — Sudoku, crossword
 - "Find a valid configuration" — no two items conflict
 - Heavy pruning needed — most branches are invalid
+
+**Brute force:** Try all n² possible positions for each piece without checking validity first. O(n^n) time for N-Queens (n choices × n rows), exponentially worse without pruning.
+
+**Key insight:** Validate BEFORE recursing — if a placement violates any constraint, skip the entire subtree. Pruning eliminates huge branches early, reducing effective search space from n^n to much closer to n! in practice.
 
 **Steps in plain English:**
 
@@ -356,17 +378,25 @@ private boolean isValid(char[][] board, int row, int col) {
 }
 ```
 
+**Complexity (optimal):** O(n!) time for N-Queens (constraint propagation reduces this significantly in practice). O(n²) board space + O(n) recursion stack.
+
 **🏷️ Problems:** LC 51 (N-Queens), LC 37 (Sudoku Solver), LC 79 (Word Search).
 
 ---
 
 ## 🧭 Pattern 4: String Partitioning ⭐
 
+**What this solves:** Problems where you split a string into pieces and each piece must satisfy a condition — every piece is a palindrome, a dictionary word, or a valid IP segment. You choose WHERE to cut, not which elements to pick. The `start` index advances to the end of each valid piece.
+
 **Recognition cues — reach for this when:**
 - "Partition string into parts where each part satisfies a condition"
 - "Palindrome partitioning" — split string into palindromic substrings
 - "Word break" — split string into dictionary words
 - The key is choosing WHERE to cut
+
+**Brute force:** Try all 2^(n-1) ways to place cuts in the string (cut or no-cut at each position). For each partition, validate all pieces. O(n · 2^n) time, O(n) space.
+
+**Key insight:** At each position, only recurse for valid pieces — invalid prefixes prune entire subtrees. The `start` index advances to `end` of the last valid piece, so we never revisit an already-consumed prefix.
 
 **Steps in plain English:**
 
@@ -411,6 +441,8 @@ private boolean isPalindrome(String s) {
     return true;
 }
 ```
+
+**Complexity (optimal):** O(n · 2^n) time for palindrome partitioning (worst case: all single chars are palindromes). O(n) recursion depth. Palindrome checks can be reduced to O(1) with DP precomputation.
 
 **🏷️ Problems:** LC 131 (Palindrome Partitioning), LC 93 (Restore IP Addresses), LC 140 (Word Break II).
 
@@ -491,6 +523,8 @@ Result: `[[], [1], [1,2], [1,2,3], [1,3], [2], [2,3], [3]]` — 8 subsets = 2³ 
 
 > **Problem:** Given an array of unique integers, return all possible subsets. Example: `nums = [1,2,3]` → `[[], [1], [2], [1,2], [3], [1,3], [2,3], [1,2,3]]`.
 
+> **Brute force:** Enumerate all 2^n subsets via bitmasks; for each integer 0..2^n-1, collect elements whose bit is set. O(n · 2^n) time, O(n) space.
+> **Key insight:** The `start` index makes every recursive call only consider elements after the last chosen one — order-independent selection without a deduplication set.
 > **Approach:** Pattern 1 baseline — record at every node, loop from `start`, recurse with `i+1`.
 
 ```java
@@ -505,12 +539,16 @@ for (int i = start; i < nums.length; i++) {
 }
 ```
 
+**Complexity (optimal):** O(n · 2^n) time, O(n) recursion depth (excluding output).
+
 ---
 
 ### LC 90: Subsets II (with duplicates)
 
 > **Problem:** Same as LC 78 but input may contain duplicates. Return all unique subsets. Example: `nums = [1,2,2]` → `[[], [1], [1,2], [1,2,2], [2], [2,2]]`.
 
+> **Brute force:** Generate all 2^n subsets (as in LC 78), collect into a Set to deduplicate. O(n · 2^n) time, O(2^n) extra space for the set.
+> **Key insight:** Sort so duplicates are adjacent. Skip `nums[i] == nums[i-1]` when `i > start` — prevents choosing the same value twice at the same recursion level, eliminating duplicates at the source.
 > **Approach:** Sort first. Skip `nums[i] == nums[i-1]` when `i > start` (same value at same recursion level = duplicate subset).
 
 ```java
@@ -521,12 +559,16 @@ Arrays.sort(nums);
 if (i > start && nums[i] == nums[i - 1]) continue;
 ```
 
+**Complexity (optimal):** O(n · 2^n) time, O(n) recursion depth (excluding output).
+
 ---
 
 ### LC 39: Combination Sum
 
 > **Problem:** Find all unique combinations of candidates that sum to `target`. Each number may be used unlimited times. Example: `candidates = [2,3,6,7], target = 7` → `[[2,2,3], [7]]`.
 
+> **Brute force:** Generate all combinations of any length, sum each, keep those equal to target. Exponential combinations without pruning.
+> **Key insight:** Recurse with `i` (not `i+1`) to allow reuse of the same element. Sort + prune: once a candidate exceeds the remaining target, all subsequent candidates will too — break early.
 > **Approach:** Pattern 1 variant — recurse with `i` (not `i+1`) to allow reuse. Prune: if `candidates[i] > remaining target`, break (requires sorted array).
 
 ```java
@@ -538,12 +580,16 @@ backtrack(candidates, i, target - candidates[i], path, result);
 path.remove(path.size() - 1);
 ```
 
+**Complexity (optimal):** O(n^(target/min)) time in worst case — target/min levels of recursion, n choices per level. O(target/min) recursion depth.
+
 ---
 
 ### LC 40: Combination Sum II (no reuse, with duplicates)
 
 > **Problem:** Find all unique combinations that sum to `target`. Each number used at most once. Input may have duplicates. Example: `candidates = [10,1,2,7,6,1,5], target = 8` → `[[1,1,6], [1,2,5], [1,7], [2,6]]`.
 
+> **Brute force:** Generate all subsets (no reuse), sum each, keep those equal to target, deduplicate. O(n · 2^n) time, O(2^n) space.
+> **Key insight:** Sort + skip duplicates (`i > start && candidates[i] == candidates[i-1]`) avoids duplicate combinations at the same recursion level. Recurse with `i+1` to prevent element reuse.
 > **Approach:** Sort + skip duplicates (`i > start && nums[i] == nums[i-1]`). Recurse with `i+1` (no reuse).
 
 ```java
@@ -554,12 +600,16 @@ if (i > start && candidates[i] == candidates[i - 1]) continue;
 backtrack(candidates, i + 1, target - candidates[i], path, result);
 ```
 
+**Complexity (optimal):** O(n · 2^n) time, O(n) recursion depth.
+
 ---
 
 ### LC 46: Permutations
 
 > **Problem:** Given an array of distinct integers, return all permutations. Example: `nums = [1,2,3]` → `[[1,2,3],[1,3,2],[2,1,3],[2,3,1],[3,1,2],[3,2,1]]`.
 
+> **Brute force:** At each step, pick any remaining element and append — n choices for position 1, n-1 for position 2, etc. This IS the algorithm; there's no slower baseline since all n! orderings must be produced.
+> **Key insight:** `used[]` lets every recursion level scan all indices while skipping taken ones. No `start` index — any element can fill any position, producing every ordering.
 > **Approach:** Pattern 2 — `used[]` array, loop from 0 every time, record at leaf (`path.size() == n`).
 
 ```java
@@ -574,12 +624,16 @@ path.remove(path.size() - 1);
 used[i] = false;
 ```
 
+**Complexity (optimal):** O(n · n!) time — n! permutations, each O(n) to copy. O(n) recursion depth.
+
 ---
 
 ### LC 47: Permutations II (with duplicates)
 
 > **Problem:** Given an array that might contain duplicates, return all unique permutations. Example: `nums = [1,1,2]` → `[[1,1,2],[1,2,1],[2,1,1]]`.
 
+> **Brute force:** Generate all n! permutations (LC 46 approach), add each to a Set to deduplicate. O(n · n!) time, O(n!) space for the set.
+> **Key insight:** Sort + `!used[i-1]` check forces identical values to be used left-to-right only — `nums[i-1]` being skipped means we would produce a duplicate ordering. Eliminates duplicates at the source, no Set needed.
 > **Approach:** Sort + `used[]` + skip rule: `if (i > 0 && nums[i] == nums[i-1] && !used[i-1]) continue`. Forces identical values to be used in left-to-right order.
 
 ```java
@@ -590,12 +644,16 @@ Arrays.sort(nums);
 if (i > 0 && nums[i] == nums[i - 1] && !used[i - 1]) continue;
 ```
 
+**Complexity (optimal):** O(n · n!) time, O(n) recursion depth.
+
 ---
 
 ### LC 131: Palindrome Partitioning
 
 > **Problem:** Partition a string such that every substring in the partition is a palindrome. Return all possible partitions. Example: `s = "aab"` → `[["a","a","b"], ["aa","b"]]`.
 
+> **Brute force:** Try all 2^(n-1) ways to insert cuts. For each partition, check if every piece is a palindrome. O(n · 2^n) time, O(n) space.
+> **Key insight:** Only recurse for palindrome prefixes — invalid prefixes prune entire subtrees. Can precompute a `boolean[][] dp` table for O(1) palindrome checks instead of O(n) each time.
 > **Approach:** Pattern 4 — at each position, try every possible cut. If the piece is a palindrome, recurse from the cut point. Record when `start == s.length()`.
 
 ```java
@@ -612,12 +670,16 @@ for (int end = start + 1; end <= s.length(); end++) {
 }
 ```
 
+**Complexity (optimal):** O(n · 2^n) time worst case. O(n) recursion depth. With DP palindrome precomputation: O(n²) space, O(1) per check.
+
 ---
 
 ### LC 51: N-Queens
 
 > **Problem:** Place N queens on an N×N chessboard so that no two queens attack each other. Return all distinct solutions. Example: `n = 4` → 2 solutions.
 
+> **Brute force:** Try placing a queen in every cell of the board without pruning. O(n^n) time — n choices per row × n rows.
+> **Key insight:** One queen per row (n options per level, not n²). Validate column + both diagonals above the current row before placing — prunes most branches immediately.
 > **Approach:** Pattern 3 — place one queen per row. For each column, check validity (no queen in same column, no queen on either diagonal). Prune invalid placements.
 
 ```java
@@ -636,12 +698,16 @@ for (int r = row-1, c = col+1; r >= 0 && c < n; r--, c++) {
 }
 ```
 
+**Complexity (optimal):** O(n!) time (pruning makes it O(n!/c) in practice). O(n²) board space + O(n) recursion stack.
+
 ---
 
 ### LC 79: Word Search
 
 > **Problem:** Given an `m x n` board of characters and a word, return true if the word exists in the grid. Letters are connected horizontally or vertically. Each cell used at most once per word. Example: `board = [["A","B"],["C","D"]], word = "ABDC"` → `true`.
 
+> **Brute force:** For each starting cell, try all paths of length `word.length` without visited tracking — revisit cycles inflate cost to O(m·n · 4^L) with duplication.
+> **Key insight:** Overwrite the current cell with '#' before recursing (visited marker), restore on backtrack. This prevents revisiting within one DFS path at O(1) cost per cell — no separate `visited` array needed.
 > **Approach:** Pattern 3 variant — DFS from each cell matching word[0]. Mark cell as visited (overwrite with '#'), recurse in 4 directions, restore on backtrack.
 
 ```java
@@ -658,12 +724,16 @@ board[r][c] = temp;
 return found;
 ```
 
+**Complexity (optimal):** O(m·n · 4^L) time where L = word length. O(L) recursion depth.
+
 ---
 
 ### LC 93: Restore IP Addresses
 
 > **Problem:** Given a string of digits, return all valid IP addresses that can be formed. Each segment is 0-255 with no leading zeros. Example: `s = "25525511135"` → `["255.255.11.135", "255.255.111.35"]`.
 
+> **Brute force:** Try all ways to insert 3 dots into the string (C(n-1,3) positions). For each, validate all 4 parts. O(n³) time, O(1) space — correct but wasteful.
+> **Key insight:** Each segment is 1-3 digits, and there are exactly 4 segments — at most 3^4 = 81 combinations to try. Prune immediately for leading zeros or value > 255. Depth is fixed at 4.
 > **Approach:** Pattern 4 variant — partition string into exactly 4 parts. Each part must be 1-3 digits, value 0-255, no leading zeros. Recurse with segment count.
 
 ```java
@@ -680,12 +750,16 @@ for (int len = 1; len <= 3 && start + len <= s.length(); len++) {
 }
 ```
 
+**Complexity (optimal):** O(3^4) = O(81) time — fixed depth of 4 segments, each trying lengths 1-3. Effectively O(1) for standard IP addresses.
+
 ---
 
 ### LC 77: Combinations
 
 > **Problem:** Return all combinations of `k` numbers from `[1, n]`. Example: `n = 4, k = 2` → `[[1,2],[1,3],[1,4],[2,3],[2,4],[3,4]]`.
 
+> **Brute force:** Generate all subsets (LC 78 style over [1..n]), filter those of size k. O(n · 2^n) time — generates far more than needed.
+> **Key insight:** Only record when `path.size() == k`. Prune: if `n - i + 1 < k - path.size()`, not enough elements remain to fill the combo — stop the loop early. Reduces work to exactly C(n,k) leaves.
 > **Approach:** Subsets variant — same template but only record when `path.size() == k`. Prune: if remaining elements < needed, stop early.
 
 ```java
@@ -703,12 +777,16 @@ void backtrack(int n, int k, int start, List<Integer> path, List<List<Integer>> 
 }
 ```
 
+**Complexity (optimal):** O(k · C(n,k)) time — C(n,k) combinations, each O(k) to copy. O(k) recursion depth.
+
 ---
 
 ### LC 37: Sudoku Solver
 
 > **Problem:** Fill a 9×9 Sudoku board so each row, column, and 3×3 box contains digits 1-9 exactly once. Modify the board in-place.
 
+> **Brute force:** Try all digits 1-9 in every empty cell with no constraint check — O(9^81) time. Essentially every board configuration.
+> **Key insight:** Validate before placing — row, column, and 3×3 box checks immediately eliminate most candidates. Return `true` as soon as a solution is found to stop all further recursion.
 > **Approach:** Constraint satisfaction. Find next empty cell, try digits 1-9, validate (row, column, box), recurse. If stuck → backtrack. Return true on success to stop further exploration.
 
 ```java
@@ -726,12 +804,16 @@ for (char c = '1'; c <= '9'; c++) {
 return false;
 ```
 
+**Complexity (optimal):** O(9^m) time where m = number of empty cells. In practice, constraint propagation reduces this dramatically.
+
 ---
 
 ### LC 140: Word Break II
 
 > **Problem:** Return all possible sentences from string `s` using words from `wordDict`. Example: `s = "catsanddog", wordDict = ["cat","cats","and","sand","dog"]` → `["cats and dog", "cat sand dog"]`.
 
+> **Brute force:** Try all 2^(n-1) partitions of the string, check if each piece is in the dictionary. O(n · 2^n) time — most partitions are invalid.
+> **Key insight:** Recurse only on valid dictionary prefixes — prunes non-word branches early. Memoize: if backtracking from position `i` has been computed, reuse it to avoid exponential re-exploration.
 > **Approach:** Partitioning variant. At each position, try every prefix that's in the dictionary. If valid, recurse from the end of that prefix. Memoize to avoid re-exploring same suffix.
 
 ```java
@@ -753,6 +835,8 @@ void backtrack(String s, int start, Set<String> dict, List<String> path, List<St
     }
 }
 ```
+
+**Complexity (optimal):** O(n³) with memoization — n start positions × n end positions × O(n) substring. O(n) recursion depth.
 
 ---
 
@@ -821,3 +905,4 @@ Modify your subsets template for LC 90 (with duplicates). What two changes are n
 | Date | Change |
 | --- | --- |
 | May 2026 | **File created.** Backtracking Interview Playbook — 4 patterns (Subsets/Combinations, Permutations, Constraint Satisfaction, Partitioning), canonical walkthrough (LC 78 Subsets), 10 problems with expanded definitions. |
+| June 2026 | **Brute Force / Key Insight pass.** Added What this solves, Brute force, Key insight to all 4 pattern blocks. Added > Brute force, > Key insight to all 13 problem bank entries. Added Complexity (optimal) after every code block. |

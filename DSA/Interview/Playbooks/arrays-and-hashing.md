@@ -199,10 +199,16 @@ Q1: "Does the problem involve a SUBARRAY (contiguous)?"
 
 ## 🧭 Pattern 1: HashMap Lookup (Two Sum Family) ⭐
 
+**What this solves:** Problems where you need to find if an element or its complement exists among previously seen values. Typically involves pairs, sums, or indices where a second linear scan would otherwise be needed.
+
 **Recognition cues — reach for this when:**
 - "Find two elements that sum to target"
 - "Check if complement exists"
 - "Return indices (not just true/false)" — can't sort, need original indices
+
+**Brute force:** Try every pair (i, j) where i < j and check if `nums[i] + nums[j] == target`. O(n²) time, O(1) space.
+
+**Key insight:** For any element x, the complement `target - x` is known immediately. Storing seen elements in a HashMap means checking for the complement costs O(1) — one forward pass replaces the nested loop entirely.
 
 **Steps in plain English:**
 
@@ -231,18 +237,24 @@ public int[] twoSum(int[] nums, int target) {
 
 **Why "check THEN insert" matters:** If you insert first, `[3, 3]` with target 6 would match an element with itself. Checking first ensures you only match with a *previous* element.
 
+**Complexity (optimal):** O(n) time, O(n) space — single pass; each HashMap operation is O(1) amortized.
+
 **🏷️ Problems:** LC 1 (Two Sum), LC 167 (Two Sum II — sorted, use two pointers instead), LC 15 (3Sum — sort + two pointers), LC 18 (4Sum).
 
 ---
 
 ## 🧭 Pattern 2: Canonical Key (Group Anagrams Family) ⭐
 
+**What this solves:** Problems that ask you to group elements that are "equivalent" under some transformation — anagrams, same digits, same remainder. Two elements belong to the same group if they produce the same canonical key.
+
 **Recognition cues — reach for this when:**
 - "Group elements by some property"
 - "Find all anagrams / permutations"
 - "Elements that are equivalent under some transformation"
 
-The key insight: **transform each element into a canonical form, then use that as a HashMap key to group.**
+**Brute force:** Compare every pair of elements to check equivalence (e.g., sort both strings and compare). O(n² × K log K) time, O(nK) space — where K = string length.
+
+**Key insight:** Transform each element into a canonical form (e.g., sorted characters), then use that as a HashMap key. All equivalent elements produce the same key and land in the same group — no pairwise comparison needed.
 
 **Steps in plain English:**
 
@@ -284,16 +296,24 @@ public List<List<String>> groupAnagrams(String[] strs) {
 | Same digits | Sort digit string | 123, 321 → "123" |
 | Equivalent by modulo | `value % k` | Group by remainder |
 
+**Complexity (optimal):** O(n × K log K) time, O(nK) space — sorting each element once dominates; n = count, K = element length.
+
 **🏷️ Problems:** LC 49 (Group Anagrams), LC 242 (Valid Anagram), LC 438 (Find All Anagrams — sliding window variant).
 
 ---
 
 ## 🧭 Pattern 3: Prefix Sum + HashMap ⭐
 
+**What this solves:** Problems asking for counts or existence of contiguous subarrays with a specific sum (or sum divisible by K). Works with negative numbers — unlike sliding window, which requires a monotonic property.
+
 **Recognition cues — reach for this when:**
 - "Count subarrays with sum equal to K"
 - "Find subarray with sum divisible by K"
 - "Longest subarray with equal 0s and 1s" (convert 0→-1, then sum = 0)
+
+**Brute force:** Try all pairs of indices (i, j) — compute `sum(nums[i..j])` using nested loops. O(n²) time, O(1) space.
+
+**Key insight:** If `prefix[j] - prefix[i] == K`, the subarray `nums[i..j-1]` sums to K. Storing all prefix sums in a HashMap lets us check for `prefix - K` in O(1) at each index — the second scan becomes a single lookup.
 
 **The mental model:** If two prefix sums differ by exactly K, then the subarray between them sums to K. Store all prefix sums in a map; at each index, look up `(currentPrefix - K)`.
 
@@ -439,16 +459,24 @@ public int subarraySum(int[] nums, int k) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space — single pass; each HashMap operation is O(1).
+
 **🏷️ Problems:** LC 560 (Subarray Sum Equals K), LC 974 (Subarray Sums Divisible by K), LC 525 (Contiguous Array — convert 0→-1), LC 930 (Binary Subarrays With Sum).
 
 ---
 
 ## 🧭 Pattern 4: Kadane's Algorithm (Max Subarray Family)
 
+**What this solves:** Finding the maximum (or minimum) sum contiguous subarray. Any problem where you must decide at every position whether to extend the current run or restart fresh.
+
 **Recognition cues — reach for this when:**
 - "Maximum sum subarray"
 - "Maximum product subarray"
 - "Best time to buy and sell stock" (Kadane in disguise — track min price)
+
+**Brute force:** Try all subarrays — for each pair (i, j), compute the sum of `nums[i..j]`. O(n²) time, O(1) space.
+
+**Key insight:** At every position, the optimal decision is purely local: if the running sum is negative, it can only hurt future subarrays — restart from the current element. This local greedy choice is always globally optimal.
 
 **The one decision at every index:** "Do I extend the previous subarray, or start fresh from here?"
 
@@ -491,16 +519,24 @@ public int maxProfit(int[] prices) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space — single pass, constant extra space.
+
 **🏷️ Problems:** LC 53 (Maximum Subarray), LC 121 (Best Time to Buy and Sell Stock), LC 152 (Maximum Product Subarray — track both max and min).
 
 ---
 
 ## 🧭 Pattern 5: Frequency Map + Top-K (Sort vs Bucket Sort)
 
+**What this solves:** Problems that require ranking elements by how often they appear, then selecting or returning the top K most/least frequent. Bucket sort variant achieves O(n) when the frequency range is bounded by input size.
+
 **Recognition cues — reach for this when:**
 - "Top K frequent elements"
 - "K most common"
 - "Sort by frequency"
+
+**Brute force:** Count frequencies with a HashMap, then sort all entries by value (frequency) descending, take first K. O(n log n) time, O(n) space.
+
+**Key insight:** Max possible frequency of any element is `nums.length` — bounded. Using frequency as an array index (bucket sort) skips all comparisons, achieving O(n) with no sorting step.
 
 ### Approach 1 — Sort by frequency (first intuition) — O(n log n)
 
@@ -720,17 +756,25 @@ for (Map.Entry<String, Integer> e : entries) {
 | Bucket Sort | O(n) | O(n) | Need guaranteed linear time, interviewer pushes for optimal |
 | TreeMap (sort by keys) | O(n log n) | O(n) | Need keys in sorted order (alphabetical, numerical) |
 
+**Complexity (optimal):** O(n) time, O(n) space — bucket sort; frequency as array index eliminates all comparisons.
+
 **🏷️ Problems:** LC 347 (Top K Frequent Elements), LC 451 (Sort Characters By Frequency), LC 692 (Top K Frequent Words — need heap for lexicographic tie-breaking).
 
 ---
 
 ## 🧭 Pattern 6: HashSet for Existence / Dedup
 
+**What this solves:** Problems asking whether an element has been seen before, finding duplicates, or detecting membership in O(1). Also used for the "longest consecutive sequence" family where only run-starts matter.
+
 **Recognition cues — reach for this when:**
 - "Contains duplicate"
 - "Find the duplicate"
 - "Longest consecutive sequence"
 - Any "have I seen this before?" question
+
+**Brute force:** For each element, scan all previous elements to check for a match or duplicate. O(n²) time, O(1) space. For longest consecutive: sort the array, then walk — O(n log n) time, O(1) space.
+
+**Key insight:** HashSet gives O(1) membership checks. For consecutive sequences: only start counting from a run-beginning (`val - 1` not in set), so each number is visited at most twice — total O(n) instead of O(n²).
 
 **The Longest Consecutive Sequence trick (LC 128):**
 
@@ -760,6 +804,8 @@ public int longestConsecutive(int[] nums) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space — one pass building the set, one pass checking run-starts.
+
 **🏷️ Problems:** LC 217 (Contains Duplicate), LC 128 (Longest Consecutive Sequence), LC 36 (Valid Sudoku — set per row/col/box).
 
 ---
@@ -767,6 +813,9 @@ public int longestConsecutive(int[] nums) {
 ## 🔬 Canonical Problem — LC 560: Subarray Sum Equals K
 
 > **Problem:** Given an integer array `nums` and an integer `k`, return the total number of subarrays whose sum equals `k`. Subarrays are contiguous.
+
+> **Brute force:** Try all pairs (i, j) — compute `sum(nums[i..j])` using nested loops. O(n²) time, O(1) space.
+> **Key insight:** Two prefix sums differing by exactly K mean the subarray between them sums to K. Storing prefix sums in a HashMap converts the inner scan to O(1) lookup at each index.
 
 ### Step 1 — Read and identify triggers
 
@@ -837,6 +886,8 @@ Answer: 2 ✅ (subarrays [1,1] at indices 0-1 and 1-2)
 
 > **Problem:** Given an array and a target, return **indices** of two numbers that add up to target. Exactly one solution exists.
 
+> **Brute force:** Try every pair (i, j) where i < j, check if `nums[i] + nums[j] == target`. O(n²) time, O(1) space.
+> **Key insight:** For each element, its complement is `target - nums[i]` — known immediately. A HashMap lookup converts the inner scan to O(1).
 > **Approach:** HashMap Lookup. Check if `target - nums[i]` is in the map BEFORE inserting (avoids matching element with itself).
 
 ```java
@@ -849,12 +900,16 @@ if (map.containsKey(target - nums[i])) {
 map.put(nums[i], i);
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 49: Group Anagrams
 
 > **Problem:** Given array of strings, group anagrams together. `["eat","tea","tan","ate","nat","bat"]` → `[["eat","tea","ate"],["tan","nat"],["bat"]]`.
 
+> **Brute force:** Compare every pair of strings — sort both and compare. O(n² × K log K) time, O(nK) space.
+> **Key insight:** Two strings are anagrams iff they sort to the same string. Sort each string once, use the sorted form as a HashMap key — all anagrams land in the same bucket.
 > **Approach:** Sort each string's chars → use as HashMap key. Anagrams sort to the same key.
 
 ```java
@@ -871,12 +926,16 @@ groups.computeIfAbsent(key, k -> new ArrayList<>()).add(s);
 // groups.get(key).add(s);
 ```
 
+**Complexity (optimal):** O(n × K log K) time, O(nK) space — where n = number of strings, K = max string length.
+
 ---
 
 ### LC 128: Longest Consecutive Sequence
 
 > **Problem:** Given unsorted array, find length of longest consecutive sequence. `[100,4,200,1,3,2]` → `[1,2,3,4]` → length 4. Must be O(n).
 
+> **Brute force:** Sort the array (O(n log n)), then walk to find the longest run of consecutive values. O(n log n) time, O(1) extra space.
+> **Key insight:** Load all values into a HashSet. Only start counting from a run-beginning (`val - 1` absent). Each number is visited at most twice — O(n) total without sorting.
 > **Approach:** HashSet + only start from run-beginning (`val-1` not in set). Walk forward counting.
 
 ```java
@@ -893,12 +952,16 @@ if (!set.contains(v - 1)) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space — one pass to build set, one pass checking run-starts.
+
 ---
 
 ### LC 217: Contains Duplicate
 
 > **Problem:** Return true if any value appears at least twice in the array.
 
+> **Brute force:** Compare every pair (i, j). O(n²) time, O(1) space.
+> **Key insight:** `set.add(x)` returns false if x was already present — detecting duplicate and inserting in one O(1) operation.
 > **Approach:** HashSet — `add()` returns false if element already exists.
 
 ```java
@@ -907,12 +970,16 @@ for (int x : nums) { if (!seen.add(x)) return true; }
 // 🔄 Fallback: if (seen.contains(x)) return true; seen.add(x);
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 347: Top K Frequent Elements
 
 > **Problem:** Given array and `k`, return the `k` most frequent elements. `[1,1,1,2,2,3], k=2` → `[1,2]`.
 
+> **Brute force:** Count frequencies, sort all entries by value descending, take first K. O(n log n) time, O(n) space.
+> **Key insight:** Max frequency ≤ n — bounded range. Use frequency as an array index (bucket sort), walk high→low. No comparisons needed → O(n).
 > **Approach 1 (O(n log n)):** Count frequencies → sort entries by value descending → take first K. Simple, works if interviewer is fine with n log n.
 
 > **Approach 2 (O(n)) 🚀:** Count frequencies → bucket sort. `buckets[freq]` = list of elements with that frequency. Walk buckets high→low. See Pattern 5 for full code + visual.
@@ -932,12 +999,16 @@ for (Map.Entry<Integer, Integer> e : freq.entrySet()) {
 // 🔄 Fallback: for (int key : freq.keySet()) buckets[freq.get(key)].add(key);
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space — bucket sort; no comparison-based sorting.
+
 ---
 
 ### LC 560: Subarray Sum Equals K
 
 > **Problem:** Count contiguous subarrays whose sum equals `k`. Values can be negative. `[1,1,1], k=2` → 2 subarrays.
 
+> **Brute force:** Try all subarrays (i, j) and compute their sums. O(n²) time, O(1) space.
+> **Key insight:** `prefix[j] - prefix[i] == k` means subarray `nums[i..j-1]` sums to k. HashMap lookup for `prefix - k` converts the second scan to O(1).
 > **Approach:** Prefix Sum + HashMap. Two prefixes differing by K → subarray between them sums to K. Init map with `{0:1}`.
 
 ```java
@@ -952,12 +1023,16 @@ map.merge(prefix, 1, Integer::sum);
 // 🔄 Fallback: map.put(prefix, map.getOrDefault(prefix, 0) + 1);
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 525: Contiguous Array
 
 > **Problem:** Given binary array of 0s and 1s, find max length subarray with **equal** number of 0s and 1s. `[0,1,0]` → 2.
 
+> **Brute force:** Try all subarrays (i, j), count 0s and 1s in each. O(n²) time, O(1) space.
+> **Key insight:** Convert 0→-1. "Equal 0s and 1s" becomes "subarray sum = 0." Two identical prefix sums → subarray between them sums to 0. Store first occurrence of each prefix sum to maximize length.
 > **Approach:** Convert 0→-1, then "equal 0s and 1s" = "subarray sum = 0." Prefix Sum + HashMap storing `prefix → first index` (want longest, not count).
 
 ```java
@@ -973,12 +1048,16 @@ if (map.containsKey(prefix)) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 238: Product of Array Except Self
 
 > **Problem:** Return array where `result[i]` = product of all elements except `nums[i]`. No division allowed. O(n).
 
+> **Brute force:** For each index, multiply all other elements. O(n²) time, O(1) space.
+> **Key insight:** `result[i]` = (product of everything left of i) × (product of everything right of i). Compute each half in a separate pass — no division needed, O(n) total.
 > **Approach:** Two-pass. Left pass builds prefix product. Right pass multiplies by suffix product.
 
 ```java
@@ -996,12 +1075,16 @@ for (int i = n - 2; i >= 0; i--) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) extra space (output array not counted).
+
 ---
 
 ### LC 36: Valid Sudoku
 
 > **Problem:** Determine if a 9×9 board is valid. Each row, column, and 3×3 box must contain digits 1-9 without repetition. Only check filled cells.
 
+> **Brute force:** For each filled cell, scan all other cells in the same row, column, and 3×3 box for duplicates. O(81²) = O(1) for fixed grid, but conceptually O(n²) per cell.
+> **Key insight:** Encode each constraint (row/col/box + digit) as a unique string. One `set.add()` call per constraint — returns false on duplicates. Single pass over 81 cells with O(1) per cell.
 > **Approach:** Single HashSet storing encoded strings. For each filled cell, generate 3 strings (one for row, col, box). If `set.add()` returns false → duplicate → invalid. The trick: `r/3` and `c/3` map any cell to its 3×3 box (integer division: rows 0-2 → box row 0, rows 3-5 → box row 1, rows 6-8 → box row 2).
 
 ```java
@@ -1032,12 +1115,16 @@ for (int r = 0; r < 9; r++) {
 return true;
 ```
 
+**Complexity (optimal):** O(1) time, O(1) space — fixed 9×9 grid, constant iterations.
+
 ---
 
 ### LC 121: Best Time to Buy and Sell Stock
 
 > **Problem:** Array of stock prices. Buy on one day, sell on a later day. Maximize profit. `[7,1,5,3,6,4]` → buy at 1, sell at 6 → profit 5.
 
+> **Brute force:** Try all pairs (buy day, sell day) where buy < sell. O(n²) time, O(1) space.
+> **Key insight:** The best profit from selling on day i is `prices[i] - minPriceSoFar`. Track the running minimum — one pass handles both the buy and sell decisions simultaneously.
 > **Approach:** Kadane variant. Track min price so far, compute `price - minPrice` at each step.
 
 ```java
@@ -1047,12 +1134,16 @@ maxProfit = Math.max(maxProfit, prices[i] - minPrice);
 minPrice = Math.min(minPrice, prices[i]);
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 167: Two Sum II — Input Array Is Sorted
 
 > **Problem:** Given a **sorted** array and a target, return indices (1-indexed) of two numbers that add up to target. Exactly one solution. Example: `numbers = [2,7,11,15], target = 9` → `[1,2]`.
 
+> **Brute force:** Try all pairs (i, j) where i < j. O(n²) time, O(1) space.
+> **Key insight:** The array is sorted — if sum is too large, the right element must decrease; if too small, the left element must increase. Converging pointers eliminate all non-matching pairs in one pass with O(1) space.
 > **Approach:** NOT HashMap — array is sorted, so use **two pointers** (converging). Left at start, right at end. Sum too big → right--. Sum too small → left++. O(1) space. See `two-pointers-and-sliding-window.md` Pattern 1 for full template.
 
 ```java
@@ -1070,12 +1161,16 @@ while (lo < hi) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 15: 3Sum
 
 > **Problem:** Find all unique triplets `[a, b, c]` in the array such that `a + b + c = 0`. No duplicate triplets. Example: `nums = [-1,0,1,2,-1,-4]` → `[[-1,-1,2],[-1,0,1]]`.
 
+> **Brute force:** Try all triples (i, j, k). O(n³) time, O(1) space.
+> **Key insight:** Sort the array. Fix one element — the remaining two-sum on the sorted subarray is solvable in O(n) with converging pointers. Total: O(n²).
 > **Approach:** Sort the array. Fix one element, then run two-pointer on the rest. Skip duplicates at both levels. O(n²) time. See `two-pointers-and-sliding-window.md` for full solution.
 
 ```java
@@ -1093,12 +1188,16 @@ for (int i = 0; i < nums.length - 2; i++) {
 }
 ```
 
+**Complexity (optimal):** O(n²) time, O(1) extra space (output not counted).
+
 ---
 
 ### LC 18: 4Sum
 
 > **Problem:** Find all unique quadruplets `[a, b, c, d]` that sum to `target`. Example: `nums = [1,0,-1,0,-2,2], target = 0` → `[[-2,-1,1,2],[-2,0,0,2],[-1,0,0,1]]`.
 
+> **Brute force:** Try all quadruples (i, j, k, l). O(n⁴) time, O(1) space.
+> **Key insight:** Same reduction as 3Sum — sort, fix two elements with nested loops, then run converging two-pointer on the rest. Reduces O(n⁴) → O(n³).
 > **Approach:** Same idea as 3Sum but with one more outer loop. Sort → fix two elements → two-pointer on the rest. O(n³) time. Skip duplicates at every level.
 
 ```java
@@ -1120,12 +1219,16 @@ for (int i = 0; i < n - 3; i++) {
 }
 ```
 
+**Complexity (optimal):** O(n³) time, O(1) extra space (output not counted).
+
 ---
 
 ### LC 242: Valid Anagram
 
 > **Problem:** Given two strings `s` and `t`, return true if `t` is an anagram of `s`. Example: `s = "anagram", t = "nagaram"` → `true`.
 
+> **Brute force:** Sort both strings and compare character by character. O(n log n) time, O(n) space.
+> **Key insight:** An `int[26]` frequency array is a fixed-size fingerprint of any lowercase string. Increment for s, decrement for t — all zeros at the end means identical frequencies. O(n) time, O(1) space.
 > **Approach:** Frequency array `int[26]`. Increment for `s`, decrement for `t`. If all zeros at end → anagram. O(n) time, O(1) space.
 
 ```java
@@ -1147,12 +1250,16 @@ for (int f : freq) {
 return true;
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space — `int[26]` is constant size.
+
 ---
 
 ### LC 438: Find All Anagrams in a String
 
 > **Problem:** Given strings `s` and `p`, find all start indices of `p`'s anagrams in `s`. Example: `s = "cbaebabacd", p = "abc"` → `[0, 6]`.
 
+> **Brute force:** For every start index in s, extract a substring of length `p.length()`, sort it, compare with sorted p. O(n × K log K) time where K = p.length().
+> **Key insight:** A fixed-size sliding window of length `p.length()` maintains an `int[26]` frequency array. Add incoming char, remove outgoing char — O(1) per slide. `Arrays.equals()` on `int[26]` is O(26) = O(1).
 > **Approach:** Fixed-size sliding window of length `p.length()`. Maintain frequency array for the window. When window freq matches `p` freq → add start index. See `two-pointers-and-sliding-window.md` for sliding window patterns.
 
 ```java
@@ -1178,12 +1285,16 @@ for (int i = 0; i < s.length(); i++) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space — `int[26]` is constant size.
+
 ---
 
 ### LC 53: Maximum Subarray (Kadane's)
 
 > **Problem:** Find the contiguous subarray with the largest sum. Example: `nums = [-2,1,-3,4,-1,2,1,-5,4]` → `6` (subarray `[4,-1,2,1]`).
 
+> **Brute force:** Try all subarrays — compute the sum of each. O(n²) time, O(1) space.
+> **Key insight:** At every position, the locally optimal choice — extend if running sum is positive, restart if negative — is also globally optimal. No need to try all start positions.
 > **Approach:** Kadane's algorithm. Track `currentSum` — extend or restart. If `currentSum < 0`, restart from current element. Update `maxSum` at each step.
 
 ```java
@@ -1198,12 +1309,16 @@ for (int i = 1; i < nums.length; i++) {
 return maxSum;
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 152: Maximum Product Subarray
 
 > **Problem:** Find the contiguous subarray with the largest product. Example: `nums = [2,3,-2,4]` → `6` (subarray `[2,3]`).
 
+> **Brute force:** Try all subarrays, compute the product of each. O(n²) time, O(1) space.
+> **Key insight:** A negative number flips the sign — the running minimum can become the maximum after multiplication. Track both `maxProd` and `minProd` simultaneously; swap them when a negative element appears.
 > **Approach:** Track both `maxProd` AND `minProd` at each step. A negative number flips min↔max, so you must track both. When `nums[i]` is negative, swap them before multiplying.
 
 ```java
@@ -1224,12 +1339,16 @@ for (int i = 1; i < nums.length; i++) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 974: Subarray Sums Divisible by K
 
 > **Problem:** Return the count of subarrays whose sum is divisible by `k`. Example: `nums = [4,5,0,-2,-3,1], k = 5` → `7`.
 
+> **Brute force:** Try all subarrays (i, j), check if each sum is divisible by k. O(n²) time, O(1) space.
+> **Key insight:** `(prefix[j] - prefix[i]) % k == 0` iff `prefix[j] % k == prefix[i] % k`. Two prefix sums with the same remainder → subarray between them is divisible by k.
 > **Approach:** Prefix sum + modular arithmetic. Two prefix sums with the same `prefix % k` remainder → the subarray between them is divisible by K. Handle negative mod with `((prefix % k) + k) % k`.
 
 ```java
@@ -1249,12 +1368,16 @@ for (int num : nums) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(k) space — remainder map has at most k entries.
+
 ---
 
 ### LC 930: Binary Subarrays With Sum
 
 > **Problem:** Given a binary array and a target sum, return the count of non-empty subarrays with sum equal to `goal`. Example: `nums = [1,0,1,0,1], goal = 2` → `4`.
 
+> **Brute force:** Try all subarrays of the binary array, count those summing to goal. O(n²) time, O(1) space.
+> **Key insight:** Same prefix sum trick as LC 560 — store how many times each prefix sum occurred. `map.get(prefix - goal)` gives the count of valid subarrays ending at the current index.
 > **Approach:** Prefix sum + HashMap (same as LC 560). Count prefix sums where `prefix - goal` was seen before.
 
 ```java
@@ -1267,12 +1390,16 @@ map.merge(prefix, 1, Integer::sum);
 // 🔄 Fallback: map.put(prefix, map.getOrDefault(prefix, 0) + 1);
 ```
 
+**Complexity (optimal):** O(n) time, O(n) space.
+
 ---
 
 ### LC 451: Sort Characters By Frequency
 
 > **Problem:** Sort a string in decreasing order based on character frequency. Example: `s = "tree"` → `"eert"` or `"eetr"`.
 
+> **Brute force:** Count frequencies, then sort characters by frequency descending (using a sorted list or sort + stable sort). O(n log n) time, O(n) space.
+> **Key insight:** Frequency is bounded by string length. Use frequency as a bucket index — place each character in `buckets[freq]`, walk high→low. O(n) without any comparison sort.
 > **Approach:** Build frequency map, then bucket sort (bucket index = frequency). Iterate buckets from highest to lowest, appending characters.
 
 ```java
@@ -1290,12 +1417,16 @@ for (var e : freq.entrySet()) {
 // 🔄 Fallback: for (char key : freq.keySet()) { ... buckets[freq.get(key)].add(key); }
 ```
 
+**Complexity (optimal):** O(n) time (bucket sort), O(n) space.
+
 ---
 
 ### LC 692: Top K Frequent Words
 
 > **Problem:** Given an array of words and `k`, return the `k` most frequent words sorted by frequency (highest first). Ties broken by alphabetical order. Example: `words = ["i","love","leetcode","i","love","coding"], k = 2` → `["i","love"]`.
 
+> **Brute force:** Count frequencies, sort all words by frequency descending (ties → alphabetical ascending). O(n log n) time, O(n) space.
+> **Key insight:** Min-heap of size K with a custom comparator — lower-frequency words are evicted first; among ties, lexicographically-later words are evicted. Heap always holds exactly the K best candidates.
 > **Approach:** Build frequency map. Min-heap of size K ordered by frequency (then reverse alphabetical for ties). See `heaps.md` for full heap patterns.
 
 ```java
@@ -1317,6 +1448,8 @@ PriorityQueue<String> pq = new PriorityQueue<>(
 // Collections.sort(sorted, (a, b) -> freq.get(b) - freq.get(a)); // descending freq
 // return sorted.subList(0, k);
 ```
+
+**Complexity (optimal):** O(n log k) time, O(n + k) space — heap size capped at k.
 
 ---
 
@@ -1399,3 +1532,4 @@ How would you modify the Subarray Sum = K template for LC 525 (Contiguous Array 
 | Date | Change |
 | --- | --- |
 | May 2026 | **File created.** Interview Playbook for Arrays & Hashing. 6 patterns with recognition cues, canonical walkthrough (LC 560), 10-problem bank, interview gotchas with follow-up table, 8-minute speed drill. |
+| June 2026 | **Brute Force / Key Insight pass.** Added `**What this solves**`, `**Brute force**`, `**Key insight**` to all 6 pattern blocks and canonical section. Added `> **Brute force**`, `> **Key insight**` to all 21 problem bank entries. Added `**Complexity (optimal)**` after every code block. |

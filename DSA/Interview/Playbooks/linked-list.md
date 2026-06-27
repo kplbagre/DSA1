@@ -100,11 +100,17 @@ RULE: To remove a node, change the PREVIOUS node's .next pointer.
 
 ## 🧭 Pattern 1: Floyd's Slow/Fast Pointer ⭐
 
+**What this solves:** Problems about linked list structure — detecting cycles, finding the middle node, locating the cycle entry point — all without extra space. The key: two pointers at different speeds reveal structural properties through their relative positions.
+
 **Recognition cues — reach for this when:**
 - "Detect cycle in linked list"
 - "Find the start of the cycle"
 - "Find the middle node"
 - "Determine if a linked list is a palindrome" (find middle → reverse second half → compare)
+
+**Brute force:** Use a HashSet — add each node to the set as you traverse. If you encounter a node already in the set, there's a cycle (or you've found the middle by counting). O(n) time, O(n) space.
+
+**Key insight:** A faster pointer eventually laps a slower one if a cycle exists — their meeting is guaranteed in O(n) steps with O(1) space. The mathematical proof of Floyd's cycle detection also shows that the distance from head to cycle entry equals the distance from meeting point to cycle entry.
 
 **The core idea:** `slow` moves 1 step, `fast` moves 2 steps. If there's a cycle, they'll meet. If not, `fast` reaches the end.
 
@@ -171,16 +177,24 @@ public ListNode detectCycle(ListNode head) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 **🏷️ Problems:** LC 141 (Has Cycle), LC 142 (Cycle Start), LC 876 (Middle of Linked List), LC 234 (Palindrome Linked List — middle + reverse + compare).
 
 ---
 
 ## 🧭 Pattern 2: Reverse a Linked List ⭐
 
+**What this solves:** In-place reversal of a linked list — fully or between two positions — using O(1) extra space. Used standalone or as a sub-step in palindrome checks, reorder list, and merge sort.
+
 **Recognition cues — reach for this when:**
 - "Reverse a linked list"
 - "Reverse between position left and right"
 - Part of a larger problem (palindrome check, reorder list, add two numbers reversed)
+
+**Brute force:** Copy all node values into an array, reverse the array, then overwrite the node values or build a new list. O(n) space.
+
+**Key insight:** Three pointers (`prev`, `curr`, `next`) reverse links in place in a single pass — `next` is saved before `curr.next` is overwritten, so no data is lost, and no extra memory is needed.
 
 **The three-pointer dance:** `prev`, `curr`, `next`. At each step: save next, reverse the link, advance.
 
@@ -270,16 +284,24 @@ public ListNode reverseBetween(ListNode head, int left, int right) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 **🏷️ Problems:** LC 206 (Reverse Linked List), LC 92 (Reverse Linked List II), LC 25 (Reverse Nodes in k-Group — advanced).
 
 ---
 
 ## 🧭 Pattern 3: Merge Two Sorted Lists ⭐
 
+**What this solves:** Combining two (or more) already-sorted linked lists into one sorted list by comparing heads, without extracting values. Used standalone or as the merge step in merge sort.
+
 **Recognition cues — reach for this when:**
 - "Merge two sorted linked lists"
 - "Merge K sorted lists" (use heap)
 - "Sort a linked list" (merge sort — split at middle, sort halves, merge)
+
+**Brute force:** Copy all values from both lists into an array, sort the combined array, then build a new linked list. O((m+n) log(m+n)) time, O(m+n) space.
+
+**Key insight:** Both lists are already sorted — one comparison per step always picks the globally smaller next element. No sorting needed; a dummy head eliminates edge cases around which list's head starts the result.
 
 **Steps in plain English:**
 
@@ -312,15 +334,23 @@ public ListNode mergeTwoLists(ListNode l1, ListNode l2) {
 }
 ```
 
+**Complexity (optimal):** O(m+n) time, O(1) space — one pass through both lists.
+
 **🏷️ Problems:** LC 21 (Merge Two Sorted Lists), LC 23 (Merge K Sorted Lists — heap), LC 148 (Sort List — merge sort).
 
 ---
 
 ## 🧭 Pattern 4: Remove / Reorder with Gap Pointer
 
+**What this solves:** Problems requiring access to a node at a specific position from the END of the list, without knowing the list length upfront. Also covers multi-step reorder problems that combine patterns 1, 2, and 3.
+
 **Recognition cues — reach for this when:**
 - "Remove Nth node from end"
 - "Reorder list" (L0 → Ln → L1 → Ln-1 → ...)
+
+**Brute force:** Two passes — first traverse to count the length, then traverse again to the target position and perform the operation. O(n) time but requires two full traversals.
+
+**Key insight:** Advancing `fast` exactly N+1 steps ahead of `slow` encodes the target's position — when `fast` reaches null, `slow` is at the predecessor of the Nth-from-end node. Single pass, no length counting needed.
 
 ### Remove Nth from End (LC 19):
 
@@ -397,15 +427,23 @@ public void reorderList(ListNode head) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 **🏷️ Problems:** LC 19 (Remove Nth From End), LC 143 (Reorder List), LC 234 (Palindrome Linked List).
 
 ---
 
 ## 🧭 Pattern 5: Dummy Node — The Universal Safety Net
 
+**What this solves:** Eliminates all special-case handling when the head itself might be removed, replaced, or redirected. By giving the head a predecessor, every node's operation becomes uniform — no conditional "is this the head?" checks needed.
+
 **Recognition cues — reach for this when:**
 - The head of the list might change (remove head, merge, partition)
 - You're not sure if you need it (just use it — costs nothing)
+
+**Brute force:** Handle the head as a special case explicitly — check if the head node needs modification first, process it with separate logic, then handle the rest with the main traversal loop.
+
+**Key insight:** A dummy node gives every real node (including head) a non-null predecessor, making every insertion, deletion, or traversal operation uniform — the same `curr.next = curr.next.next` logic works for all nodes including the first one.
 
 **The rule:** `ListNode dummy = new ListNode(0); dummy.next = head;` at the start. Return `dummy.next` at the end. This eliminates special-case handling for operations that might remove or replace the head.
 
@@ -441,6 +479,8 @@ public ListNode removeElements(ListNode head, int val) {
     return dummy.next;
 }
 ```
+
+**Complexity (optimal):** O(n) time, O(1) space — one dummy node allocation is constant.
 
 **🏷️ Problems:** Every merge/remove/partition problem benefits. LC 203 (Remove Elements), LC 82 (Remove Duplicates II), LC 86 (Partition List).
 
@@ -515,6 +555,8 @@ Input: `1 → 2 → 3 → null`
 
 > **Problem:** Reverse a singly linked list. `1→2→3→4→5` → `5→4→3→2→1`.
 
+> **Brute force:** Copy all values into an array, reverse the array, create a new list or overwrite node values. O(n) space.
+> **Key insight:** Three pointers reverse links in place in one pass — save `next` before overwriting `curr.next`, then update the link, then advance both pointers.
 > **Approach:** Three-pointer dance: `prev`, `curr`, `next`. At each step: save next, reverse link, advance.
 
 ```java
@@ -527,12 +569,16 @@ prev = curr;
 curr = next;
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 21: Merge Two Sorted Lists
 
 > **Problem:** Merge two sorted linked lists into one sorted list. `1→2→4` + `1→3→4` → `1→1→2→3→4→4`.
 
+> **Brute force:** Copy all values into an array, sort the combined array, build a new list. O((m+n) log(m+n)) time, O(m+n) space.
+> **Key insight:** Both lists are already sorted — one comparison per step picks the globally smaller head; no sorting needed. Dummy node eliminates the edge case of which list starts the result.
 > **Approach:** Dummy node + compare heads. Take the smaller head each time.
 
 ```java
@@ -552,12 +598,16 @@ while (l1 != null && l2 != null) {
 tail.next = (l1 != null) ? l1 : l2;
 ```
 
+**Complexity (optimal):** O(m+n) time, O(1) space.
+
 ---
 
 ### LC 141: Linked List Cycle
 
 > **Problem:** Return true if the linked list has a cycle (some node's next points to a previous node).
 
+> **Brute force:** HashSet — add each visited node; if you encounter a node already in the set, there's a cycle. O(n) space.
+> **Key insight:** A pointer at 2x speed eventually laps one at 1x speed if a cycle exists — meeting is guaranteed in O(n) steps with O(1) space, no recording needed.
 > **Approach:** Floyd's slow/fast. Slow moves 1 step, fast moves 2. If they meet → cycle. If fast reaches null → no cycle.
 
 ```java
@@ -569,12 +619,16 @@ while (fast != null && fast.next != null) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 142: Linked List Cycle II
 
 > **Problem:** Return the node where the cycle begins. Return null if no cycle.
 
+> **Brute force:** HashSet — the first node you visit a second time is the cycle start. O(n) space.
+> **Key insight:** Mathematical proof: distance from head to cycle entry = distance from meeting point to cycle entry. Resetting one pointer to head and advancing both at speed 1 finds the entry point without extra space.
 > **Approach:** Floyd's Phase 1 (detect meeting point) + Phase 2 (reset one to head, both move at speed 1 — they meet at cycle start).
 
 ```java
@@ -590,12 +644,16 @@ if (slow == fast) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 19: Remove Nth Node From End of List
 
 > **Problem:** Remove the Nth node from the end. `1→2→3→4→5, n=2` → `1→2→3→5` (removed 4).
 
+> **Brute force:** Two passes — first count the length, then traverse to position (length - N) and skip that node. O(n) time, two traversals.
+> **Key insight:** A fixed gap of N+1 between two pointers encodes the target's position from the end — when the front pointer hits null, the back pointer is at the predecessor of the Nth-from-end node. Single pass, no length counting.
 > **Approach:** Gap pointer. Advance fast by N+1 steps, then move both until fast reaches null. Slow is before the target.
 
 ```java
@@ -610,12 +668,16 @@ while (fast != null) {
 slow.next = slow.next.next;
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 143: Reorder List
 
 > **Problem:** Reorder `L0→L1→…→Ln-1→Ln` to `L0→Ln→L1→Ln-1→L2→Ln-2→…`. In-place.
 
+> **Brute force:** Copy all nodes into an ArrayList, then use two-index pointers (front and back) to rebuild the order. O(n) space.
+> **Key insight:** Three-pattern combo — find middle (Pattern 1), reverse second half (Pattern 2), interleave merge (Pattern 3) — each step O(n) time, O(1) space total.
 > **Approach:** Three-pattern combo: (1) find middle with slow/fast, (2) reverse second half, (3) interleave merge both halves.
 
 ```java
@@ -624,12 +686,16 @@ slow.next = slow.next.next;
 // 3. Interleave: alternate nodes from first and reversed second
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 876: Middle of the Linked List
 
 > **Problem:** Return the middle node. For even-length, return the second middle. `[1,2,3,4,5]` → node 3.
 
+> **Brute force:** Two passes — count the length, then walk to length/2. O(n) time, O(1) space but two traversals.
+> **Key insight:** Fast pointer travels at 2x speed; when it reaches the end, slow is exactly at the middle — single pass without counting.
 > **Approach:** Slow/fast. When fast reaches end, slow is at middle.
 
 ```java
@@ -641,12 +707,16 @@ while (fast != null && fast.next != null) {
 return slow;
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 234: Palindrome Linked List
 
 > **Problem:** Check if a linked list is a palindrome. `1→2→2→1` → true.
 
+> **Brute force:** Copy all values into an array or stack, then compare front and back with two-pointer indices. O(n) space.
+> **Key insight:** Find the middle (Pattern 1), reverse the second half in-place (Pattern 2), then compare both halves simultaneously — O(1) extra space by modifying the list structure temporarily.
 > **Approach:** Find middle → reverse second half → compare both halves node by node.
 
 ```java
@@ -661,12 +731,16 @@ while (rev != null) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 2: Add Two Numbers
 
 > **Problem:** Two non-negative integers stored as reversed linked lists. Add them and return sum as a linked list. `2→4→3` + `5→6→4` = `7→0→8` (342 + 465 = 807).
 
+> **Brute force:** Convert both lists to integers, add, convert the sum back to a reversed list — fails for very large numbers due to integer overflow.
+> **Key insight:** Digit-by-digit addition with carry exactly mirrors long addition — process corresponding digits simultaneously, letting carry propagate naturally to the next node.
 > **Approach:** Walk both lists with carry. Create new nodes for each digit.
 
 ```java
@@ -678,12 +752,16 @@ carry = sum / 10;
 curr.next = new ListNode(sum % 10);
 ```
 
+**Complexity (optimal):** O(max(m,n)) time, O(max(m,n)) space.
+
 ---
 
 ### LC 23: Merge K Sorted Lists
 
 > **Problem:** Merge `k` sorted linked lists into one sorted list. Lists: `[1→4→5, 1→3→4, 2→6]` → `1→1→2→3→4→4→5→6`.
 
+> **Brute force:** Merge lists one by one — merge list[0] with list[1], then the result with list[2], etc. O(N·K) total where N is total nodes across all lists.
+> **Key insight:** A min-heap of size K always yields the globally smallest head in O(log K) — total O(N log K) vs brute force O(N·K), which matters when K is large.
 > **Approach:** Min-heap of size K. Poll smallest head, add its next to heap. O(N log K) total.
 
 ```java
@@ -694,12 +772,16 @@ PriorityQueue<ListNode> pq = new PriorityQueue<>((a, b) -> Integer.compare(a.val
 // Add all non-null heads, then poll-and-advance
 ```
 
+**Complexity (optimal):** O(N log K) time, O(K) space — N is total nodes, K is number of lists.
+
 ---
 
 ### LC 92: Reverse Linked List II
 
 > **Problem:** Reverse nodes from position `left` to `right` (1-indexed). Example: `1→2→3→4→5, left=2, right=4` → `1→4→3→2→5`.
 
+> **Brute force:** Collect all node values between positions left and right, reverse the values, reassign them back to nodes. O(n) space.
+> **Key insight:** "Insert at front" technique — in each iteration, move `curr.next` to immediately after `prev` (the anchor before the reversed section). This reverses the sublist in place without a second pass.
 > **Approach:** Use dummy node. Walk to node before `left`. Then reverse `right - left` times using the "insert-at-front" technique — repeatedly move the next node to after the `prev` node.
 
 ```java
@@ -719,12 +801,16 @@ for (int i = 0; i < right - left; i++) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 25: Reverse Nodes in k-Group
 
 > **Problem:** Reverse every `k` consecutive nodes. If remaining nodes < k, leave as-is. Example: `1→2→3→4→5, k=2` → `2→1→4→3→5`.
 
+> **Brute force:** Collect all node values into an array, reverse each group of k in place (using two-index swap), then overwrite node values. O(n) space.
+> **Key insight:** Count exactly k nodes ahead before committing to a reversal — reuse the LC 206 reversal, then recursively (or iteratively) connect each reversed group to the next group's result.
 > **Approach:** Count k nodes ahead. If enough, reverse that group (reuse LC 206 reversal). Connect the reversed group's tail to the next group's result (recursion or iteration).
 
 ```java
@@ -746,12 +832,16 @@ if (count == k) {
 return head;
 ```
 
+**Complexity (optimal):** O(n) time, O(n/k) space — recursion stack depth is n/k groups.
+
 ---
 
 ### LC 148: Sort List
 
 > **Problem:** Sort a linked list in O(n log n) time and O(1) space. Example: `4→2→1→3` → `1→2→3→4`.
 
+> **Brute force:** Copy all values into an array, sort the array, overwrite node values. O(n) space.
+> **Key insight:** Merge sort on a linked list uses O(1) extra space — find middle with slow/fast (no array needed), split, sort each half recursively, and merge with LC 21's O(1)-space merge.
 > **Approach:** Merge sort on linked list. Find middle (slow/fast), split, sort each half recursively, merge (LC 21 merge two sorted).
 
 ```java
@@ -762,12 +852,16 @@ ListNode right = sortList(mid);
 return merge(left, right);
 ```
 
+**Complexity (optimal):** O(n log n) time, O(log n) space — recursion stack depth.
+
 ---
 
 ### LC 203: Remove Linked List Elements
 
 > **Problem:** Remove all nodes with value `val`. Example: `1→2→6→3→4→5→6, val=6` → `1→2→3→4→5`.
 
+> **Brute force:** Without dummy — handle head removal as a special case first (loop while head.val == val), then traverse the rest normally.
+> **Key insight:** Dummy node gives the head node a predecessor, making the deletion logic uniform — `curr.next = curr.next.next` works for all nodes including the first one.
 > **Approach:** Dummy node + single pass. If `curr.next.val == val`, skip it (`curr.next = curr.next.next`). Otherwise advance.
 
 ```java
@@ -781,12 +875,16 @@ while (curr.next != null) {
 return dummy.next;
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 82: Remove Duplicates from Sorted List II
 
 > **Problem:** Remove ALL nodes that have duplicate values from a **sorted** list. Example: `1→2→3→3→4→4→5` → `1→2→5`.
 
+> **Brute force:** Two passes — first identify all values that appear more than once (HashSet), then remove all nodes with those values in a second pass. O(n) space.
+> **Key insight:** When you detect a duplicate pair, skip ALL nodes with that value in the same inner loop — `prev.next` stays fixed until the entire run of duplicates is cleared. `prev` only advances when no duplicate is found.
 > **Approach:** Dummy node. When `curr.next.val == curr.next.next.val`, record the duplicate value and skip ALL nodes with that value.
 
 ```java
@@ -803,12 +901,16 @@ while (prev.next != null && prev.next.next != null) {
 }
 ```
 
+**Complexity (optimal):** O(n) time, O(1) space.
+
 ---
 
 ### LC 86: Partition List
 
 > **Problem:** Partition list around value `x` — all nodes < x come before nodes ≥ x. Preserve original order within each partition. Example: `1→4→3→2→5→2, x=3` → `1→2→2→4→3→5`.
 
+> **Brute force:** Collect all values < x in one array and all values ≥ x in another, then rebuild the list. O(n) space.
+> **Key insight:** Two parallel dummy-headed chains route nodes directly — no value extraction, no new nodes created. Connect them at the end. O(1) extra space (just two dummy nodes) while preserving original order.
 > **Approach:** Two dummy lists: `less` and `greater`. Walk original, append each node to the appropriate list. Connect `less.tail → greater.head`.
 
 ```java
@@ -832,6 +934,8 @@ greater.next = null;
 less.next = greaterHead.next;
 return lessHead.next;
 ```
+
+**Complexity (optimal):** O(n) time, O(1) space.
 
 ---
 
@@ -917,3 +1021,4 @@ slow.next = null;
 | --- | --- |
 | May 2026 | **File created.** Interview Playbook for Linked Lists. 5 patterns: Floyd's, reversal, merge, gap pointer, dummy node. Canonical walkthrough (LC 206), 10-problem bank, null-terminate trap warning. |
 | May 2026 | **Lambda/fallback pass.** Added PriorityQueue comparator to Essential Methods. Added 🔄 Lambda section. Inline comment + `🔄 Fallback` at LC 23 PriorityQueue comparator usage. |
+| June 2026 | **Brute Force / Key Insight pass.** Added `**What this solves**`, `**Brute force**`, `**Key insight**`, `**Complexity (optimal)**` to all 5 pattern blocks. Added `> **Brute force**`, `> **Key insight**`, `**Complexity (optimal)**` to all 16 problem bank entries. |
