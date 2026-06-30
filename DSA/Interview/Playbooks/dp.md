@@ -290,6 +290,8 @@ public int uniquePaths(int m, int n) {
 
 **Brute force:** Recursion trying all ways to align characters from both strings. O(2^(m+n)) time for LCS — at each mismatch, branch into skip-from-s1 or skip-from-s2.
 
+> **`i`, `j` = LENGTH of prefix (1→m, 1→n) — NOT array indices. Char access: `s1.charAt(i-1)`, `s2.charAt(j-1)`. Base `i==0` or `j==0` = empty prefix.**
+
 ```java
 // Brute force recursion — O(2^(m+n)), no memoization
 private int lcs(String s1, String s2, int i, int j) {
@@ -349,6 +351,8 @@ public int longestCommonSubsequence(String text1, String text2) {
 - "Each item can be used once (0/1) or unlimited (unbounded)"
 
 **Brute force:** Recursively try include/exclude for each item at every possible sum. O(2^n) time — each item branches into take/skip, giving an exponential recursion tree.
+
+> **`i` = COUNT of items considered (1→n). Current item = `nums[i-1]`. Base `i==0` = no items left.**
 
 ```java
 // Brute force recursion — O(2^n), no memoization

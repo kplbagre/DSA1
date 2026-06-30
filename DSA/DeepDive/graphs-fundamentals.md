@@ -288,6 +288,244 @@ return components;
 
 ---
 
+<a id="-building-the-graph--input-format-patterns"></a>
+## 🔨 Building the Graph — Input Format Patterns
+
+> **The interview trap no one warns you about:** you can know BFS cold and still stall because you don't know how to BUILD the graph from the raw input the problem hands you. There are 6 common input formats interviewers use. Know all of them.
+
+### 🧠 The Two-Phase mental model (burn this into your head)
+
+```
+Every graph interview = Phase 1 + Phase 2
+
+  Phase 1 — BUILD the graph    ← this section
+             translate raw input into adj list / matrix / implicit
+
+  Phase 2 — RUN the algorithm  ← everything else in this file
+             BFS / DFS / Topo Sort / DSU / Dijkstra...
+
+The notes drill Phase 2 well. Phase 1 is what bites you in the interview.
+Interviewers give you raw arrays, not a ready-made adjacency list.
+```
+
+---
+
+### Format 1 — Two separate arrays, 1-indexed nodes ⚠️ Most dangerous
+
+**What the problem gives you:**
+```
+n = 6 nodes, m = 4 roads
+center_from = [1, 2, 4, 3]
+center_to   = [2, 5, 5, 4]
+```
+
+**Real example:** HackerRank / platform interviews (the vaccine distribution problem).
+Nodes go from 1 to n. This is the format that triggers the 1-indexed trap.
+
+> ⚠️ **The 1-indexed trap — most common Phase 1 bug:** nodes start at 1, but `ArrayList` indices start at 0. If you create a list of size `n`, the last valid index is `n-1` — but node `n` exists and you'll call `adj.get(n)` → `IndexOutOfBoundsException`. This costs 10 minutes in a live interview.
+
+```java
+// ❌ WRONG — crashes when any node id equals n
+List<List<Integer>> adj = new ArrayList<>();
+for (int i = 0; i < n; i++) {            // creates indices 0..n-1
+    adj.add(new ArrayList<>());          // node n has no slot!
+}
+for (int i = 0; i < m; i++) {
+    adj.get(from[i]).add(to[i]);         // from[i] could be n → crash
+}
+
+// ✅ CORRECT — allocate n+1, use nodes as-is, ignore index 0
+List<List<Integer>> adj = new ArrayList<>();
+for (int i = 0; i <= n; i++) {          // creates indices 0..n ← extra slot
+    adj.add(new ArrayList<>());         // index 0 intentionally wasted
+}
+for (int i = 0; i < m; i++) {
+    int u = from[i];                    // node ids start at 1, use directly
+    int v = to[i];
+    adj.get(u).add(v);
+    adj.get(v).add(u);                  // undirected: both directions
+}
+```
+
+> **Lesson learned the hard way (June 2026):** this exact bug cost Kapil ~10 minutes in a real vaccine-distribution interview. He created `new ArrayList<>(n)` but nodes were labelled 1..n. The fix is one word: change `i < n` to `i <= n` in the init loop. **Mnemonic before you write the for-loop: "Are nodes 1-indexed? → n+1 lists."**
+
+---
+
+### Format 2 — Edge pair array `int[][] edges`, 0-indexed (LeetCode standard)
+
+**What the problem gives you:**
+```
+n = 5
+edges = [[0,1],[1,2],[2,3],[3,4]]
+```
+
+Simpler — node id == list index, no offset needed.
+
+```java
+List<List<Integer>> adj = new ArrayList<>();
+for (int i = 0; i < n; i++) {
+    adj.add(new ArrayList<>());
+}
+for (int[] edge : edges) {
+    int u = edge[0];
+    int v = edge[1];
+    adj.get(u).add(v);
+    adj.get(v).add(u);                  // omit this line for directed graph
+}
+```
+
+**Real interview examples using this format:**
+- LC 261 Graph Valid Tree (`n` nodes, `int[][] edges`, 0-indexed)
+- LC 1319 Make Network Connected (`int[][] connections`)
+- LC 547 Number of Provinces — but uses adjacency MATRIX, see Format 5 below
+
+---
+
+### Format 3 — Prerequisites pairs (topo sort problems)
+
+**What the problem gives you:**
+```
+numCourses = 4
+prerequisites = [[1,0],[3,1],[3,2]]
+// [a, b] means "must take b before a" → edge b → a
+```
+
+Direction is counterintuitive. The arrow goes FROM the prerequisite TO the dependent, not the other way.
+
+```java
+List<List<Integer>> adj = new ArrayList<>();
+int[] inDegree = new int[numCourses];
+for (int i = 0; i < numCourses; i++) {
+    adj.add(new ArrayList<>());
+}
+for (int[] pre : prerequisites) {
+    int course = pre[0];
+    int prereq = pre[1];
+    // prereq UNLOCKS course → arrow points FORWARD in time: prereq → course
+    adj.get(prereq).add(course);
+    inDegree[course]++;
+}
+```
+
+> **Mnemonic: "prereq UNLOCKS course" → arrow points FROM prereq TO course.** If you flip this, Kahn's starts with wrong nodes and breaks silently (no exception, just wrong answer). This is the #1 topo sort setup bug.
+
+---
+
+### Format 4 — Weighted edges (Dijkstra, Prim's, Bellman-Ford)
+
+**What the problem gives you:**
+```
+edges = [[0,1,4],[1,2,7],[0,2,2]]
+// [from, to, weight]
+```
+
+Change `List<List<Integer>>` to `List<List<int[]>>` and store `{neighbor, weight}` pairs.
+
+```java
+List<List<int[]>> adj = new ArrayList<>();
+for (int i = 0; i < n; i++) {
+    adj.add(new ArrayList<>());
+}
+for (int[] edge : edges) {
+    int u = edge[0];
+    int v = edge[1];
+    int w = edge[2];
+    adj.get(u).add(new int[]{v, w});
+    adj.get(v).add(new int[]{u, w});    // undirected weighted; omit for directed
+}
+
+// Accessing in Dijkstra / BFS loop:
+for (int[] neighbor : adj.get(u)) {
+    int v = neighbor[0];
+    int weight = neighbor[1];
+    // ... relax dist[v]
+}
+```
+
+---
+
+### Format 5 — Adjacency matrix `int[][] isConnected`
+
+**What the problem gives you:**
+```
+isConnected = [[1,1,0],
+               [1,1,0],
+               [0,0,1]]
+// isConnected[i][j] == 1 → edge i—j
+```
+
+**Real interview example:** LC 547 Number of Provinces.
+
+**Do NOT rebuild this into an adjacency list** — just iterate the matrix row directly in your DFS/BFS.
+
+```java
+// DFS directly on the adjacency matrix — no list-building phase at all
+private void dfs(int u, boolean[] visited, int[][] isConnected, int n) {
+    visited[u] = true;
+    for (int v = 0; v < n; v++) {            // scan the entire row
+        if (isConnected[u][v] == 1 && !visited[v]) {
+            dfs(v, visited, isConnected, n);
+        }
+    }
+}
+```
+
+> **Why not rebuild?** Reading the matrix is O(V²) — same cost as using it directly. Rebuilding adds code, adds bugs, adds no benefit.
+
+---
+
+### Format 6 — Implicit graph (no edges given — generate on the fly)
+
+**What the problem gives you:**
+```
+beginWord = "hit", endWord = "cog"
+wordList = ["hot","dot","dog","lot","log","cog"]
+// "edge" = two words differing by exactly ONE letter
+// no explicit edge list exists
+```
+
+**Real interview example:** LC 127 Word Ladder.
+
+Never precompute the adjacency list (O(N² × L) → TLE). Generate neighbors lazily inside BFS:
+
+```java
+Set<String> wordSet = new HashSet<>(wordList);
+// Inside BFS loop, for the current word u just dequeued:
+char[] chars = u.toCharArray();
+for (int i = 0; i < chars.length; i++) {
+    char original = chars[i];
+    for (char c = 'a'; c <= 'z'; c++) {
+        if (c == original) {
+            continue;
+        }
+        chars[i] = c;
+        String candidate = new String(chars);
+        if (wordSet.contains(candidate) && !visited.contains(candidate)) {
+            // candidate is a valid neighbor
+            visited.add(candidate);
+            queue.offer(candidate);
+        }
+    }
+    chars[i] = original;                     // restore for next position
+}
+```
+
+---
+
+### Quick-reference: format → build pattern
+
+| What the problem gives you | Build pattern | Indexing trap? |
+| --- | --- | --- |
+| Two arrays `from[]`, `to[]`, nodes 1..n | `ArrayList` size `n+1`; ignore index 0 | ⚠️ Yes — use `i <= n` in init loop |
+| `int[][] edges`, nodes 0..n-1 | `ArrayList` size `n`; use directly | ✅ No |
+| `prerequisites[][]` pairs | Same as edge list; check edge DIRECTION carefully | ✅ Usually 0-indexed |
+| `int[][]` with weight as 3rd element | `List<List<int[]>>`; store `{v, w}` pairs | — |
+| `isConnected[][]` adjacency matrix | Don't rebuild — iterate row in DFS/BFS directly | — |
+| No edges (Word Ladder style) | Generate neighbors inside BFS loop; 26-char substitution | — |
+
+---
+
+
 ## 🌊 BFS — Breadth-First Search [Striver G-5]
 
 > Visit vertices **level by level**, expanding outward from the start. Uses a **queue**. Natural fit for "shortest path in unweighted graph" because the first time you see a vertex is via the fewest edges.
@@ -337,6 +575,11 @@ Key invariant:  THE QUEUE ALWAYS HOLDS AT MOST TWO LEVELS AT A TIME.
 ```
 
 **Time:** `O(V + E)`. **Space:** `O(V)` for queue + visited.
+
+> **⬛ Before writing the BFS loop — answer these 3 questions first:**
+> 1. **What format is the input?** Two arrays / edge list / matrix / implicit → build the adjacency list first (see [§ Building the Graph](#-building-the-graph--input-format-patterns))
+> 2. **Are nodes 1-indexed?** → allocate `n+1` lists; use node IDs as-is; ignore index 0
+> 3. **Is it multi-source?** → seed ALL sources into the queue at time 0, each at distance 0 — do NOT run BFS once per source separately
 
 **Steps in plain English:**
 
@@ -431,6 +674,98 @@ while (!queue.isEmpty()) {
 
 > **The mental shift:** stop thinking *"I'll mark it visited when I process it"* — that's too late. Think *"I'll mark it visited the instant it earns a seat in the queue."* The seat-grab and the marking are a single atomic event.
 
+### 🧭 BFS Variants at a Glance
+
+| Variant | Representative problem | What changes from the template |
+| --- | --- | --- |
+| **Standard BFS** | Practice problem / LC 102 Level Order | Template as-is; source is a single vertex |
+| **Multi-source BFS** | LC 994 Rotten Oranges | Seed ALL sources into the queue at time 0; each source starts at distance 0; answer = max level reached |
+| **Implicit-graph BFS** | LC 127 Word Ladder | No adjacency list — neighbors are generated on the fly per node (26 letter substitutions × word length) |
+| **Reverse-direction BFS** | LC 542 01 Matrix, LC 130 Surrounded Regions | Flip who the source is (e.g., seed 0-cells not 1-cells); natural "distance from X" answers fall out |
+| **Level-tracking BFS** | LC 102, LC 994 (levels = minutes) | Wrap the inner loop in an outer `for (int sz = queue.size(); sz > 0; sz--)` to count levels explicitly |
+
+---
+
+#### Multi-Source BFS on an adjacency-list graph — full template
+
+> **The one sentence that transfers everything:** multi-source BFS on an adjacency-list graph is *identical* to multi-source BFS on a grid. The ONLY line that changes is neighbor generation — `for (int v : adj.get(u))` replaces the 4-directional DR/DC loop. Every other piece — seeding, visited marking, level tracking — stays the same.
+
+```
+GRID version                         ADJACENCY LIST version
+─────────────────────────────────    ─────────────────────────────────
+
+// Seed all sources                  // Seed all sources
+for each cell (r,c):                 for (int i = 1; i <= n; i++):
+  if isSurplus(r,c):                   if status[i] == SURPLUS:
+    queue.offer(new int[]{r,c})          queue.offer(i)
+    dist[r][c] = 0                       dist[i] = 0
+
+// BFS expand                        // BFS expand
+for each cell neighbor:              for each adj neighbor:
+  if inBounds && !visited:             if dist[v] == -1:
+    dist[nr][nc] = dist[r][c]+1          dist[v] = dist[u] + 1
+    queue.offer(...)                     queue.offer(v)
+
+           ↑ SAME SHAPE ↑                      ↑ SAME SHAPE ↑
+    Only the neighbor loop differs
+```
+
+**Complete working template** (the vaccine distribution problem exactly):
+
+```java
+public int findMinimumTime(int n, int[] from, int[] to, int[] status) {
+    // Phase 1 — build the graph (1-indexed nodes: allocate n+1)
+    List<List<Integer>> adj = new ArrayList<>();
+    for (int i = 0; i <= n; i++) {
+        adj.add(new ArrayList<>());
+    }
+    for (int i = 0; i < from.length; i++) {
+        int u = from[i];
+        int v = to[i];
+        adj.get(u).add(v);
+        adj.get(v).add(u);               // bidirectional road
+    }
+
+    // Phase 2 — multi-source BFS: seed ALL surplus centers at time 0
+    int[] dist = new int[n + 1];
+    Arrays.fill(dist, -1);               // -1 = not reached yet
+    Queue<Integer> queue = new ArrayDeque<>();
+    for (int i = 1; i <= n; i++) {
+        if (status[i - 1] == 1) {        // status array is 0-indexed
+            queue.offer(i);
+            dist[i] = 0;                 // surplus center: reachable at time 0
+        }
+    }
+    while (!queue.isEmpty()) {
+        int u = queue.poll();
+        for (int v : adj.get(u)) {       // ← the ONLY line different from grid BFS
+            if (dist[v] == -1) {
+                dist[v] = dist[u] + 1;
+                queue.offer(v);
+            }
+        }
+    }
+
+    // Phase 3 — read off the answer: max time among all deficient centers
+    int ans = 0;
+    for (int i = 1; i <= n; i++) {
+        if (status[i - 1] == 0) {        // deficient center
+            if (dist[i] == -1) {
+                return -1;               // unreachable — no valid answer
+            }
+            ans = Math.max(ans, dist[i]);
+        }
+    }
+    return ans;
+}
+```
+
+> **Why `dist[]` instead of `visited[]`:** using `dist[v] == -1` as the "not seen" guard is cleaner for multi-source BFS because you also need to READ the distance later to compute the answer. `boolean[] visited` would require a separate `int[] dist` anyway.
+
+> **The 3-phase pattern is universal:** Phase 1 (build graph) + Phase 2 (multi-source BFS) + Phase 3 (read answer from dist[]). Every multi-source problem — rotten oranges, 01 matrix, vaccine distribution, walls and gates — follows this exact skeleton.
+
+---
+
 > 🧩 **Try these (BFS warm-up):**
 > - ✅ **LC 102** Binary Tree Level Order — BFS on a tree (you've already done this)
 > - ✅ **LC 994** Rotten Oranges (G-10) — multi-source BFS
@@ -499,6 +834,11 @@ BFS vs DFS — same graph, very different traversal:
 ```
 
 **Time:** `O(V + E)`. **Space:** `O(V)` for recursion + visited.
+
+> **⬛ Before writing the DFS function — answer these 3 questions first:**
+> 1. **What format is the input?** → build the adjacency list first if needed (see [§ Building the Graph](#-building-the-graph--input-format-patterns))
+> 2. **Are nodes 1-indexed?** → `n+1` lists; ignore index 0
+> 3. **Do I need to return a value?** → bottom-up DFS: return area/count/bool from each call; top-down DFS: accumulate in a class-level variable
 
 **Steps in plain English (recursive):**
 
@@ -599,6 +939,16 @@ public List<Integer> dfsIterative(int start, List<List<Integer>> adj, int V) {
 > | Interviewer asks *"what if you can't use recursion?"* | Show you know iterative + can explain the tradeoff |
 >
 > **The senior-engineer answer:** *"I'd write recursive by default — shorter, matches the problem shape. If V can be 10⁵+ and the worst case is a chain, I'd switch to iterative to avoid stack overflow. Both are O(V + E) time."* Say that aloud once and you've covered the question.
+
+### 🧭 DFS Variants at a Glance
+
+| Variant | Representative problem | What changes from the template |
+| --- | --- | --- |
+| **Standard DFS** | Practice problem | Template as-is |
+| **Component counting** | LC 200 Number of Islands | Outer for-loop over all vertices; each `!visited[u]` entry starts a new component |
+| **Bottom-up (return a value)** | LC 695 Max Area of Island | DFS returns a count; parent accumulates children's counts before returning |
+| **Adjacency matrix DFS** | LC 547 Number of Provinces | `for (int v = 0; v < V; v++) if (adj[u][v] == 1 && !visited[v])` replaces `adj.get(u)` loop |
+| **All-paths DFS** | LC 797 All Paths Source to Target | No visited[] — backtrack after each recursive call to explore all branches |
 
 > 🧩 **Try these (DFS warm-up):**
 > - ✅ Practice problem: DFS traversal output of a graph from vertex 0
@@ -1288,6 +1638,20 @@ Before writing your first grid DFS from scratch, internalize these four traps. *
 ---
 
 > **🎯 You're now ready.** With the DFS and BFS templates above in muscle memory, every problem in the next 5 sub-patterns (Number of Islands, Multi-source BFS, Reverse-direction BFS, Flood Fill, Distinct Islands) is **one of these two templates with a small twist**. Go solve LC 200 first — when you're done, come back and read Sub-Pattern 1 to compare your solution to the canonical one.
+
+---
+
+### 🧭 Grid Sub-Patterns — Quick Navigation
+
+| Sub-Pattern | Representative problems | The one-line twist |
+| --- | --- | --- |
+| **1. Component Counting** | LC 200 Number of Islands, LC 695 Max Area of Island | Outer loop over every cell; each unvisited land cell starts a new flood |
+| **2. Multi-Source BFS** | LC 994 Rotten Oranges, LC 542 01 Matrix, LC 1020 Enclaves | Seed ALL sources at once; answer = max level reached |
+| **3. Reverse-Direction BFS** | LC 130 Surrounded Regions, LC 1020 Number of Enclaves | BFS from the *boundary* inward instead of from land cells outward |
+| **4. Flood Fill** | LC 733 Flood Fill | DFS/BFS that propagates a new value instead of just marking visited |
+| **5. Shape Canonicalization** | LC 694 Number of Distinct Islands | DFS that records the *relative path* taken, not just which cells |
+
+> **How to use this table:** when you see a grid problem, locate its sub-pattern row first. The "one-line twist" tells you *what changes* in the template — everything else stays the same.
 
 ---
 
@@ -1986,6 +2350,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="cycle-undirected"></a>
 ## 🔄 Cycle Detection — Undirected Graph [Striver G-11, G-12]
 
 > **The key insight:** in an undirected graph, an edge `(u, v)` always goes both ways. So when you DFS from `u` to `v`, you'll see `u` again from `v`'s neighbors — that's NOT a cycle. A real cycle means you reach a visited vertex that is **NOT your immediate parent.**
@@ -2102,6 +2467,13 @@ if (visited[v] && v != parent) {
 }
 ```
 
+### 🧭 Undirected Cycle Detection Variants at a Glance
+
+| Variant | Representative problem | What changes from the template |
+| --- | --- | --- |
+| **Bare cycle check** | GFG Detect Cycle in Undirected Graph | Template as-is; return true if any cycle found |
+| **Tree validity check** | LC 261 Graph Valid Tree | Cycle check + two extra conditions: must be connected (single component) AND have exactly V-1 edges. Any one of {connected, V-1 edges, acyclic} implies the third given the other two. |
+
 > 🧩 **Try these (Undirected cycle detection):**
 > - ✅ Practice problem: Detect cycle in undirected graph (Striver/GFG)
 > - 🟡 **LC 261** Graph Valid Tree (a tree = connected + acyclic + V-1 edges)
@@ -2211,6 +2583,13 @@ private boolean dfsColor(int u, int currColor, List<List<Integer>> adj, int[] co
 ```
 
 > **Mental hook:** *"Can I 2-color this graph without any edge having endpoints of the same color?"* → bipartite. *"Are there odd cycles?"* → same question.
+
+### 🧭 Bipartite Check Variants at a Glance
+
+| Variant | Representative problem | What changes from the template |
+| --- | --- | --- |
+| **Direct check on given graph** | LC 785 Is Graph Bipartite? | Template as-is; graph given as adjacency list |
+| **Build constraint graph first** | LC 886 Possible Bipartition | Construct an undirected "conflict graph" from the `dislikes` pairs, then run the standard 2-coloring check on it |
 
 > 🧩 **Try these (Bipartite):**
 > - ✅ **LC 785** Is Graph Bipartite? (G-17 / G-18)
@@ -2341,6 +2720,14 @@ if (pathVisited[v]) {
 **LC 802 Eventual Safe Nodes:** a node is "safe" if every path from it leads to a terminal (no outgoing edges). Equivalent: nodes NOT on any cycle.
 
 > **Solution:** same DFS-with-pathVisited cycle detection — mark nodes that lead to a cycle as "unsafe"; everything else is safe. (BFS-based version uses Kahn's on the reversed graph — see G-25.)
+
+### 🧭 Directed Cycle Detection Variants at a Glance
+
+| Variant | Representative problem | What changes from the template |
+| --- | --- | --- |
+| **Bare cycle check (DFS)** | GFG Detect Cycle in Directed Graph | Template as-is with two arrays: `visited[]` + `pathVisited[]` |
+| **"Safe" nodes = non-cycle nodes** | LC 802 Find Eventual Safe States | Same DFS; a node is "safe" if its DFS call returns false (no cycle reachable from it). Collect all safe nodes after all DFS calls. |
+| **Cycle detection via Kahn's** | LC 207 Course Schedule | Kahn's produces order of size V iff no cycle. Preferred over DFS when you also need the topo order. |
 
 > 🧩 **Try these (Directed cycle detection):**
 > - ✅ Practice problem: Detect cycle in directed graph
@@ -2635,13 +3022,13 @@ return order.size() == V;                  // true = DAG, false = has cycle
 
 ### Applications
 
-| Striver | Problem | Approach |
-| --- | --- | --- |
-| G-24 | **LC 207** Course Schedule | Kahn's; check if topo order length == numCourses |
-| G-24 | **LC 210** Course Schedule II | Kahn's; return the topo order |
-| G-25 | **LC 802** Eventual Safe States | Kahn's on **reversed** graph; safe nodes appear in the topo order |
-| G-26 | **LC 269** Alien Dictionary | Build adjacency from word comparisons; Kahn's for ordering |
-| G-27 | Shortest Path in DAG | Topo sort + edge relaxation (covered below) |
+| Striver | Problem | Approach | Key twist vs. the bare template |
+| --- | --- | --- | --- |
+| G-24 | **LC 207** Course Schedule | Kahn's; check if topo order length == numCourses | No twist — this IS the template. Answer = `count == V` |
+| G-24 | **LC 210** Course Schedule II | Kahn's; return the topo order | Same as LC 207 but return the list, not a boolean |
+| G-25 | **LC 802** Eventual Safe States | Kahn's on **reversed** graph; safe nodes appear in the topo order | **Reverse all edges first.** On the reversed graph, nodes that can reach a terminal have in-degree that eventually hits 0 → appear in topo order → they are "safe" |
+| G-26 | **LC 269** Alien Dictionary | Build adjacency from word comparisons; Kahn's for ordering | **Build the graph from scratch.** Compare adjacent words character-by-character to extract ordering constraints; then run standard Kahn's |
+| G-27 | Shortest Path in DAG | Topo sort + edge relaxation (covered below) | **Use the order, not just the check.** Process vertices in topo order; relax outgoing edges at each step |
 
 > **LC 207 Course Schedule — the canonical interview question.** Always solvable with Kahn's: if all V appear in the order, you can finish all courses.
 
@@ -2695,9 +3082,9 @@ public boolean canFinish(int numCourses, int[][] prerequisites) {
 
 | Problem | Pattern it teaches | Read first (this file) |
 | --- | --- | --- |
-| **LC 547** Number of Provinces ⭐ | Adjacency-matrix DFS + first DSU exposure | § "Disjoint Set Union (DSU)" (line ~3258) — full template + path compression + union-by-rank |
-| **LC 261** Graph Valid Tree | Undirected cycle + connectivity ("tree = connected ∧ E == V-1") | § "Cycle Detection — Undirected Graph" (line ~1989) |
-| **LC 127** Word Ladder ⭐ | BFS on an **implicit** graph (graph not given — you build neighbors lazily) | § "Word Ladder I, II" (line ~2766) |
+| **LC 547** Number of Provinces ⭐ | Adjacency-matrix DFS + first DSU exposure | [§ Disjoint Set Union (DSU)](#dsu) — full template + path compression + union-by-rank |
+| **LC 261** Graph Valid Tree | Undirected cycle + connectivity ("tree = connected ∧ E == V-1") | [§ Cycle Detection — Undirected Graph](#cycle-undirected) |
+| **LC 127** Word Ladder ⭐ | BFS on an **implicit** graph (graph not given — you build neighbors lazily) | [§ Word Ladder I, II](#word-ladder) |
 | LC 695 Max Area of Island (revisit) | Bottom-up grid DFS with a return value | § "Sub-Pattern 1: Counting Connected Components on a Grid" |
 
 > **Why this order:** LC 547 introduces DSU on a clean adjacency-matrix problem (no string-key indirection yet). LC 261 reinforces "tree-ness as a property of a graph." LC 127 is the **hardest of Day 4** — the lesson is *"see the graph where none is drawn"* (each word is a node, edges exist between words differing by one letter). Don't precompute the graph — build neighbors lazily inside BFS.
@@ -2857,6 +3244,7 @@ public int[] shortestPathBFS(int V, List<List<Integer>> adj, int src) {
 
 ---
 
+<a id="word-ladder"></a>
 ### Word Ladder I, II [G-29, G-30, G-31]
 
 **LC 127 Word Ladder I:** find the shortest transformation sequence from `beginWord` to `endWord`. Each step changes one letter; intermediate words must be in `wordList`.
@@ -3349,6 +3737,7 @@ public int kruskalMST(int V, int[][] edges) {
 
 ---
 
+<a id="dsu"></a>
 ## 🔗 Disjoint Set Union (DSU / Union-Find) [Striver G-46 through G-53] 🔴 *Advanced*
 
 > **What it is:** a data structure that efficiently tracks **set membership** and supports two operations:
@@ -3509,16 +3898,102 @@ class DSU {
 
 ### Applications [Striver G-48 to G-53]
 
-| Striver | Problem | DSU's role |
-| --- | --- | --- |
-| G-48 | **LC 547** Number of Provinces (via DSU) | Union connected pairs; count components |
-| G-49 | **LC 1319** Number of Operations to Make Network Connected | Count components and redundant edges |
-| G-50 | **LC 721** Accounts Merge | Union emails sharing the same account |
-| G-51 | **LC 305** Number of Islands II | Online queries: each "add land" potentially merges islands |
-| G-52 | **LC 827** Making a Large Island | Pre-union islands; try each water cell as bridge |
-| G-53 | **LC 947** Most Stones Removed | Union stones sharing row or column; answer = stones - components |
+| Striver | Problem | DSU's role | Translation layer needed? |
+| --- | --- | --- | --- |
+| G-48 | **LC 547** Number of Provinces (via DSU) | Union connected pairs; count components | ✅ None — integer nodes, plug in directly |
+| G-49 | **LC 1319** Number of Operations to Make Network Connected | Count components and redundant edges | ✅ None — integer nodes |
+| G-50 | **LC 721** Accounts Merge | Union emails sharing the same account | ⚠️ **String-keyed DSU** — map each email string to an integer ID before calling find/union |
+| G-51 | **LC 305** Number of Islands II | Online queries: each "add land" potentially merges islands | ⚠️ **2D → 1D** — convert `(r, c)` to `r * cols + c` as the DSU node ID |
+| G-52 | **LC 827** Making a Large Island | Pre-union islands; try each water cell as bridge | ⚠️ **2D → 1D** — same `r * cols + c` mapping; plus island labeling |
+| G-53 | **LC 947** Most Stones Removed | Union stones sharing row or column; answer = stones - components | ⚠️ **Coordinate remapping** — encode row `r` and column `c` as separate virtual nodes using an offset |
 
 > **LC 305 is the canonical "online queries" problem.** You can't just run BFS/DFS after each query — too slow. DSU shines here because each query is amortized O(1).
+
+---
+
+### DSU Translation Layer — How to handle non-integer keys
+
+The DSU template above uses integer indices directly. Real problems give you strings, coordinates, or mixed types. Two canonical translations follow.
+
+---
+
+#### LC 721 Accounts Merge — String-keyed DSU
+
+**The problem:** each account is `[name, email1, email2, ...]`. Two accounts belong to the same person if they share any email. Merge all such accounts.
+
+**Why string-keyed DSU?** Emails are the "vertices." Two emails in the same account → union them. After all unions, emails sharing a root → same person's account.
+
+**The translation:** before calling `find`/`union`, assign each email a unique integer ID via a `Map<String, Integer>`:
+
+```java
+Map<String, Integer> emailToId = new HashMap<>();
+int id = 0;
+for (List<String> account : accounts) {
+    for (int i = 1; i < account.size(); i++) {
+        String email = account.get(i);
+        if (!emailToId.containsKey(email)) {
+            emailToId.put(email, id++);
+        }
+    }
+}
+DSU dsu = new DSU(id);
+for (List<String> account : accounts) {
+    int firstId = emailToId.get(account.get(1));
+    for (int i = 2; i < account.size(); i++) {
+        dsu.union(firstId, emailToId.get(account.get(i)));
+    }
+}
+```
+
+**Rebuilding groups from roots:**
+
+```java
+Map<Integer, List<String>> rootToEmails = new HashMap<>();
+for (Map.Entry<String, Integer> entry : emailToId.entrySet()) {
+    int root = dsu.find(entry.getValue());
+    rootToEmails.computeIfAbsent(root, k -> new ArrayList<>()).add(entry.getKey());
+}
+```
+
+> **The key insight:** you never call `dsu.find("email@example.com")` directly — you call `dsu.find(emailToId.get("email@example.com"))`. The `Map` is the translation layer; `DSU` only ever sees integers.
+
+---
+
+#### LC 947 Most Stones Removed — Coordinate Remapping
+
+**The problem:** stones are placed at `(row, col)` coordinates. You can remove a stone if it shares a row or column with another stone still on the board. Find the maximum number of stones you can remove.
+
+**The key insight:** any group of stones that are all reachable from each other (via shared row or column) is one connected component. You can always remove all but one from a component. **Answer = total stones − number of components.**
+
+**Why coordinate remapping?** DSU works on integers. Stones at `(0, 2)` and `(2, 2)` should be unioned (share column 2). But how do you union "row 0" with "column 2"? They're in different namespaces.
+
+**The translation:** treat rows and columns as *separate virtual nodes*, offset columns by `maxRow + 1` so they don't overlap row IDs:
+
+```java
+public int removeStones(int[][] stones) {
+    // offset = 10001 (columns won't collide with rows since coords ≤ 10000)
+    int offset = 10001;
+    DSU dsu = new DSU(20002);
+    Set<Integer> usedNodes = new HashSet<>();
+    for (int[] stone : stones) {
+        int rowNode = stone[0];
+        int colNode = stone[1] + offset;
+        dsu.union(rowNode, colNode);
+        usedNodes.add(rowNode);
+        usedNodes.add(colNode);
+    }
+    Set<Integer> uniqueRoots = new HashSet<>();
+    for (int node : usedNodes) {
+        uniqueRoots.add(dsu.find(node));
+    }
+    // one component = one stone stays; stones removed = stones.length - components
+    return stones.length - uniqueRoots.size();
+}
+```
+
+> **Why `uniqueRoots.size()` counts components (not stones):** we count distinct root IDs among *all* nodes that appeared (rows and columns). Each connected component has exactly one root, so the count of unique roots = number of components.
+
+> **The gotcha:** DSU size must accommodate both namespaces. With row and column values ≤ 10000, you need indices up to 20001 → DSU size 20002.
 
 ```java
 // LC 1319 — Min Operations to Make Network Connected (sketch)
@@ -3980,20 +4455,1046 @@ if (!inBounds(r, c, rows, cols) || grid[r][c] != '1') {
 
 ---
 
+## 🔬 Worked Walkthroughs — 14 Canonical Problems
+
+> **How to use this section:** each walkthrough covers one structurally unique algorithmic shape. Master these 14 and you can solve 50+ graph problems by recognising which shape applies and applying the template. The **"Transfers to"** block at the end of each walkthrough tells you exactly how each related problem differs — enough detail to reconstruct its solution without seeing its code.
+
+---
+
+### 20.1 LC 733 Flood Fill — Grid DFS, Value Propagation (Entry Point)
+
+**In plain English:** Given a 2D image (int grid), a starting pixel `(sr, sc)`, and a `color`, paint the starting pixel and every connected pixel that shares the SAME original color. Connected = 4-directionally adjacent.
+
+```
+Input:  image = [[1,1,1],   sr=1, sc=1, color=2
+                 [1,1,0],
+                 [1,0,1]]
+
+Output:          [[2,2,2],
+                  [2,2,0],
+                  [2,0,1]]
+```
+
+**Pattern:** Simplest grid DFS. The entry guard checks `image[r][c] != originalColor`. The "visited marker" is the act of painting `newColor` — you never revisit because the color no longer matches.
+
+---
+
+**Phase 1 — Build the graph:** Grid is given directly. No adjacency list needed.
+
+**The key insight:** The original color IS the visited filter. You don't need a separate `visited[][]` array — once painted, `image[r][c] != originalColor` fires on re-entry. **Edge case:** if `newColor == originalColor`, the exit condition never triggers → infinite recursion. Handle with an early return before starting DFS.
+
+**Code:**
+
+```java
+public int[][] floodFill(int[][] image, int sr, int sc, int color) {
+    int originalColor = image[sr][sc];
+    if (originalColor == color) {
+        return image;                    // ← edge case: nothing to do; avoids infinite recursion
+    }
+    dfs(image, sr, sc, originalColor, color);
+    return image;
+}
+
+private void dfs(int[][] image, int r, int c, int originalColor, int newColor) {
+    if (r < 0 || r >= image.length || c < 0 || c >= image[0].length) {
+        return;
+    }
+    if (image[r][c] != originalColor) {
+        return;                          // different color OR already painted
+    }
+    image[r][c] = newColor;             // ← paint = visited marker
+    dfs(image, r + 1, c, originalColor, newColor);
+    dfs(image, r - 1, c, originalColor, newColor);
+    dfs(image, r, c + 1, originalColor, newColor);
+    dfs(image, r, c - 1, originalColor, newColor);
+}
+```
+
+**Complexity:** O(m × n) time, O(m × n) space (recursion depth worst case).
+
+**Transfers to:**
+
+- **LC 200 Number of Islands** — same DFS structure. What changes: `originalColor = '1'`, `newColor = '0'`, and the OUTER loop counts how many times DFS is triggered (one call = one island). The early-return edge case doesn't apply because '1' ≠ '0'.
+
+- **LC 695 Max Area of Island** — same entry guard (`grid[r][c] != 1`). What changes: DFS returns `int` instead of `void`. Each call returns `1 + dfs(r+1) + dfs(r-1) + dfs(r,c+1) + dfs(r,c-1)`. Out-of-bounds and water return 0. Outer loop: `max = Math.max(max, dfs(r, c))`.
+
+- **LC 1905 Count Sub Islands** — same flood fill but you flood across TWO grids simultaneously. DFS on `grid2`; at each step, also check `grid1[r][c] == 1`. If any cell of the island in `grid2` maps to water in `grid1`, the whole island is NOT a sub-island.
+
+---
+
+### 20.2 LC 200 Number of Islands — Void Flood Fill + Component Count
+
+**In plain English:** Count the number of islands in a char grid of `'1'` (land) and `'0'` (water). An island is a group of `'1'` cells connected 4-directionally.
+
+```
+Input:  1 1 1 1 0
+        1 1 0 1 0
+        1 1 0 0 0
+        0 0 0 0 0
+
+Output: 1  (one large island)
+
+Input:  1 1 0 0 0
+        1 1 0 0 0
+        0 0 1 0 0
+        0 0 0 1 1
+
+Output: 3
+```
+
+**Pattern:** Void flood fill + outer-loop component count. Walk every cell; on each unvisited '1', increment counter and DFS to sink (mark '0') the entire island. Each DFS call from the outer loop = one island.
+
+---
+
+**Phase 1 — Build the graph:** Grid is given directly.
+
+**The key insight:** Sinking cells to `'0'` immediately on entry (in-place marking) means every cell is processed exactly once — O(m × n) total even with multiple DFS calls. Counter is incremented BEFORE DFS (you've already confirmed it's land before sinking).
+
+**Code:**
+
+```java
+public int numIslands(char[][] grid) {
+    int count = 0;
+    int rows = grid.length;
+    int cols = grid[0].length;
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            if (grid[r][c] == '1') {
+                count++;                 // ← count BEFORE dfs, not after
+                dfs(grid, r, c, rows, cols);
+            }
+        }
+    }
+    return count;
+}
+
+private void dfs(char[][] grid, int r, int c, int rows, int cols) {
+    if (r < 0 || r >= rows || c < 0 || c >= cols || grid[r][c] != '1') {
+        return;
+    }
+    grid[r][c] = '0';                   // ← sink: marks visited AND removes from future outer-loop detection
+    dfs(grid, r + 1, c, rows, cols);
+    dfs(grid, r - 1, c, rows, cols);
+    dfs(grid, r, c + 1, rows, cols);
+    dfs(grid, r, c - 1, rows, cols);
+}
+```
+
+**Complexity:** O(m × n) time, O(m × n) space.
+
+**Transfers to:**
+
+- **LC 733 Flood Fill** — identical DFS, but instead of sinking to '0', propagate `newColor`. Add early return if `newColor == originalColor` to avoid infinite recursion.
+
+- **LC 695 Max Area of Island** — same outer loop + DFS. What changes: DFS returns `int` (the size of the component); outer loop tracks `Math.max(max, dfs(r, c))` instead of incrementing a counter.
+
+- **LC 305 Number of Islands II (🔴)** — online version: you add land cells one by one and must answer "how many islands?" after each. DFS per query = O(m×n) → TLE on n queries. Use DSU instead: when adding cell `(r,c)`, call `dsu.union((r,c), neighbor)` for each land neighbor. Answer = `dsu.countComponents()` after each add.
+
+- **LC 1020 Number of Enclaves** — count land cells NOT connected to any boundary. Run DFS from all boundary '1' cells first (mark them visited). Count remaining unvisited '1' cells. Same DFS, different question asked from it.
+
+---
+
+### 20.3 LC 695 Max Area of Island — Bottom-Up DFS (Returns Int)
+
+**In plain English:** Find the largest island (max number of connected '1' cells) in a binary int grid.
+
+```
+Input:  0 0 1 0 0 0 0 1 0 0 0 0 0
+        0 0 0 0 0 0 0 1 1 1 0 0 0
+        0 1 1 0 1 0 0 0 0 0 0 0 0
+        0 1 0 0 1 1 0 0 1 0 1 0 0
+        0 1 0 0 1 1 0 0 1 1 1 0 0
+        0 0 0 0 0 0 0 0 0 0 1 0 0
+
+Output: 6
+```
+
+**Pattern:** Bottom-up DFS — each call returns the area it discovers. This is the graph equivalent of bottom-up tree DP: children return their subtree sizes, parent accumulates them.
+
+---
+
+**Phase 1 — Build the graph:** Grid is given directly.
+
+**The key insight:** Change `private void dfs(...)` → `private int dfs(...)`. Out-of-bounds and water return `0`. Valid land: sink to `0` (mark visited), return `1 + sum of 4 recursive results`. The outer loop picks the max return value across all DFS calls.
+
+**Code:**
+
+```java
+public int maxAreaOfIsland(int[][] grid) {
+    int max = 0;
+    int rows = grid.length;
+    int cols = grid[0].length;
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            if (grid[r][c] == 1) {
+                max = Math.max(max, dfs(grid, r, c, rows, cols));
+            }
+        }
+    }
+    return max;
+}
+
+private int dfs(int[][] grid, int r, int c, int rows, int cols) {
+    if (r < 0 || r >= rows || c < 0 || c >= cols || grid[r][c] != 1) {
+        return 0;                        // ← out-of-bounds or water → contribute 0 area
+    }
+    grid[r][c] = 0;                     // sink to avoid revisiting
+    return 1
+        + dfs(grid, r + 1, c, rows, cols)
+        + dfs(grid, r - 1, c, rows, cols)
+        + dfs(grid, r, c + 1, rows, cols)
+        + dfs(grid, r, c - 1, rows, cols);
+}
+```
+
+**Complexity:** O(m × n) time, O(m × n) space.
+
+**Transfers to:**
+
+- **LC 200 Number of Islands** — same outer loop + DFS, but DFS returns `void` and outer loop increments a counter instead of tracking max area.
+
+- **LC 827 Making a Large Island (🔴)** — Phase 1: run this exact bottom-up DFS on the whole grid. Assign each island an ID and store its area in a map. Phase 2: for each water cell `(r,c)`, try adding it as land and sum the areas of its 4 distinct neighboring islands. Answer = max of `1 + sum`. The bottom-up DFS from this walkthrough IS Phase 1 of the solution.
+
+- **LC 463 Island Perimeter** — same DFS, but instead of counting cells, count boundary edges. Each land cell contributes 1 for each adjacent water/out-of-bounds neighbor. DFS accumulates this count bottom-up.
+
+---
+
+### 20.4 LC 994 Rotten Oranges — Multi-Source BFS
+
+**In plain English:** Grid with 0 (empty), 1 (fresh orange), 2 (rotten orange). Each minute, rotten oranges rot all fresh oranges they touch 4-directionally. Return minimum minutes until no fresh orange remains, -1 if impossible.
+
+```
+Input:  [[2,1,1],      Output: 4
+         [1,1,0],
+         [0,1,1]]
+
+Minute 0: all 2s are rotten
+Minute 1: (0,1) and (1,0) rot
+Minute 2: (0,2) and (1,1) rot
+Minute 3: (2,1) rots
+Minute 4: (2,2) rots
+```
+
+**Pattern:** Multi-source BFS. ALL rotten oranges are seeded into the queue simultaneously at time 0. BFS level = one minute. The word "simultaneously" is the signal.
+
+---
+
+**Phase 1 — Build the graph:** Grid given directly. Scan to find all `2` cells (sources) and count `1` cells (targets).
+
+**The key insight:** Running BFS separately from each rotten orange (one BFS per source) is wrong — a fresh orange adjacent to two rotten sources would receive the time of whichever BFS reaches it LATER, not the minimum. Seeding all at once means spread is parallel: every fresh orange gets the distance to its NEAREST rotten orange in a single pass.
+
+**Code:**
+
+```java
+public int orangesRotting(int[][] grid) {
+    int rows = grid.length;
+    int cols = grid[0].length;
+    Queue<int[]> queue = new ArrayDeque<>();
+    int fresh = 0;
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            if (grid[r][c] == 2) {
+                queue.offer(new int[]{r, c});   // ← seed ALL rotten at time 0
+            } else if (grid[r][c] == 1) {
+                fresh++;
+            }
+        }
+    }
+    if (fresh == 0) {
+        return 0;                               // already done, no fresh to rot
+    }
+    int[][] dirs = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    int minutes = 0;
+    while (!queue.isEmpty() && fresh > 0) {
+        int size = queue.size();
+        for (int i = 0; i < size; i++) {        // ← process one LEVEL = one minute
+            int[] cell = queue.poll();
+            for (int[] d : dirs) {
+                int nr = cell[0] + d[0];
+                int nc = cell[1] + d[1];
+                if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && grid[nr][nc] == 1) {
+                    grid[nr][nc] = 2;
+                    fresh--;
+                    queue.offer(new int[]{nr, nc});
+                }
+            }
+        }
+        minutes++;
+    }
+    return fresh == 0 ? minutes : -1;
+}
+```
+
+**Complexity:** O(m × n) time, O(m × n) space.
+
+**Transfers to:**
+
+- **LC 542 01 Matrix** — same multi-source BFS but REVERSED. Instead of seeding rotten (2) cells, seed ZERO (0) cells. Build a `dist[][]` array; BFS propagates distance outward. Every '1' cell receives the distance to its nearest '0'. One-line difference: `dist[nr][nc] = dist[r][c] + 1` instead of tracking fresh count.
+
+- **LC 1162 As Far from Land as Possible** — seed ALL land cells (value 1) simultaneously; BFS into water. Answer = max `dist` value among water cells. If no land OR no water → return -1. Exact same multi-source template.
+
+- **LC 286 Walls and Gates (🔴)** — seed all gate cells (value 0); BFS fills room cells (value INF) with their minimum distance to any gate. Ignore wall cells (value -1). Same template; never enqueue walls.
+
+- **HackerRank vaccine distribution / any "spread from multiple origins"** — seeded on non-grid adjacency list graph. Same template; only neighbor generation changes: `for (int v : adj.get(u))` replaces the 4-directional loop. See the full template in [§ Multi-Source BFS on an adjacency-list graph](#multi-source-bfs-on-an-adjacency-list-graph--full-template).
+
+---
+
+### 20.5 LC 542 01 Matrix — Multi-Source BFS Reversed
+
+**In plain English:** Given a binary matrix, for each cell find its distance to the nearest `0` cell. Return a distance matrix.
+
+```
+Input:  [[0,0,0],      Output: [[0,0,0],
+         [0,1,0],               [0,1,0],
+         [1,1,1]]               [1,2,1]]
+```
+
+**Pattern:** Multi-source BFS, direction reversed. You seed ALL zero cells (not ones) and let BFS expand outward. Each `1` cell is discovered at its minimum distance to any `0` in a single pass.
+
+---
+
+**Phase 1 — Build the graph:** Grid given directly.
+
+**The key insight:** If you ran BFS FROM each '1' cell TO the nearest '0', you'd need O(m×n) separate BFS calls → O(m²×n²) total. Reverse the question: BFS FROM all '0' cells simultaneously. Every '1' cell is "hit" by the nearest '0's BFS wave first. One O(m×n) pass gives all distances. Initialize `dist[r][c] = Integer.MAX_VALUE` for '1' cells to mark "not yet reached."
+
+**Code:**
+
+```java
+public int[][] updateMatrix(int[][] mat) {
+    int rows = mat.length;
+    int cols = mat[0].length;
+    int[][] dist = new int[rows][cols];
+    Queue<int[]> queue = new ArrayDeque<>();
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            if (mat[r][c] == 0) {
+                queue.offer(new int[]{r, c});   // ← seed all zeros
+            } else {
+                dist[r][c] = Integer.MAX_VALUE; // ← unknown; will be updated by BFS
+            }
+        }
+    }
+    int[][] dirs = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    while (!queue.isEmpty()) {
+        int[] cell = queue.poll();
+        int r = cell[0];
+        int c = cell[1];
+        for (int[] d : dirs) {
+            int nr = r + d[0];
+            int nc = c + d[1];
+            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols
+                    && dist[r][c] + 1 < dist[nr][nc]) {
+                dist[nr][nc] = dist[r][c] + 1;
+                queue.offer(new int[]{nr, nc});
+            }
+        }
+    }
+    return dist;
+}
+```
+
+**Complexity:** O(m × n) time, O(m × n) space.
+
+**Transfers to:**
+
+- **LC 994 Rotten Oranges** — same structure but seed rotten (2) cells, not zero cells. Track a `fresh` counter instead of building a `dist[][]`. Level-based BFS (size-snapshot loop) tracks minutes.
+
+- **LC 1162 As Far from Land as Possible** — seed all land (1) cells; BFS into water (0) cells. Answer = max `dist` value. Identical to this template, just swap what's seeded and what's measured.
+
+- **LC 286 Walls and Gates (🔴)** — seed all gate (0) cells; BFS into rooms (INF). Don't seed walls (-1). Same template with three cell types instead of two.
+
+---
+
+### 20.6 LC 130 Surrounded Regions — Boundary-First DFS
+
+**In plain English:** Given a board of `'X'` and `'O'`, capture all `'O'` regions completely surrounded by `'X'` by flipping them to `'X'`. Any `'O'` region touching the border is NOT captured.
+
+```
+Input:  X X X X      Output: X X X X
+        X O O X              X X X X
+        X X O X              X X X X
+        X O X X              X O X X
+               ↑ border 'O' stays; internal 'O' captured
+```
+
+**Pattern:** Reverse-direction DFS from boundary. Instead of asking "is this 'O' surrounded?" (hard), ask "is this 'O' connected to the boundary?" (easy via DFS from edges). What's NOT connected to the boundary = surrounded = captured.
+
+---
+
+**Phase 1 — Build the graph:** Grid given directly.
+
+**The key insight:** You can't determine if an internal 'O' is surrounded by checking its immediate neighbors alone — a surrounded region may be large. Reverse the question: any 'O' reachable from any border 'O' by DFS is SAFE. Start DFS from all border 'O' cells, mark them with a temporary `'#'`. After DFS, flip: `'O'` → `'X'` (surrounded, captured), `'#'` → `'O'` (safe, restore).
+
+**Code:**
+
+```java
+public void solve(char[][] board) {
+    int rows = board.length;
+    int cols = board[0].length;
+    // Phase 2 — DFS from all boundary 'O' cells, mark safe as '#'
+    for (int r = 0; r < rows; r++) {
+        if (board[r][0] == 'O') {
+            dfs(board, r, 0, rows, cols);
+        }
+        if (board[r][cols - 1] == 'O') {
+            dfs(board, r, cols - 1, rows, cols);
+        }
+    }
+    for (int c = 0; c < cols; c++) {
+        if (board[0][c] == 'O') {
+            dfs(board, 0, c, rows, cols);
+        }
+        if (board[rows - 1][c] == 'O') {
+            dfs(board, rows - 1, c, rows, cols);
+        }
+    }
+    // Phase 3 — flip: 'O' surrounded → 'X'; '#' safe → 'O'
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            if (board[r][c] == 'O') {
+                board[r][c] = 'X';
+            } else if (board[r][c] == '#') {
+                board[r][c] = 'O';
+            }
+        }
+    }
+}
+
+private void dfs(char[][] board, int r, int c, int rows, int cols) {
+    if (r < 0 || r >= rows || c < 0 || c >= cols || board[r][c] != 'O') {
+        return;
+    }
+    board[r][c] = '#';                   // ← "safe" marker
+    dfs(board, r + 1, c, rows, cols);
+    dfs(board, r - 1, c, rows, cols);
+    dfs(board, r, c + 1, rows, cols);
+    dfs(board, r, c - 1, rows, cols);
+}
+```
+
+**Complexity:** O(m × n) time, O(m × n) space.
+
+**Transfers to:**
+
+- **LC 1020 Number of Enclaves** — identical boundary-first DFS. What changes: no flip step. After marking boundary-connected land as visited, count all remaining unvisited '1' cells. That count = enclaves.
+
+- **LC 1254 Number of Closed Islands** — count '0' regions completely surrounded by '1'. Same logic: DFS from all boundary '0' cells to mark them "open." Count remaining '0' components that were NOT reached from the boundary.
+
+- **LC 417 Pacific Atlantic Water Flow** — boundary-first BFS, but run it TWICE (from Pacific boundary AND Atlantic boundary). Intersection of both reachable sets = answer.
+
+---
+
+### 20.7 LC 417 Pacific Atlantic Water Flow — Two-Boundary BFS
+
+**In plain English:** Water flows from higher/equal cells to adjacent lower/equal cells. Pacific touches top + left edges; Atlantic touches bottom + right edges. Find all cells from which water can flow to BOTH oceans.
+
+**Pattern:** Two-boundary reverse BFS + intersection. Run BFS UPHILL from each ocean's boundary. "Uphill" means only move to neighbors with height ≥ current. Cells reachable from BOTH sets are the answer.
+
+---
+
+**Phase 1 — Build the graph:** Grid given directly.
+
+**The key insight:** Naive approach — BFS downhill from EVERY cell to check if both oceans reachable = O(m²×n²). Reverse: flow UPHILL from ocean edges. A cell can flow to Pacific ↔ Pacific BFS can reach that cell going uphill. Two O(m×n) passes + one O(m×n) intersection scan.
+
+**Code:**
+
+```java
+public List<List<Integer>> pacificAtlantic(int[][] heights) {
+    int rows = heights.length;
+    int cols = heights[0].length;
+    boolean[][] pac = new boolean[rows][cols];
+    boolean[][] atl = new boolean[rows][cols];
+    Queue<int[]> pacQ = new ArrayDeque<>();
+    Queue<int[]> atlQ = new ArrayDeque<>();
+    // Seed Pacific: top row + left col
+    for (int c = 0; c < cols; c++) {
+        pacQ.offer(new int[]{0, c});
+        pac[0][c] = true;
+        atlQ.offer(new int[]{rows - 1, c});
+        atl[rows - 1][c] = true;
+    }
+    for (int r = 0; r < rows; r++) {
+        pacQ.offer(new int[]{r, 0});
+        pac[r][0] = true;
+        atlQ.offer(new int[]{r, cols - 1});
+        atl[r][cols - 1] = true;
+    }
+    bfsUphill(heights, pacQ, pac, rows, cols);
+    bfsUphill(heights, atlQ, atl, rows, cols);
+    List<List<Integer>> result = new ArrayList<>();
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            if (pac[r][c] && atl[r][c]) {
+                result.add(List.of(r, c));
+            }
+        }
+    }
+    return result;
+}
+
+private void bfsUphill(int[][] heights, Queue<int[]> queue,
+                        boolean[][] visited, int rows, int cols) {
+    int[][] dirs = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    while (!queue.isEmpty()) {
+        int[] cell = queue.poll();
+        int r = cell[0];
+        int c = cell[1];
+        for (int[] d : dirs) {
+            int nr = r + d[0];
+            int nc = c + d[1];
+            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols
+                    && !visited[nr][nc]
+                    && heights[nr][nc] >= heights[r][c]) { // ← uphill condition
+                visited[nr][nc] = true;
+                queue.offer(new int[]{nr, nc});
+            }
+        }
+    }
+}
+```
+
+**Complexity:** O(m × n) time, O(m × n) space.
+
+**Transfers to:**
+
+- **LC 130 Surrounded Regions** — boundary-first approach but only ONE boundary, and cells reached = safe (not captured), cells not reached = captured. No second BFS; no intersection.
+
+- **LC 1020 Number of Enclaves** — single-boundary BFS/DFS. Reached cells = "open" (not enclave). Count unreached land cells.
+
+- **LC 329 Longest Increasing Path in Matrix (🔴)** — instead of two-boundary BFS, this needs DFS with memoization from each cell. Each cell's longest path = 1 + max of neighbors' longest paths where neighbor is strictly greater. Memoize to avoid recomputation.
+
+---
+
+### 20.8 LC 785 Is Graph Bipartite — 2-Coloring BFS
+
+**In plain English:** Given an undirected graph (as adjacency list), determine if you can color every node with one of 2 colors such that no edge connects two nodes of the same color.
+
+**Pattern:** 2-coloring BFS. Assign color 0 to source; assign `1 - color` to every neighbor. If a neighbor is already colored with the SAME color as current → not bipartite.
+
+---
+
+**Phase 1 — Build the graph:** Graph given as `int[][] graph` where `graph[u]` = neighbor list of u. No build step.
+
+**The key insight:** Bipartite = no odd-length cycle. BFS alternates colors level by level. A same-color conflict at any edge means an odd cycle exists. Initialize `color[]` to -1 (uncolored). Handle disconnected components with an outer for-loop over all nodes.
+
+**Code:**
+
+```java
+public boolean isBipartite(int[][] graph) {
+    int n = graph.length;
+    int[] color = new int[n];
+    Arrays.fill(color, -1);             // -1 = uncolored
+    for (int i = 0; i < n; i++) {
+        if (color[i] == -1) {           // handle disconnected components
+            if (!bfs(graph, i, color)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+private boolean bfs(int[][] graph, int src, int[] color) {
+    Queue<Integer> queue = new ArrayDeque<>();
+    queue.offer(src);
+    color[src] = 0;
+    while (!queue.isEmpty()) {
+        int u = queue.poll();
+        for (int v : graph[u]) {
+            if (color[v] == -1) {
+                color[v] = 1 - color[u]; // ← flip color for neighbor
+                queue.offer(v);
+            } else if (color[v] == color[u]) {
+                return false;            // ← conflict: same color on both ends of edge
+            }
+        }
+    }
+    return true;
+}
+```
+
+**Complexity:** O(V + E) time, O(V) space.
+
+**Transfers to:**
+
+- **LC 886 Possible Bipartition** — same 2-coloring BFS, but Phase 1 differs: build an undirected conflict graph from the `dislikes[][]` array first (`for (int[] d : dislikes) adj.get(d[0]).add(d[1]); adj.get(d[1]).add(d[0]);`). Then run the identical bipartite check on that graph. The answer is `isBipartite(conflictGraph)`.
+
+- **LC 785 with DFS** — same logic using DFS: pass current color as a parameter. `if (color[v] == -1) dfs(v, 1 - currColor)`; `if (color[v] == currColor) return false`. Slightly shorter code, same result.
+
+---
+
+### 20.9 Directed Cycle Detection — DFS + pathVisited Two-Array
+
+**In plain English:** Given a directed graph, detect if any cycle exists (GFG). Equivalently (LC 802): find all "safe" nodes — nodes from which EVERY path leads to a terminal node (no outgoing edges), never circling back.
+
+**Pattern:** DFS with TWO boolean arrays: `visited[]` (ever entered) + `pathVisited[]` (currently in the active recursion stack). Seeing a `pathVisited` node = back edge = cycle.
+
+---
+
+**Phase 1 — Build the graph:** Build adjacency list from given edge data.
+
+**The key insight:** In a directed graph, `visited[v] == true` alone doesn't mean cycle — `v` could have been fully explored via a different path (a cross edge). Cycle = we reach a node still on the CURRENT active call stack. `pathVisited[u] = true` on entry, `pathVisited[u] = false` on exit (backtrack). This "backtrack" step is what people forget — without it, GRAY leaks into BLACK and produces false positives.
+
+**Cycle detection code:**
+
+```java
+public boolean hasCycle(int V, List<List<Integer>> adj) {
+    boolean[] visited = new boolean[V];
+    boolean[] pathVisited = new boolean[V];
+    for (int i = 0; i < V; i++) {
+        if (!visited[i]) {
+            if (dfs(i, adj, visited, pathVisited)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+private boolean dfs(int u, List<List<Integer>> adj,
+                    boolean[] visited, boolean[] pathVisited) {
+    visited[u] = true;
+    pathVisited[u] = true;              // ← enter: on the current path
+    for (int v : adj.get(u)) {
+        if (!visited[v]) {
+            if (dfs(v, adj, visited, pathVisited)) {
+                return true;
+            }
+        } else if (pathVisited[v]) {
+            return true;                // ← v is an ancestor on the current path → cycle
+        }
+    }
+    pathVisited[u] = false;            // ← EXIT: leaving this path (backtrack)
+    return false;
+}
+```
+
+**LC 802 Eventual Safe States — full solution:**
+
+A node is safe iff no cycle is reachable from it. Use the same DFS; mark `safe[u] = true` only when DFS returns without finding a cycle.
+
+```java
+public List<Integer> eventualSafeNodes(int[][] graph) {
+    int n = graph.length;
+    boolean[] visited = new boolean[n];
+    boolean[] pathVisited = new boolean[n];
+    boolean[] safe = new boolean[n];
+    for (int i = 0; i < n; i++) {
+        if (!visited[i]) {
+            dfs(i, graph, visited, pathVisited, safe);
+        }
+    }
+    List<Integer> result = new ArrayList<>();
+    for (int i = 0; i < n; i++) {
+        if (safe[i]) {
+            result.add(i);
+        }
+    }
+    return result;
+}
+
+private boolean dfs(int u, int[][] graph, boolean[] visited,
+                    boolean[] pathVisited, boolean[] safe) {
+    visited[u] = true;
+    pathVisited[u] = true;
+    for (int v : graph[u]) {
+        if (!visited[v]) {
+            if (dfs(v, graph, visited, pathVisited, safe)) {
+                return true;            // cycle found downstream
+            }
+        } else if (pathVisited[v]) {
+            return true;
+        }
+    }
+    pathVisited[u] = false;
+    safe[u] = true;                     // ← only reaches here if NO cycle from u
+    return false;
+}
+```
+
+**Complexity:** O(V + E) time, O(V) space.
+
+**Transfers to:**
+
+- **LC 207 Course Schedule (via DFS)** — same cycle detection: if `hasCycle()` returns true → return false (cannot finish). Kahn's approach (walkthrough 10) is preferred when you also need the ordering.
+
+- **LC 210 Course Schedule II (via DFS)** — same DFS + topo sort: push `u` onto a stack AFTER the for-loop (post-order). Pop stack for topological order. If cycle detected → return empty array.
+
+---
+
+### 20.10 LC 207 Course Schedule — Kahn's Topological Sort
+
+**In plain English:** `n` courses (0..n-1), prerequisites `[a, b]` meaning "must take b before a." Can you finish all courses? (i.e., no circular dependency.)
+
+**Pattern:** Kahn's algorithm — in-degree peeling. Repeatedly pull nodes with in-degree 0 (no remaining prerequisites). If all V nodes are pulled → no cycle → all courses finishable.
+
+---
+
+**Phase 1 — Build the graph:** Edge list format — `prerequisites[i] = [course, prereq]`. **Edge direction: `prereq → course` (prereq must be done before course).** This direction is the #1 bug in topo sort.
+
+```java
+for (int[] pre : prerequisites) {
+    adj.get(pre[1]).add(pre[0]);        // pre[1] (prereq) unlocks pre[0] (course)
+    inDegree[pre[0]]++;
+}
+```
+
+**The key insight:** A cycle means every node in it has at least one incoming edge from another cycle node — so none ever hits in-degree 0. Queue drains before processing all V nodes → `count < V` → cycle detected. Check `count == numCourses` at end.
+
+**Code:**
+
+```java
+public boolean canFinish(int numCourses, int[][] prerequisites) {
+    List<List<Integer>> adj = new ArrayList<>();
+    int[] inDegree = new int[numCourses];
+    for (int i = 0; i < numCourses; i++) {
+        adj.add(new ArrayList<>());
+    }
+    for (int[] pre : prerequisites) {
+        adj.get(pre[1]).add(pre[0]);    // prereq UNLOCKS course
+        inDegree[pre[0]]++;
+    }
+    Queue<Integer> queue = new ArrayDeque<>();
+    for (int i = 0; i < numCourses; i++) {
+        if (inDegree[i] == 0) {
+            queue.offer(i);
+        }
+    }
+    int count = 0;
+    while (!queue.isEmpty()) {
+        int u = queue.poll();
+        count++;
+        for (int v : adj.get(u)) {
+            inDegree[v]--;
+            if (inDegree[v] == 0) {
+                queue.offer(v);
+            }
+        }
+    }
+    return count == numCourses;         // true = no cycle = all courses finishable
+}
+```
+
+**Complexity:** O(V + E) time, O(V + E) space.
+
+**Transfers to:**
+
+- **LC 210 Course Schedule II** — identical code; instead of `return count == numCourses`, collect poll order into `int[] result`. Return `result` if `count == numCourses`, otherwise return `new int[]{}`.
+
+- **LC 269 Alien Dictionary** — same Kahn's, but Phase 1 is completely different: compare adjacent words character-by-character. First position where they differ gives a directed edge `char_i → char_j`. After building that graph, run identical Kahn's. If any prefix word is longer than its successor → invalid → return "".
+
+- **LC 2115 Find All Possible Recipes** — two node types (recipes + ingredients). Build directed graph: each ingredient/recipe → recipes that need it. Run Kahn's; any recipe that appears in the topo order is makeable.
+
+- **LC 1136 Parallel Courses** — same Kahn's; answer = number of BFS LEVELS (not count). Use the level-tracking variant: `for (int sz = queue.size(); sz > 0; sz--)` outer loop, increment `semesters` after each level.
+
+---
+
+### 20.11 LC 127 Word Ladder — Implicit Graph BFS
+
+**In plain English:** Find the shortest sequence of one-letter transformations from `beginWord` to `endWord`, where every intermediate word must exist in `wordList`. Return the sequence length; 0 if impossible.
+
+```
+beginWord = "hit", endWord = "cog"
+wordList = ["hot","dot","dog","lot","log","cog"]
+
+hit → hot → dot → dog → cog   (length 5)
+```
+
+**Pattern:** Implicit graph BFS — the graph is never built or stored. For each word dequeued, GENERATE its neighbors on the fly (26-letter substitutions per position). This avoids the O(N² × L) cost of precomputing all edges.
+
+---
+
+**Phase 1 — Build the graph:** None. Convert `wordList` to `HashSet<String>` for O(1) membership checks. Use the set as both the word dictionary AND the visited tracker (remove a word once processed).
+
+**The key insight:** Two words are "neighbors" if they differ by exactly one letter. To generate neighbors: for each character position, try substituting each of 26 letters and check membership in `wordSet`. O(L × 26) per word. Removing processed words from `wordSet` serves as the visited marker — prevents revisiting while keeping the code simple.
+
+**Code:**
+
+```java
+public int ladderLength(String beginWord, String endWord, List<String> wordList) {
+    Set<String> wordSet = new HashSet<>(wordList);
+    if (!wordSet.contains(endWord)) {
+        return 0;
+    }
+    Queue<String> queue = new ArrayDeque<>();
+    queue.offer(beginWord);
+    wordSet.remove(beginWord);          // ← remove = mark visited
+    int steps = 1;
+    while (!queue.isEmpty()) {
+        int size = queue.size();
+        for (int i = 0; i < size; i++) {
+            String word = queue.poll();
+            char[] chars = word.toCharArray();
+            for (int pos = 0; pos < chars.length; pos++) {
+                char original = chars[pos];
+                for (char c = 'a'; c <= 'z'; c++) {
+                    if (c == original) {
+                        continue;
+                    }
+                    chars[pos] = c;
+                    String candidate = new String(chars);
+                    if (candidate.equals(endWord)) {
+                        return steps + 1;
+                    }
+                    if (wordSet.contains(candidate)) {
+                        wordSet.remove(candidate);
+                        queue.offer(candidate);
+                    }
+                }
+                chars[pos] = original;  // ← restore character before next position
+            }
+        }
+        steps++;
+    }
+    return 0;
+}
+```
+
+**Complexity:** O(N × L × 26) time, O(N × L) space.
+
+**Transfers to:**
+
+- **LC 433 Minimum Genetic Mutation** — identical structure. `beginGene` → `endGene`. Alphabet is 4 characters (`'A','C','G','T'`) instead of 26. `bank` is the word list. Copy the exact same code, change the inner loop to `for (char c : new char[]{'A','C','G','T'})`.
+
+- **LC 126 Word Ladder II (🔴)** — find ALL shortest paths, not just the length. BFS builds a `Map<String, List<String>> parents` (for each word, which words led to it at optimal distance). Then DFS/backtrack on the parent map from `endWord` to `beginWord` to reconstruct all paths. The BFS phase is identical to this walkthrough.
+
+- **LC 752 Open the Lock** — same implicit graph BFS. State = 4-digit lock combination (string). Neighbors = 8 states reachable by turning one wheel one tick in either direction. `deadends` set = nodes to skip. Find shortest path from "0000" to target.
+
+---
+
+### 20.12 LC 547 Number of Provinces — DFS on Adjacency Matrix
+
+**In plain English:** `n` cities. `isConnected[i][j] == 1` means city i and city j are directly connected. A province = group of directly/indirectly connected cities. Return province count.
+
+**Pattern:** Component counting on a non-grid graph given as adjacency MATRIX. Same outer loop as LC 200 (Number of Islands), but neighbor generation iterates a full row instead of 4 directions.
+
+---
+
+**Phase 1 — Build the graph:** Input IS the adjacency matrix. No conversion — iterate `isConnected[u]` row directly inside DFS.
+
+**The key insight:** The ONLY difference from LC 200 is the neighbor loop: `for (int v = 0; v < n; v++) if (isConnected[u][v] == 1 && !visited[v])`. Everything else — outer for-loop, visited array, province counter — is structurally identical.
+
+**Code:**
+
+```java
+public int findCircleNum(int[][] isConnected) {
+    int n = isConnected.length;
+    boolean[] visited = new boolean[n];
+    int provinces = 0;
+    for (int i = 0; i < n; i++) {
+        if (!visited[i]) {
+            provinces++;
+            dfs(isConnected, visited, i, n);
+        }
+    }
+    return provinces;
+}
+
+private void dfs(int[][] isConnected, boolean[] visited, int u, int n) {
+    visited[u] = true;
+    for (int v = 0; v < n; v++) {
+        if (isConnected[u][v] == 1 && !visited[v]) {
+            dfs(isConnected, visited, v, n);
+        }
+    }
+}
+```
+
+**LC 261 Graph Valid Tree** — same component check, plus the "tree identity":
+
+```java
+public boolean validTree(int n, int[][] edges) {
+    // A tree must have exactly n-1 edges (necessary condition — fast reject)
+    if (edges.length != n - 1) {
+        return false;
+    }
+    // Build adjacency list (0-indexed, undirected)
+    List<List<Integer>> adj = new ArrayList<>();
+    for (int i = 0; i < n; i++) {
+        adj.add(new ArrayList<>());
+    }
+    for (int[] e : edges) {
+        adj.get(e[0]).add(e[1]);
+        adj.get(e[1]).add(e[0]);
+    }
+    // DFS from 0; if all n nodes visited → connected → it's a tree
+    boolean[] visited = new boolean[n];
+    dfsTree(0, adj, visited);
+    for (boolean v : visited) {
+        if (!v) {
+            return false;               // not all connected → not a tree
+        }
+    }
+    return true;
+}
+```
+
+**Complexity:** O(V²) time (matrix scan per node), O(V) space.
+
+**Transfers to:**
+
+- **LC 261 Graph Valid Tree** — same DFS, but: (1) check `edges.length == n - 1` first (fast reject), (2) build adjacency LIST from edges, (3) DFS from node 0, (4) verify all nodes were visited. "Tree = connected + n-1 edges" — any two of {connected, n-1 edges, acyclic} imply the third.
+
+- **LC 323 Number of Connected Components** — same outer-loop + DFS, but input is `int[][] edges` (not a matrix). Build adjacency list first. Then identical component counting.
+
+- **LC 547 via DSU** — alternative approach: for each `isConnected[i][j] == 1`, call `dsu.union(i, j)`. Answer = `dsu.countComponents()`. Preferred when the graph grows dynamically (edges added over time).
+
+---
+
+### 20.13 LC 743 Network Delay Time — Dijkstra
+
+**In plain English:** Directed weighted graph of `n` nodes. Send a signal from source `k`. Return the time until ALL nodes have received it, or -1 if any node is unreachable.
+
+**Pattern:** Dijkstra single-source shortest path. A min-heap always expands the globally cheapest unfinished node. Once popped, a node's distance is finalized (non-negative weights guarantee this).
+
+---
+
+**Phase 1 — Build the graph:** Input is `int[][] times` where `times[i] = [from, to, weight]`. Build weighted adjacency list. Nodes are 1-indexed → allocate `n + 1` lists, ignore index 0.
+
+```java
+List<List<int[]>> adj = new ArrayList<>();
+for (int i = 0; i <= n; i++) {
+    adj.add(new ArrayList<>());
+}
+for (int[] t : times) {
+    adj.get(t[0]).add(new int[]{t[1], t[2]});   // {neighbor, weight}
+}
+```
+
+**The key insight:** After running Dijkstra from `k`, the answer is `max(dist[1..n])` — the signal arrival time is bottlenecked by the LAST node to receive it. Use `dist[v] == -1` as "not reached" guard in the PQ comparator — never use `a[1] - b[1]` because `dist[]` starts at `Integer.MAX_VALUE` and subtraction overflows.
+
+**Code:**
+
+```java
+public int networkDelayTime(int[][] times, int n, int k) {
+    List<List<int[]>> adj = new ArrayList<>();
+    for (int i = 0; i <= n; i++) {
+        adj.add(new ArrayList<>());
+    }
+    for (int[] t : times) {
+        adj.get(t[0]).add(new int[]{t[1], t[2]});
+    }
+    int[] dist = new int[n + 1];
+    Arrays.fill(dist, Integer.MAX_VALUE);
+    dist[k] = 0;
+    // ⚠️ Use Integer.compare, NOT a[1]-b[1] — MAX_VALUE overflow
+    PriorityQueue<int[]> pq = new PriorityQueue<>((a, b) -> Integer.compare(a[1], b[1]));
+    pq.offer(new int[]{k, 0});
+    while (!pq.isEmpty()) {
+        int[] curr = pq.poll();
+        int u = curr[0];
+        int d = curr[1];
+        if (d > dist[u]) {
+            continue;                   // ← stale entry: a shorter path already found
+        }
+        for (int[] edge : adj.get(u)) {
+            int v = edge[0];
+            int w = edge[1];
+            if (dist[u] + w < dist[v]) {
+                dist[v] = dist[u] + w;
+                pq.offer(new int[]{v, dist[v]});
+            }
+        }
+    }
+    int maxDist = 0;
+    for (int i = 1; i <= n; i++) {
+        if (dist[i] == Integer.MAX_VALUE) {
+            return -1;                  // some node unreachable
+        }
+        maxDist = Math.max(maxDist, dist[i]);
+    }
+    return maxDist;
+}
+```
+
+**Complexity:** O((V + E) log V) time, O(V + E) space.
+
+**Transfers to:**
+
+- **LC 1631 Path With Minimum Effort** — Dijkstra where cost = MAX single-edge weight on path (not sum). Change: `int newCost = Math.max(dist[r][c], Math.abs(heights[nr][nc] - heights[r][c]))`. State = (cost, row, col). Min-heap on cost. Answer = `dist[rows-1][cols-1]`.
+
+- **LC 1514 Path With Maximum Probability** — Dijkstra with MAX-heap (probability is multiplied, not added; higher probability is better). State = (prob, node). `dist[v] = dist[u] * prob`. Change `PriorityQueue` to max-heap: `(a, b) -> Double.compare(b[1], a[1])`.
+
+- **LC 787 Cheapest Flights Within K Stops** — Dijkstra with an extra state dimension. State = (cost, node, stops_used). A node can be enqueued multiple times with different stop counts. Alternatively: Bellman-Ford limited to K+1 relaxation rounds — simpler to implement for this constraint.
+
+- **LC 1091 Shortest Path in Binary Matrix** — 8-directional BFS (NOT Dijkstra, since all edge weights = 1). Standard BFS from (0,0); answer = BFS level when (n-1,n-1) is first reached.
+
+---
+
+### 20.14 LC 1584 Min Cost to Connect All Points — Prim's MST 🟡
+
+**In plain English:** Given `n` 2D points, connect ALL of them with minimum total cost, where cost between two points = Manhattan distance `|x1 - x2| + |y1 - y2|`.
+
+**Pattern:** Minimum Spanning Tree — Prim's algorithm. Always add the cheapest edge that connects an unvisited point to the already-connected set. Min-heap drives "cheapest first."
+
+---
+
+**Phase 1 — Build the graph:** No explicit edges. Compute Manhattan distance lazily inside Prim's loop — exactly like implicit graph BFS.
+
+**The key insight:** MST = minimum cost to connect all nodes with no cycles. Prim's: maintain a visited set; at each step, add the minimum-cost edge crossing from visited → unvisited. This always produces an MST (greedy correctness: a minimum cut-crossing edge is always in some MST). The "stale entry" skip (`if (inMST[u]) continue`) handles duplicates in the heap.
+
+**Code:**
+
+```java
+public int minCostConnectPoints(int[][] points) {
+    int n = points.length;
+    boolean[] inMST = new boolean[n];
+    // {cost, pointIndex}
+    PriorityQueue<int[]> pq = new PriorityQueue<>((a, b) -> Integer.compare(a[0], b[0]));
+    pq.offer(new int[]{0, 0});          // start from point 0 at cost 0
+    int totalCost = 0;
+    int edgesAdded = 0;
+    while (edgesAdded < n) {
+        int[] curr = pq.poll();
+        int cost = curr[0];
+        int u = curr[1];
+        if (inMST[u]) {
+            continue;                   // ← stale: u already in MST
+        }
+        inMST[u] = true;
+        totalCost += cost;
+        edgesAdded++;
+        // Offer edges from u to all unvisited points (generate lazily)
+        for (int v = 0; v < n; v++) {
+            if (!inMST[v]) {
+                int dist = Math.abs(points[u][0] - points[v][0])
+                         + Math.abs(points[u][1] - points[v][1]);
+                pq.offer(new int[]{dist, v});
+            }
+        }
+    }
+    return totalCost;
+}
+```
+
+**Complexity:** O(n² log n) time, O(n²) space (heap can hold O(n²) edges).
+
+**Transfers to:**
+
+- **LC 1135 Connecting Cities With Minimum Cost** — same MST but explicit edges given. Use Kruskal's: sort all edges by cost, then use DSU to union endpoints. Add an edge only if its endpoints are in different components (`dsu.union()` returns true). Answer = sum of added edge costs.
+
+- **LC 1168 Optimize Water Distribution (🔴)** — MST with a virtual "well-digging" node. Add a virtual node 0 connected to each house with edge cost = well-digging cost. Run MST on the augmented graph. Prim's or Kruskal's both work.
+
+---
+
+
+
+---
+
 ## 🗺️ Practice Plan — Tiered
 
 ### Tier 1 — Foundations (must be muscle memory) ✅
 
 Striver videos: **G-1 through G-12**.
 
-1. ✅ Build adjacency list (directed + undirected, weighted + unweighted)
-2. ✅ BFS — given a graph, output traversal from vertex 0
-3. ✅ DFS — same
-4. ✅ **LC 547** Number of Provinces (G-7)
-5. ✅ **LC 200** Number of Islands (G-8)
-6. ✅ **LC 733** Flood Fill (G-9)
-7. ✅ **LC 994** Rotten Oranges (G-10)
-8. ✅ Cycle detection undirected (BFS and DFS) (G-11, G-12)
+1. ✅ Build adjacency list (directed + undirected, weighted + unweighted) — *the fundamental data structure; knowing both forms cold is table stakes*
+2. ✅ BFS — given a graph, output traversal from vertex 0 — *mark-on-enqueue discipline; level-by-level guarantees*
+3. ✅ DFS — same — *mark-on-entry discipline; recursion stack mental model*
+4. ✅ **LC 547** Number of Provinces (G-7) — *DFS/BFS on adjacency matrix; outer for-loop over components*
+5. ✅ **LC 200** Number of Islands (G-8) — *grid as hidden graph; flood-fill one island at a time*
+6. ✅ **LC 733** Flood Fill (G-9) — *DFS/BFS that propagates a new value (not just visited)*
+7. ✅ **LC 994** Rotten Oranges (G-10) — *multi-source BFS: seed all rotten cells at t=0; level = minutes elapsed*
+8. ✅ Cycle detection undirected (BFS and DFS) (G-11, G-12) — *parent-tracking: visited AND not-my-parent = real back edge*
 
 > **Day 1 of your sprint targets this tier.**
 
@@ -4003,16 +5504,16 @@ Striver videos: **G-1 through G-12**.
 
 Striver videos: **G-13 through G-26**.
 
-9. 🟡 **LC 542** 01 Matrix (G-13)
-10. 🟡 **LC 130** Surrounded Regions (G-14)
-11. 🟡 **LC 1020** Number of Enclaves (G-15)
-12. 🟡 **LC 785** Bipartite Graph (G-17, G-18)
-13. 🟡 Cycle detection directed (G-19)
-14. 🟡 **LC 802** Eventual Safe States (G-20, G-25)
-15. 🟡 Topological Sort — DFS + Kahn's (G-21, G-22)
-16. 🟡 **LC 207** Course Schedule (G-24) — **must-do**
-17. 🟡 **LC 210** Course Schedule II (G-24) — **must-do**
-18. 🟡 **LC 269** Alien Dictionary (G-26)
+9. 🟡 **LC 542** 01 Matrix (G-13) — *multi-source BFS seeded from all 0s; distance propagates outward*
+10. 🟡 **LC 130** Surrounded Regions (G-14) — *reverse-direction: BFS from boundary O's, then flip everything unreached*
+11. 🟡 **LC 1020** Number of Enclaves (G-15) — *reverse-direction: flood from boundary land, count what's left*
+12. 🟡 **LC 785** Bipartite Graph (G-17, G-18) — *2-coloring via BFS; same color on both ends of an edge = not bipartite*
+13. 🟡 Cycle detection directed (G-19) — *two-array trick: visited + pathVisited; pathVisited flipped on backtrack*
+14. 🟡 **LC 802** Eventual Safe States (G-20, G-25) — *safe = not on any cycle; same DFS or Kahn's on reversed graph*
+15. 🟡 Topological Sort — DFS + Kahn's (G-21, G-22) — *DFS: push on completion (post-order); Kahn's: peel in-degree-0 nodes*
+16. 🟡 **LC 207** Course Schedule (G-24) — **must-do** — *Kahn's cycle detection: if order.size() < V, a cycle blocks completion*
+17. 🟡 **LC 210** Course Schedule II (G-24) — **must-do** — *same Kahn's, but return the order not just true/false*
+18. 🟡 **LC 269** Alien Dictionary (G-26) — *build edge from adjacent word pairs (first diff char); Kahn's on that graph*
 
 > **Day 2 of your sprint targets this tier.**
 
@@ -4022,16 +5523,16 @@ Striver videos: **G-13 through G-26**.
 
 Striver videos: **G-27 through G-43**.
 
-19. 🟡 SP in DAG (G-27)
-20. 🟡 SP in unweighted (G-28)
-21. 🟡 **LC 127** Word Ladder (G-29)
-22. 🟡 Dijkstra basic (G-32, G-33, G-34)
-23. 🟡 **LC 743** Network Delay Time (vanilla Dijkstra)
-24. 🟡 **LC 1091** Shortest Path in Binary Matrix (G-36)
-25. 🟡 **LC 1631** Path With Minimum Effort (G-37)
-26. 🟡 **LC 787** Cheapest Flights With K Stops (G-38)
-27. 🔴 Bellman-Ford (G-41)
-28. 🔴 Floyd-Warshall (G-42, G-43)
+19. 🟡 SP in DAG (G-27) — *topo sort + edge relaxation; O(V+E) and handles negative weights*
+20. 🟡 SP in unweighted (G-28) — *plain BFS; first time you reach a vertex = shortest path*
+21. 🟡 **LC 127** Word Ladder (G-29) — *implicit graph BFS: no adjacency list — generate neighbors on the fly (26 substitutions per position)*
+22. 🟡 Dijkstra basic (G-32, G-33, G-34) — *greedy: always expand the closest unfinished vertex via min-heap; no negative weights*
+23. 🟡 **LC 743** Network Delay Time — *vanilla Dijkstra; answer = max of all shortest distances*
+24. 🟡 **LC 1091** Shortest Path in Binary Matrix (G-36) — *BFS on 8-directional grid; each step costs 1*
+25. 🟡 **LC 1631** Path With Minimum Effort (G-37) — *Dijkstra where "cost" = max edge weight on path, not sum*
+26. 🟡 **LC 787** Cheapest Flights With K Stops (G-38) — *Bellman-Ford limited to K+1 rounds; or Dijkstra with (node, stops) state*
+27. 🔴 Bellman-Ford (G-41) — *relax all edges V-1 times; detects negative cycles*
+28. 🔴 Floyd-Warshall (G-42, G-43) — *all-pairs shortest paths via DP; O(V³)*
 
 > **Day 3 of your sprint targets the must-do subset of this tier (G-27 to G-35).**
 
@@ -4041,16 +5542,16 @@ Striver videos: **G-27 through G-43**.
 
 Striver videos: **G-44 through G-53**.
 
-29. 🟡 DSU implementation from scratch (G-46)
-30. 🟡 Prim's MST (G-45)
-31. 🟡 Kruskal's MST (G-47)
-32. 🟡 **LC 547** Provinces via DSU (G-48)
-33. 🟡 **LC 1319** Network Connected (G-49)
-34. 🟡 **LC 721** Accounts Merge (G-50)
-35. 🟡 **LC 947** Most Stones Removed (G-53)
-36. 🟡 **LC 1584** Min Cost to Connect All Points (Kruskal's)
-37. 🔴 **LC 305** Number of Islands II (G-51)
-38. 🔴 **LC 827** Making a Large Island (G-52)
+29. 🟡 DSU implementation from scratch (G-46) — *parent[] + rank[] + find (path compression) + union (by rank); fits on one screen*
+30. 🟡 Prim's MST (G-45) — *greedy: always add the cheapest edge that crosses the cut; min-heap of (weight, vertex)*
+31. 🟡 Kruskal's MST (G-47) — *sort all edges by weight; union if endpoints are in different components (DSU)*
+32. 🟡 **LC 547** Provinces via DSU (G-48) — *union each edge; answer = countComponents() at the end*
+33. 🟡 **LC 1319** Network Connected (G-49) — *need ≥ V-1 edges; extra edges = cables to re-wire; components - 1 = moves needed*
+34. 🟡 **LC 721** Accounts Merge (G-50) — *string-keyed DSU: Map<String, String> parent; union by email; rebuild groups by root*
+35. 🟡 **LC 947** Most Stones Removed (G-53) — *coordinate remapping: union stone's row with (col + offset) to force row/col collisions into same set*
+36. 🟡 **LC 1584** Min Cost to Connect All Points (Kruskal's) — *virtual graph where edge weight = Manhattan distance; MST gives minimum wiring cost*
+37. 🔴 **LC 305** Number of Islands II (G-51) — *online queries: each land-add potentially merges up to 4 components; DSU per query*
+38. 🔴 **LC 827** Making a Large Island (G-52) — *pre-union all islands; for each water cell, try connecting up to 4 distinct component roots*
 
 ---
 
@@ -4078,9 +5579,9 @@ Striver videos: **G-44 through G-53**.
 
 Striver videos: **G-54 through G-56**.
 
-39. 🔴 Kosaraju's SCC (G-54)
-40. 🔴 Tarjan's bridges (G-55) — **LC 1192**
-41. 🔴 Articulation Points (G-56)
+39. 🔴 Kosaraju's SCC (G-54) — *DFS post-order → transpose graph → DFS again in stack-pop order; each DFS on transposed = one SCC*
+40. 🔴 Tarjan's bridges (G-55) — **LC 1192** — *DFS with discovery time + low-link; bridge iff low[v] > disc[u]*
+41. 🔴 Articulation Points (G-56) — *same low-link trick as bridges; root is AP iff it has ≥ 2 DFS children*
 
 > **Do NOT attempt cold.** Read theory, understand the names, implement only if you have time after Tier 4.
 

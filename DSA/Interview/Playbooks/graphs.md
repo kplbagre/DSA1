@@ -79,6 +79,244 @@ Graph problem
 
 ---
 
+## 🔨 Building the Graph — Input Format Patterns
+
+> **The interview trap no one warns you about:** you can know BFS cold and still stall because you don't know how to BUILD the graph from the raw input the problem hands you. There are 6 common input formats interviewers use. Know all of them.
+
+### 🧠 The Two-Phase mental model (burn this into your head)
+
+```
+Every graph interview = Phase 1 + Phase 2
+
+  Phase 1 — BUILD the graph    ← this section
+             translate raw input into adj list / matrix / implicit
+
+  Phase 2 — RUN the algorithm  ← everything else in this file
+             BFS / DFS / Topo Sort / DSU / Dijkstra...
+
+The notes drill Phase 2 well. Phase 1 is what bites you in the interview.
+Interviewers give you raw arrays, not a ready-made adjacency list.
+```
+
+---
+
+### Format 1 — Two separate arrays, 1-indexed nodes ⚠️ Most dangerous
+
+**What the problem gives you:**
+```
+n = 6 nodes, m = 4 roads
+center_from = [1, 2, 4, 3]
+center_to   = [2, 5, 5, 4]
+```
+
+**Real example:** HackerRank / platform interviews (the vaccine distribution problem).
+Nodes go from 1 to n. This is the format that triggers the 1-indexed trap.
+
+> ⚠️ **The 1-indexed trap — most common Phase 1 bug:** nodes start at 1, but `ArrayList` indices start at 0. If you create a list of size `n`, the last valid index is `n-1` — but node `n` exists and you'll call `adj.get(n)` → `IndexOutOfBoundsException`. This costs 10 minutes in a live interview.
+
+```java
+// ❌ WRONG — crashes when any node id equals n
+List<List<Integer>> adj = new ArrayList<>();
+for (int i = 0; i < n; i++) {            // creates indices 0..n-1
+    adj.add(new ArrayList<>());          // node n has no slot!
+}
+for (int i = 0; i < m; i++) {
+    adj.get(from[i]).add(to[i]);         // from[i] could be n → crash
+}
+
+// ✅ CORRECT — allocate n+1, use nodes as-is, ignore index 0
+List<List<Integer>> adj = new ArrayList<>();
+for (int i = 0; i <= n; i++) {          // creates indices 0..n ← extra slot
+    adj.add(new ArrayList<>());         // index 0 intentionally wasted
+}
+for (int i = 0; i < m; i++) {
+    int u = from[i];                    // node ids start at 1, use directly
+    int v = to[i];
+    adj.get(u).add(v);
+    adj.get(v).add(u);                  // undirected: both directions
+}
+```
+
+> **Lesson learned the hard way (June 2026):** this exact bug cost Kapil ~10 minutes in a real vaccine-distribution interview. He created `new ArrayList<>(n)` but nodes were labelled 1..n. The fix is one word: change `i < n` to `i <= n` in the init loop. **Mnemonic before you write the for-loop: "Are nodes 1-indexed? → n+1 lists."**
+
+---
+
+### Format 2 — Edge pair array `int[][] edges`, 0-indexed (LeetCode standard)
+
+**What the problem gives you:**
+```
+n = 5
+edges = [[0,1],[1,2],[2,3],[3,4]]
+```
+
+Simpler — node id == list index, no offset needed.
+
+```java
+List<List<Integer>> adj = new ArrayList<>();
+for (int i = 0; i < n; i++) {
+    adj.add(new ArrayList<>());
+}
+for (int[] edge : edges) {
+    int u = edge[0];
+    int v = edge[1];
+    adj.get(u).add(v);
+    adj.get(v).add(u);                  // omit this line for directed graph
+}
+```
+
+**Real interview examples using this format:**
+- LC 261 Graph Valid Tree (`n` nodes, `int[][] edges`, 0-indexed)
+- LC 1319 Make Network Connected (`int[][] connections`)
+- LC 547 Number of Provinces — but uses adjacency MATRIX, see Format 5 below
+
+---
+
+### Format 3 — Prerequisites pairs (topo sort problems)
+
+**What the problem gives you:**
+```
+numCourses = 4
+prerequisites = [[1,0],[3,1],[3,2]]
+// [a, b] means "must take b before a" → edge b → a
+```
+
+Direction is counterintuitive. The arrow goes FROM the prerequisite TO the dependent, not the other way.
+
+```java
+List<List<Integer>> adj = new ArrayList<>();
+int[] inDegree = new int[numCourses];
+for (int i = 0; i < numCourses; i++) {
+    adj.add(new ArrayList<>());
+}
+for (int[] pre : prerequisites) {
+    int course = pre[0];
+    int prereq = pre[1];
+    // prereq UNLOCKS course → arrow points FORWARD in time: prereq → course
+    adj.get(prereq).add(course);
+    inDegree[course]++;
+}
+```
+
+> **Mnemonic: "prereq UNLOCKS course" → arrow points FROM prereq TO course.** If you flip this, Kahn's starts with wrong nodes and breaks silently (no exception, just wrong answer). This is the #1 topo sort setup bug.
+
+---
+
+### Format 4 — Weighted edges (Dijkstra, Prim's, Bellman-Ford)
+
+**What the problem gives you:**
+```
+edges = [[0,1,4],[1,2,7],[0,2,2]]
+// [from, to, weight]
+```
+
+Change `List<List<Integer>>` to `List<List<int[]>>` and store `{neighbor, weight}` pairs.
+
+```java
+List<List<int[]>> adj = new ArrayList<>();
+for (int i = 0; i < n; i++) {
+    adj.add(new ArrayList<>());
+}
+for (int[] edge : edges) {
+    int u = edge[0];
+    int v = edge[1];
+    int w = edge[2];
+    adj.get(u).add(new int[]{v, w});
+    adj.get(v).add(new int[]{u, w});    // undirected weighted; omit for directed
+}
+
+// Accessing in Dijkstra / BFS loop:
+for (int[] neighbor : adj.get(u)) {
+    int v = neighbor[0];
+    int weight = neighbor[1];
+    // ... relax dist[v]
+}
+```
+
+---
+
+### Format 5 — Adjacency matrix `int[][] isConnected`
+
+**What the problem gives you:**
+```
+isConnected = [[1,1,0],
+               [1,1,0],
+               [0,0,1]]
+// isConnected[i][j] == 1 → edge i—j
+```
+
+**Real interview example:** LC 547 Number of Provinces.
+
+**Do NOT rebuild this into an adjacency list** — just iterate the matrix row directly in your DFS/BFS.
+
+```java
+// DFS directly on the adjacency matrix — no list-building phase at all
+private void dfs(int u, boolean[] visited, int[][] isConnected, int n) {
+    visited[u] = true;
+    for (int v = 0; v < n; v++) {            // scan the entire row
+        if (isConnected[u][v] == 1 && !visited[v]) {
+            dfs(v, visited, isConnected, n);
+        }
+    }
+}
+```
+
+> **Why not rebuild?** Reading the matrix is O(V²) — same cost as using it directly. Rebuilding adds code, adds bugs, adds no benefit.
+
+---
+
+### Format 6 — Implicit graph (no edges given — generate on the fly)
+
+**What the problem gives you:**
+```
+beginWord = "hit", endWord = "cog"
+wordList = ["hot","dot","dog","lot","log","cog"]
+// "edge" = two words differing by exactly ONE letter
+// no explicit edge list exists
+```
+
+**Real interview example:** LC 127 Word Ladder.
+
+Never precompute the adjacency list (O(N² × L) → TLE). Generate neighbors lazily inside BFS:
+
+```java
+Set<String> wordSet = new HashSet<>(wordList);
+// Inside BFS loop, for the current word u just dequeued:
+char[] chars = u.toCharArray();
+for (int i = 0; i < chars.length; i++) {
+    char original = chars[i];
+    for (char c = 'a'; c <= 'z'; c++) {
+        if (c == original) {
+            continue;
+        }
+        chars[i] = c;
+        String candidate = new String(chars);
+        if (wordSet.contains(candidate) && !visited.contains(candidate)) {
+            // candidate is a valid neighbor
+            visited.add(candidate);
+            queue.offer(candidate);
+        }
+    }
+    chars[i] = original;                     // restore for next position
+}
+```
+
+---
+
+### Quick-reference: format → build pattern
+
+| What the problem gives you | Build pattern | Indexing trap? |
+| --- | --- | --- |
+| Two arrays `from[]`, `to[]`, nodes 1..n | `ArrayList` size `n+1`; ignore index 0 | ⚠️ Yes — use `i <= n` in init loop |
+| `int[][] edges`, nodes 0..n-1 | `ArrayList` size `n`; use directly | ✅ No |
+| `prerequisites[][]` pairs | Same as edge list; check edge DIRECTION carefully | ✅ Usually 0-indexed |
+| `int[][]` with weight as 3rd element | `List<List<int[]>>`; store `{v, w}` pairs | — |
+| `isConnected[][]` adjacency matrix | Don't rebuild — iterate row in DFS/BFS directly | — |
+| No edges (Word Ladder style) | Generate neighbors inside BFS loop; 26-char substitution | — |
+
+---
+
+---
+
 ## 🧭 Pattern 1: Grid BFS/DFS (Flood Fill / Islands) ⭐
 
 **What this solves:** Problems on a 2D grid where you need to count, mark, or spread across connected regions. The grid IS the implicit graph — cells are nodes, adjacent cells are edges. Classic triggers: counting islands, flood fill, spreading rot/fire, shortest binary-grid path.
