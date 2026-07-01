@@ -151,6 +151,136 @@ root.right = new TreeNode(3);
 
 ---
 
+## 🔨 Building the Tree — Input Formats
+
+> **⬛ 90% of LeetCode problems hand you `TreeNode root` directly.** This section is for the other 10%: when raw input arrives and you must construct the tree yourself before any algorithm runs. Phase 1 (build the tree) must be complete before Phase 2 (run the algorithm) begins.
+
+---
+
+### Format A — Level-Order Array with Nulls (LeetCode Serialization Format)
+
+This is the format LeetCode uses in its test cases: `[1,2,3,null,null,4,5]`. The array encodes the tree level by level, where `null` means "this child slot is empty." You almost never write the deserializer on LeetCode — the tree is handed to you — but understanding the format lets you trace through examples mentally, and LC 297 (Serialize/Deserialize Binary Tree) asks you to implement it explicitly.
+
+### 🎨 Visual — Level-Order Array Encoding
+
+```
+Input array: [1, 2, 3, null, null, 4, 5]
+Index:         0  1  2    3     4  5  6
+
+Tree it encodes:
+             1          ← index 0 (root)
+           /   \
+          2     3       ← indices 1, 2
+         / \   / \
+       null null 4  5   ← indices 3, 4, 5, 6
+
+BFS queue contents during construction:
+  Start:  queue = [1]
+  Pop 1:  left=vals[1]=2 → enqueue 2;  right=vals[2]=3 → enqueue 3
+  Pop 2:  left=vals[3]=null → skip;    right=vals[4]=null → skip
+  Pop 3:  left=vals[5]=4 → enqueue 4;  right=vals[6]=5 → enqueue 5
+
+KEY INVARIANT:
+  Every non-null node in the queue is a parent waiting for two child slots.
+  Null entries advance i but do NOT enter the queue — that's what keeps
+  the indices in sync with the tree shape.
+```
+
+**Steps in plain English:**
+
+1. **Guard against empty input** — if the array is null or the first element is `"null"`, return null immediately.
+2. **Seed the root** — create a `TreeNode` from `vals[0]`, add it to a BFS queue.
+3. **BFS loop** — dequeue a parent node; assign `vals[i]` as its left child (if not `"null"`) and `vals[i+1]` as its right child (if not `"null"`); enqueue non-null children; advance `i` by 2.
+4. **Return root.**
+
+```java
+public TreeNode buildFromLevelOrder(String[] vals) {
+    // Step 1 — guard
+    if (vals == null || vals.length == 0 || vals[0].equals("null")) {
+        return null;
+    }
+    // Step 2 — seed root
+    TreeNode root = new TreeNode(Integer.parseInt(vals[0]));
+    Queue<TreeNode> queue = new LinkedList<>();
+    queue.offer(root);
+    int i = 1;
+    // Step 3 — BFS loop: each iteration handles one parent's two child slots
+    while (!queue.isEmpty() && i < vals.length) {
+        TreeNode parent = queue.poll();
+        // Left child slot
+        if (!vals[i].equals("null")) {
+            parent.left = new TreeNode(Integer.parseInt(vals[i]));
+            queue.offer(parent.left);
+        }
+        i++;
+        // Right child slot
+        if (i < vals.length && !vals[i].equals("null")) {
+            parent.right = new TreeNode(Integer.parseInt(vals[i]));
+            queue.offer(parent.right);
+        }
+        i++;
+    }
+    // Step 4 — return root
+    return root;
+}
+```
+
+---
+
+### Format B — Parent Array (Contest / Custom Input Format)
+
+Given: `int n` (number of nodes with values `1..n`) and `int[] parent` where `parent[i]` is the parent of node `i`, and `parent[i] == -1` marks the root.
+
+**Steps in plain English:**
+
+1. **Pass 1 — create all nodes:** allocate `TreeNode[] nodes = new TreeNode[n + 1]` (1-indexed), instantiate a `TreeNode` at each index `1..n`.
+2. **Pass 2 — wire parent → child:** for each node `i`, if `parent[i] == -1` it is the root; otherwise attach it as the left or right child of `nodes[parent[i]]`.
+3. **Return the root node.**
+
+```java
+public TreeNode buildFromParentArray(int n, int[] parent) {
+    // Step 1 — Pass 1: create all nodes (1-indexed; index 0 is unused)
+    TreeNode[] nodes = new TreeNode[n + 1];
+    for (int i = 1; i <= n; i++) {
+        nodes[i] = new TreeNode(i);
+    }
+    TreeNode root = null;
+    // Step 2 — Pass 2: wire parent → child relationships
+    for (int i = 1; i <= n; i++) {
+        if (parent[i] == -1) {
+            // this node is the root
+            root = nodes[i];
+        } else {
+            TreeNode p = nodes[parent[i]];
+            if (p.left == null) {
+                p.left = nodes[i];
+            } else {
+                p.right = nodes[i];
+            }
+        }
+    }
+    // Step 3 — return root
+    return root;
+}
+```
+
+> **⚠️ 1-indexed trap:** allocate `n + 1` slots (`new TreeNode[n + 1]`), loop `i = 1..n`, ignore index 0. This is the same trap as graph adjacency list construction — see **`DSA/DeepDive/graphs-fundamentals.md § 🔨 Building the Graph — Input Format Patterns`** → *"1-indexed trap callout"*.
+
+---
+
+### Format C — Edges Array (Rare — treat like a graph first)
+
+When given `int[][] edges` where `edges[i] = [u, v]` means `u` is the parent of `v`: build an adjacency list (exactly like a graph), then run one BFS/DFS from the root to convert the adjacency list into `TreeNode` form. All edges-array construction patterns are in **`DSA/DeepDive/graphs-fundamentals.md § 🔨 Building the Graph`**.
+
+---
+
+> **⬛ Pre-flight: before any tree algorithm, answer these 2 questions:**
+>
+> 1. **Was the tree given to me as `TreeNode root`?** → skip Phase 1; go straight to the algorithm (DFS / BFS / recursion).
+> 2. **Was raw input given (level-order array / parent array / edges)?** → build the `TreeNode` tree first using Format A or B above, THEN run the algorithm.
+
+---
+
 ## 🧠 Recursion on Trees — The Mental Model (Most Important Section)
 
 If you struggle with tree problems, the issue is almost always **recursion comprehension**, not trees themselves. Spend extra time here.
@@ -1664,7 +1794,700 @@ See `Reference/set-section-updated.md` for the full TreeSet treatment.
 
 ## 🔬 Worked Walkthroughs
 
-### Walkthrough 1: Invert Binary Tree (LC 226)
+Twelve canonical problems — one per structurally unique shape. Every walkthrough: Problem → Brute Force → Intuition Bridge → Steps + Code → Transfers To.
+
+---
+
+### WW-1 — LC 104 Maximum Depth of Binary Tree
+
+> **Problem:** Given the root of a binary tree, return its maximum depth (number of nodes on the longest root-to-leaf path).
+
+**Brute force:** Generate every root-to-leaf path; measure each path's length; return the maximum. O(n × h) where h = height — visits nodes multiple times.
+> **Time:** O(n × h) | **Space:** O(h)
+
+**Intuition bridge — what cracks it open:** Every node must be visited — there's no way to skip. The insight is reuse: `depth(node) = 1 + max(depth(left), depth(right))`. Each subtree's result bubbles up so no node is visited twice. Postorder combine in one pass.
+
+**Steps in plain English:**
+
+1. **Base case** — `null` node has depth 0.
+2. **Recurse** into left and right subtrees; trust they return the correct depth.
+3. **Combine** — return `1 + max(leftDepth, rightDepth)`.
+
+```java
+public int maxDepth(TreeNode root) {
+    // Step 1
+    if (root == null) {
+        return 0;
+    }
+    // Step 2 — trust recursion
+    int leftDepth = maxDepth(root.left);
+    int rightDepth = maxDepth(root.right);
+    // Step 3 — combine
+    return 1 + Math.max(leftDepth, rightDepth);
+}
+```
+
+**Time:** O(n) | **Space:** O(h)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 111 Minimum Depth | Same postorder combine | Min depth = path to nearest leaf — null child ≠ leaf | `if (root.left == null) return 1 + minDepth(root.right)` |
+| LC 110 Balanced Binary Tree | Same height computation | Return `-1` sentinel to propagate "unbalanced" upward | `if (Math.abs(l - r) > 1) return -1` |
+| LC 559 Max Depth of N-ary Tree | Same `1 + max(children depths)` | Loop over `node.children` instead of two fixed calls | `for (Node c : root.children) max = Math.max(max, maxDepth(c))` |
+
+---
+
+### WW-2 — LC 226 Invert Binary Tree
+
+> **Problem:** Invert a binary tree (mirror it left-to-right). Return the root.
+
+**Brute force:** BFS level by level; for each node swap `.left` and `.right`. O(n) time — same as optimal.
+> **Time:** O(n) | **Space:** O(n) queue
+
+**Intuition bridge — what cracks it open:** After inverting both subtrees recursively, all we do at the current node is swap the two returned roots. The postorder pattern: do children first, act at current node last. Trust that each recursive call returns a fully inverted subtree.
+
+**Steps in plain English:**
+
+1. **Base case** — `null` node, return `null`.
+2. **Recurse left** — get back a fully inverted left subtree.
+3. **Recurse right** — get back a fully inverted right subtree.
+4. **Swap** — assign inverted-right to `root.left`, inverted-left to `root.right`.
+5. **Return root.**
+
+```java
+public TreeNode invertTree(TreeNode root) {
+    // Step 1
+    if (root == null) {
+        return null;
+    }
+    // Step 2, 3 — recurse; trust each subtree is fully inverted on return
+    TreeNode left = invertTree(root.left);
+    TreeNode right = invertTree(root.right);
+    // Step 4 — swap
+    root.left = right;
+    root.right = left;
+    // Step 5
+    return root;
+}
+```
+
+**Time:** O(n) | **Space:** O(h)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 100 Same Tree | Postorder check on two trees simultaneously | Return bool (are they equal?) instead of modifying | `return p.val == q.val && isSameTree(p.left, q.left) && ...` |
+| LC 617 Merge Two Binary Trees | Same postorder; two trees simultaneously | Sum vals instead of swap; handle one-null case | `return new TreeNode(t1.val + t2.val, merge(l1,l2), merge(r1,r2))` |
+| LC 951 Flip Equivalent Binary Trees | Same mirror concept | Accept if children match either normally OR flipped | Check both `(l1==l2 && r1==r2)` and `(l1==r2 && r1==l2)` |
+
+---
+
+### WW-3 — LC 102 Binary Tree Level Order Traversal
+
+> **Problem:** Return the values of nodes level by level, each level as a separate list.
+
+**Brute force:** DFS with a depth parameter; collect into `Map<Integer, List<Integer>>` keyed by depth; sort keys. O(n log n) due to sort.
+> **Time:** O(n log n) | **Space:** O(n)
+
+**Intuition bridge — what cracks it open:** BFS naturally visits nodes level by level. The key trick: before dequeuing the entire current level, snapshot `queue.size()` — that count is exactly how many nodes belong to the current level. Process exactly that many nodes, then snapshot again for the next level.
+
+**Steps in plain English:**
+
+1. **Seed queue** with root (if not null).
+2. **While queue not empty:** snapshot `levelSize = queue.size()`.
+3. **Dequeue exactly `levelSize` nodes**, collect their values into a sublist, enqueue their non-null children.
+4. **Add sublist** to result. Repeat.
+
+```java
+public List<List<Integer>> levelOrder(TreeNode root) {
+    List<List<Integer>> result = new ArrayList<>();
+    if (root == null) {
+        return result;
+    }
+    // Step 1
+    Queue<TreeNode> queue = new ArrayDeque<>();
+    queue.offer(root);
+
+    // Step 2
+    while (!queue.isEmpty()) {
+        int levelSize = queue.size();
+        List<Integer> level = new ArrayList<>();
+        // Step 3
+        for (int i = 0; i < levelSize; i++) {
+            TreeNode node = queue.poll();
+            level.add(node.val);
+            if (node.left != null) {
+                queue.offer(node.left);
+            }
+            if (node.right != null) {
+                queue.offer(node.right);
+            }
+        }
+        // Step 4
+        result.add(level);
+    }
+    return result;
+}
+```
+
+**Time:** O(n) | **Space:** O(n)
+
+### 🎨 Visual — queue snapshot trick on a 3-level tree
+
+```
+Tree:         1
+            /   \
+           2     3
+          / \   / \
+         4   5 6   7
+
+Initial queue: [1]
+
+Level 1: snapshot size=1. Poll 1 → level=[1]. Enqueue 2,3.   queue=[2,3]
+Level 2: snapshot size=2. Poll 2 → level=[2]. Enqueue 4,5.
+                          Poll 3 → level=[2,3]. Enqueue 6,7.  queue=[4,5,6,7]
+Level 3: snapshot size=4. Poll all → level=[4,5,6,7].         queue=[]
+
+Result: [[1],[2,3],[4,5,6,7]]
+
+KEY INVARIANT:
+  queue.size() at the START of each outer iteration = exactly the number
+  of nodes at the current level. The inner for-loop processes that exact
+  count, leaving only next-level nodes in the queue.
+```
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 107 Level Order II | Exact same BFS | Reverse the result list at the end | `Collections.reverse(result)` |
+| LC 103 Zigzag Level Order | Same BFS + level snapshot | Alternate insertion direction per level | `if (level % 2 == 1) Collections.reverse(levelList)` |
+| LC 116 Populate Next Right Pointers | Same level-by-level concept | Link each node to its right neighbor within same level | `node.next = i + 1 < levelSize ? queue.peek() : null` |
+
+---
+
+### WW-4 — LC 543 Diameter of Binary Tree
+
+> **Problem:** Return the length of the longest path between any two nodes (path does not need to pass through the root). Length = number of edges.
+
+**Brute force:** For each node, compute `height(left) + height(right)` by running a separate DFS height query. O(n) per node × n nodes = O(n²).
+> **Time:** O(n²) | **Space:** O(h)
+
+**Intuition bridge — what cracks it open:** The brute force recomputes heights redundantly. We already have to compute height in postorder anyway — so compute the diameter candidate at the same node where we compute height, in a single pass. The function returns height (what the parent needs) but tracks `maxDiameter` as a side effect (what we actually want). This is the "two-purpose recursion" pattern.
+
+**Steps in plain English:**
+
+1. **Instance field `maxDiameter = 0`** to track the global answer.
+2. **`height(node)` helper** — base case returns 0 for null.
+3. **At each node:** compute `lh = height(left)`, `rh = height(right)`. Update `maxDiameter = max(maxDiameter, lh + rh)`.
+4. **Return** `1 + max(lh, rh)` — the height for the parent to use.
+
+```java
+class Solution {
+    private int maxDiameter = 0;
+
+    public int diameterOfBinaryTree(TreeNode root) {
+        // Step 1 — reset (instance field persists across LeetCode test cases!)
+        maxDiameter = 0;
+        height(root);
+        return maxDiameter;
+    }
+
+    private int height(TreeNode node) {
+        // Step 2 — base case
+        if (node == null) {
+            return 0;
+        }
+        int lh = height(node.left);
+        int rh = height(node.right);
+        // Step 3 — candidate diameter through this node
+        maxDiameter = Math.max(maxDiameter, lh + rh);
+        // Step 4 — return height to parent
+        return 1 + Math.max(lh, rh);
+    }
+}
+```
+
+**Time:** O(n) | **Space:** O(h)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 687 Longest Univalue Path | Two-purpose: return one-sided, track global | Path only counts edges where `node.val == child.val` | `int l = (node.left != null && node.left.val == node.val) ? lh : 0` |
+| LC 1372 Longest ZigZag Path | Two-purpose | Track two heights: going-left and going-right | Return `int[]` with both directions; update global at each node |
+| LC 124 Binary Tree Max Path Sum | Exact same skeleton | Metric is sum not length; clip negatives with `Math.max(0, ...)` | See WW-12 |
+
+---
+
+### WW-5 — LC 112 Path Sum
+
+> **Problem:** Given a binary tree and `targetSum`, return true if there exists a root-to-leaf path whose node values sum to `targetSum`.
+
+**Brute force:** Generate all root-to-leaf paths (collect into lists), sum each, check if any equals target. O(n × h) — visits each node and rebuilds path.
+> **Time:** O(n × h) | **Space:** O(n × h) for all paths
+
+**Intuition bridge — what cracks it open:** We don't need to build paths. Just carry a "remaining" counter downward: subtract the current node's value at each step. At a leaf, if `remaining == 0`, we found a valid path. This top-down carry eliminates path storage entirely.
+
+**Steps in plain English:**
+
+1. **Base case (null)** — return `false` (walked off the tree).
+2. **Subtract current value** from remaining: `remaining -= node.val`.
+3. **Leaf check** — if both children are null (we're at a leaf) and `remaining == 0`, return `true`.
+4. **Recurse** into left OR right — return true if either finds a path.
+
+```java
+public boolean hasPathSum(TreeNode root, int targetSum) {
+    // Step 1
+    if (root == null) {
+        return false;
+    }
+    // Step 2
+    int remaining = targetSum - root.val;
+    // Step 3 — leaf check
+    if (root.left == null && root.right == null) {
+        return remaining == 0;
+    }
+    // Step 4
+    return hasPathSum(root.left, remaining) || hasPathSum(root.right, remaining);
+}
+```
+
+**Time:** O(n) | **Space:** O(h)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 113 Path Sum II | Same top-down carry | Collect ALL matching paths (not just return bool) | See WW-6 |
+| LC 437 Path Sum III | Similar path counting | Path can start/end at ANY node, not just root-to-leaf | Prefix sum + HashMap (like LC 560) at each DFS node |
+| LC 257 Binary Tree Paths | Same root-to-leaf DFS | Collect all path strings, not sum check | `path += "->" + node.val`; record at leaf |
+
+---
+
+### WW-6 — LC 113 Path Sum II
+
+> **Problem:** Return all root-to-leaf paths where the sum of node values equals `targetSum`.
+
+**Brute force:** Same as WW-5 but collect all paths — unavoidable O(n) scan. The question is whether we build path strings or maintain a running list.
+> **Time:** O(n × h) | **Space:** O(n × h)
+
+**Intuition bridge — what cracks it open:** Same top-down carry as LC 112, but now we maintain a `path` list as we descend. At a matching leaf, snapshot the current path into results. The critical discipline: **undo the addition after each recursive call** (backtrack) so the path list is clean for sibling branches.
+
+**Steps in plain English:**
+
+1. **Base case (null)** — return.
+2. **Add `node.val` to path**, subtract from remaining.
+3. **Leaf + remaining == 0** — snapshot `new ArrayList<>(path)` into results.
+4. **Recurse** into left and right children.
+5. **UNDO** — remove the last element from path (backtrack).
+
+```java
+public List<List<Integer>> pathSum(TreeNode root, int targetSum) {
+    List<List<Integer>> results = new ArrayList<>();
+    dfs(root, targetSum, new ArrayList<>(), results);
+    return results;
+}
+
+private void dfs(TreeNode node, int remaining, List<Integer> path, List<List<Integer>> results) {
+    // Step 1
+    if (node == null) {
+        return;
+    }
+    // Step 2
+    path.add(node.val);
+    remaining -= node.val;
+    // Step 3
+    if (node.left == null && node.right == null && remaining == 0) {
+        results.add(new ArrayList<>(path));
+    }
+    // Step 4
+    dfs(node.left, remaining, path, results);
+    dfs(node.right, remaining, path, results);
+    // Step 5 — UNDO (backtrack)
+    path.remove(path.size() - 1);
+}
+```
+
+**Time:** O(n × h) | **Space:** O(n × h)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 257 Binary Tree Paths | Same path collection + backtrack | Collect path strings, no sum constraint | Build `path` as `StringBuilder`; record `path.toString()` at leaf |
+| LC 1022 Sum of Root to Leaf Numbers | Same root-to-leaf DFS | Sum treated as binary number (shift left + add bit) | `remaining = remaining * 2 + node.val` |
+| LC 988 Smallest String from Leaf | Same DFS to leaf | Build string by prepending chars; compare at backtrack | Build in reverse; compare at each leaf against global min |
+
+---
+
+### WW-7 — LC 199 Binary Tree Right Side View
+
+> **Problem:** Return the values of nodes visible when looking at the tree from the right side (one value per level — the rightmost node at each depth).
+
+**Brute force:** BFS level order (WW-3 template), take the last element of each level list. O(n). Clean and correct — but uses O(n) queue space.
+> **Time:** O(n) | **Space:** O(n)
+
+**Intuition bridge — what cracks it open:** DFS preorder (root → right → left) visits the rightmost node of each depth first. When `depth == result.size()`, we're visiting that depth for the first time — add the value. This avoids the queue entirely and uses O(h) space.
+
+**Steps in plain English:**
+
+1. **DFS preorder** — visit right child before left child.
+2. **At each node:** if `depth == result.size()`, this is the first (= rightmost) node at this depth — add to result.
+3. **Recurse right** first (so rightmost is always seen first), then left.
+
+```java
+public List<Integer> rightSideView(TreeNode root) {
+    List<Integer> result = new ArrayList<>();
+    dfs(root, 0, result);
+    return result;
+}
+
+private void dfs(TreeNode node, int depth, List<Integer> result) {
+    if (node == null) {
+        return;
+    }
+    // Step 2 — first visit to this depth = rightmost node
+    if (depth == result.size()) {
+        result.add(node.val);
+    }
+    // Step 3 — right before left ensures rightmost is seen first
+    dfs(node.right, depth + 1, result);
+    dfs(node.left, depth + 1, result);
+}
+```
+
+**Time:** O(n) | **Space:** O(h)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 515 Find Largest Value in Each Row | Same DFS depth tracking | Track max per depth, not first-seen | `if (depth == result.size()) result.add(node.val); else result.set(depth, Math.max(...))` |
+| LC 623 Add One Row to Tree | Same level-awareness | Modify tree at target depth instead of query | When `depth == d-1`, replace children with new nodes wrapping old subtrees |
+| LC 662 Maximum Width of Binary Tree | Same level-based BFS | Track leftmost/rightmost node indices per level | Assign position indices `2*i`, `2*i+1`; width = rightmost - leftmost + 1 |
+
+---
+
+### WW-8 — LC 572 Subtree of Another Tree
+
+> **Problem:** Given trees `root` and `subRoot`, return true if `subRoot` is a subtree of `root` (there exists a node in `root` whose subtree is identical to `subRoot`).
+
+**Brute force:** For every node in `root`, run a full `isSameTree` check. O(m × n) where m = nodes in root, n = nodes in subRoot.
+> **Time:** O(m × n) | **Space:** O(h)
+
+**Intuition bridge — what cracks it open:** Build a helper `isSameTree(a, b)` first — it's 3 lines. Then the main function calls `isSameTree(node, subRoot)` at every node in root. Two clean recursive functions, clearly separated. The key insight: the answer is true if the current node matches, OR either subtree contains a match.
+
+**Steps in plain English:**
+
+1. **`isSameTree(a, b)`:** both null → true; one null → false; `a.val != b.val` → false; else check both children recursively.
+2. **`isSubtree(root, sub)`:** null root → false; `isSameTree(root, sub)` → return true; else recurse into left and right.
+
+```java
+public boolean isSubtree(TreeNode root, TreeNode subRoot) {
+    // Step 2
+    if (root == null) {
+        return false;
+    }
+    if (isSameTree(root, subRoot)) {
+        return true;
+    }
+    return isSubtree(root.left, subRoot) || isSubtree(root.right, subRoot);
+}
+
+private boolean isSameTree(TreeNode a, TreeNode b) {
+    // Step 1
+    if (a == null && b == null) {
+        return true;
+    }
+    if (a == null || b == null) {
+        return false;
+    }
+    if (a.val != b.val) {
+        return false;
+    }
+    return isSameTree(a.left, b.left) && isSameTree(a.right, b.right);
+}
+```
+
+**Time:** O(m × n) | **Space:** O(h)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 100 Same Tree | `isSameTree` is exactly the solution | No outer traversal needed — compare two complete trees | Just call `isSameTree(p, q)` directly |
+| LC 652 Find Duplicate Subtrees | Same "check structural equality" concept | Serialize each subtree; find duplicates via HashMap | `String serial = serialize(node); map.merge(serial, 1, Integer::sum)` |
+| LC 1367 Linked List in Binary Tree | Same nested recursion | Match a linked list as a downward path, not a full subtree | `isMatch(listNode, treeNode)` called at every tree node |
+
+---
+
+### WW-9 — LC 236 Lowest Common Ancestor of Binary Tree
+
+> **Problem:** Find the lowest common ancestor (LCA) of nodes `p` and `q` in a binary tree. The LCA is the deepest node that has both `p` and `q` as descendants (a node is a descendant of itself).
+
+**Brute force:** For each node, check if `p` is in its subtree AND `q` is in its subtree — if yes, it's a candidate for LCA. The deepest such node is the answer. O(n²) — each subtree-membership check costs O(n).
+> **Time:** O(n²) | **Space:** O(h)
+
+**Intuition bridge — what cracks it open:** The function can carry multiple meanings in its return value: `null` (nothing found here), `p` (found p), `q` (found q), or the LCA itself. When both left AND right return non-null, this node is the LCA. This collapses the two-pass brute force into a single postorder pass — the recursive return IS the signal.
+
+**Steps in plain English:**
+
+1. **Base case** — if `null`, return `null`. If `root == p` or `root == q`, return `root` (signal: found one of them).
+2. **Recurse** into left and right; collect the signals.
+3. **Both non-null** — `p` and `q` are on different sides; this node IS the LCA. Return `root`.
+4. **One non-null** — propagate whichever side found something. Return `left != null ? left : right`.
+
+```java
+public TreeNode lowestCommonAncestor(TreeNode root, TreeNode p, TreeNode q) {
+    // Step 1
+    if (root == null || root == p || root == q) {
+        return root;
+    }
+    // Step 2
+    TreeNode left = lowestCommonAncestor(root.left, p, q);
+    TreeNode right = lowestCommonAncestor(root.right, p, q);
+    // Step 3
+    if (left != null && right != null) {
+        return root;
+    }
+    // Step 4
+    return left != null ? left : right;
+}
+```
+
+**Time:** O(n) | **Space:** O(h)
+
+### 🎨 Visual — LCA three cases: what bubbles up from each subtree
+
+```
+Return value meaning:  null = nothing found  /  p or q = found one  /  <node> = LCA
+
+CASE A — p and q on different sides of a node → that node IS the LCA
+                   (3) ◀── LCA
+                  /   \
+          left=(5)     (1)=right
+                / \    / \
+              (p) ... ... (q)
+  At node 3: left=p (non-null) AND right=q (non-null) → return 3
+
+CASE B — p and q both under one child → deeper node is LCA
+                   (3)
+                  /   \
+          left=(5)     (1)=right
+                / \
+              (p) (q)
+  At node 5: left=p, right=q → both non-null → return 5
+  At node 3: left=5 (the LCA), right=null → propagate 5 upward
+
+CASE C — p is an ancestor of q → p IS the LCA
+                   (3)
+                  /
+                (p)   ◀── base case fires here; return p immediately
+                / \
+               ... (q)
+  At node 3: left=p (non-null), right=null → propagate p upward ✓
+
+KEY INVARIANT:
+  The function returns exactly one of: null / p / q / the LCA.
+  When both children return non-null, the CURRENT node is the meeting point.
+  This single-return-value design eliminates any need for an instance field.
+```
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 235 LCA of BST | Same 3-case logic | BST property — no need to search both subtrees | `if (p.val < root.val && q.val < root.val) recurse left; else if both > root.val recurse right; else return root` |
+| LC 1650 LCA with Parent Pointers | Same "find meeting point" goal | Walk up from both nodes using `.parent` — two-pointer on linked list | `Set<TreeNode> ancestors; walk p up; walk q up until seen` |
+| LC 1123 Deepest Leaves LCA | Same LCA pattern | Restrict to deepest leaves only | Track depth; LCA only counts when both subtrees reach max depth |
+
+---
+
+### WW-10 — LC 98 Validate Binary Search Tree
+
+> **Problem:** Given the root of a binary tree, determine if it is a valid BST (left subtree values < root, right subtree values > root, recursively).
+
+**Brute force:** Inorder traversal; collect all values into a list; verify the list is strictly increasing. O(n) time, O(n) space.
+> **Time:** O(n) | **Space:** O(n) for the list
+
+**Intuition bridge — what cracks it open:** The inorder approach works but allocates an array. The bounds approach is more direct: each node must lie strictly within a `(min, max)` window inherited from its ancestors. Turning left narrows the upper bound; turning right narrows the lower bound. No array needed — pass bounds as parameters.
+
+**Steps in plain English:**
+
+1. **Helper `validate(node, min, max)`** — root call with `(-∞, +∞)`.
+2. **Base case** — null node is valid, return true.
+3. **Bounds check** — if `node.val <= min` or `node.val >= max`, invalid.
+4. **Recurse** — left with `(min, node.val)`, right with `(node.val, max)`.
+
+```java
+public boolean isValidBST(TreeNode root) {
+    // Step 1
+    return validate(root, Long.MIN_VALUE, Long.MAX_VALUE);
+}
+
+private boolean validate(TreeNode node, long min, long max) {
+    // Step 2
+    if (node == null) {
+        return true;
+    }
+    // Step 3 — strict bounds check
+    if (node.val <= min || node.val >= max) {
+        return false;
+    }
+    // Step 4 — narrow window for each child
+    return validate(node.left, min, node.val) &&
+           validate(node.right, node.val, max);
+}
+```
+
+**Time:** O(n) | **Space:** O(h)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 700 Search in BST | Same BST property navigation | Return the node, not bool | `if (val < root.val) return searchBST(root.left, val); else return searchBST(root.right, val)` |
+| LC 701 Insert into BST | Same left/right routing | Attach new node at the right null leaf | `if (root == null) return new TreeNode(val)` |
+| LC 669 Trim BST | Same bounds-aware recursion | Remove nodes outside `[low, high]` | `if (root.val < low) return trimBST(root.right, low, high)` |
+
+---
+
+### WW-11 — LC 105 Construct Binary Tree from Preorder and Inorder Traversal
+
+> **Problem:** Given `preorder[]` and `inorder[]` of a tree (no duplicate values), reconstruct and return the binary tree.
+
+**Brute force:** For each preorder element (root of a subtree), scan the full inorder array to find the root's position. Split around it; recurse. O(n²) due to linear scan at each level.
+> **Time:** O(n²) | **Space:** O(n)
+
+**Intuition bridge — what cracks it open:** Preorder's first element is always the current subtree's root. In inorder, everything to the left of that root is the left subtree; everything to the right is the right subtree. A HashMap caches each value's inorder index for O(1) lookup — turning O(n²) into O(n).
+
+**Steps in plain English:**
+
+1. **Build `inorderIndex` HashMap** — value → index in inorder array.
+2. **Recursive `build(preStart, inStart, inEnd)`:** if range is empty, return null.
+3. **Root** = `preorder[preStart]`. Find root's inorder index; compute left subtree size.
+4. **Left child** = `build(preStart+1, inStart, rootIdx-1)`.
+5. **Right child** = `build(preStart+1+leftSize, rootIdx+1, inEnd)`.
+
+```java
+public TreeNode buildTree(int[] preorder, int[] inorder) {
+    // Step 1
+    Map<Integer, Integer> inorderIndex = new HashMap<>();
+    for (int i = 0; i < inorder.length; i++) {
+        inorderIndex.put(inorder[i], i);
+    }
+    return build(preorder, 0, 0, inorder.length - 1, inorderIndex);
+}
+
+private TreeNode build(int[] preorder, int preStart, int inStart, int inEnd,
+                       Map<Integer, Integer> inorderIndex) {
+    // Step 2
+    if (inStart > inEnd) {
+        return null;
+    }
+    // Step 3
+    int rootVal = preorder[preStart];
+    int rootIdx = inorderIndex.get(rootVal);
+    int leftSize = rootIdx - inStart;
+    TreeNode root = new TreeNode(rootVal);
+    // Step 4
+    root.left = build(preorder, preStart + 1, inStart, rootIdx - 1, inorderIndex);
+    // Step 5
+    root.right = build(preorder, preStart + 1 + leftSize, rootIdx + 1, inEnd, inorderIndex);
+    return root;
+}
+```
+
+**Time:** O(n) | **Space:** O(n)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 106 Build from Postorder + Inorder | Same split logic | Postorder root is the LAST element, not first | `int rootVal = postorder[postEnd]`; recurse accordingly |
+| LC 108 Convert Sorted Array to BST | Same recursive halving | Sorted array — middle is root; left/right halves are subtrees | `int mid = (left + right) / 2; root = new TreeNode(nums[mid])` |
+| LC 889 Build from Preorder + Postorder | Same structure | Ambiguous (not unique) — left child's root is `preorder[1]` | Find `preorder[preStart+1]` in postorder to get left subtree size |
+
+---
+
+### WW-12 — LC 124 Binary Tree Maximum Path Sum 🔴 Reference Only
+
+> 🔴 **DO NOT attempt cold.** This requires three intuitions built by the ladder below. Attempting without them means writing code that compiles, passes simple cases, and fails on `[-3]` or `[2, -1, -2]`.
+
+> **Problem:** Find the maximum sum of any path in the tree. A path can start and end at any node; it can "bend" at exactly one node (using both left and right children) but cannot revisit any node.
+
+**Brute force:** For each node, consider all paths passing through it — left subtree path + node + right subtree path. Recompute heights for each. O(n²).
+> **Time:** O(n²) | **Space:** O(h)
+
+**Intuition bridge — what cracks it open:** Three observations combined: (1) a "bent" path through node uses both children but can't be extended to the parent — so track it as global candidate only; (2) to a parent, only a single-sided extension is useful; (3) a negative subtree is worse than skipping it entirely — clip with `max(0, ...)`. This is WW-4 (Diameter) but with sum instead of length, plus the clipping.
+
+**Steps in plain English:**
+
+1. **Instance field `maxSum = Integer.MIN_VALUE`** — reset in public method (never static, never start at 0).
+2. **`gain(node)` helper:** base case returns 0 for null.
+3. **Clip children:** `leftGain = max(0, gain(left))`, `rightGain = max(0, gain(right))`.
+4. **Update global:** `maxSum = max(maxSum, node.val + leftGain + rightGain)` — the bent path candidate.
+5. **Return to parent:** `node.val + max(leftGain, rightGain)` — single-sided extension only.
+
+```java
+class Solution {
+    private int maxSum;
+
+    public int maxPathSum(TreeNode root) {
+        // Step 1 — instance field, reset here
+        maxSum = Integer.MIN_VALUE;
+        gain(root);
+        return maxSum;
+    }
+
+    private int gain(TreeNode node) {
+        // Step 2
+        if (node == null) {
+            return 0;
+        }
+        // Step 3 — clip negatives: a negative subtree is worse than skipping it
+        int leftGain = Math.max(0, gain(node.left));
+        int rightGain = Math.max(0, gain(node.right));
+        // Step 4 — bent path through this node (global candidate only)
+        maxSum = Math.max(maxSum, node.val + leftGain + rightGain);
+        // Step 5 — single-sided extension returned to parent
+        return node.val + Math.max(leftGain, rightGain);
+    }
+}
+```
+
+**Time:** O(n) | **Space:** O(h)
+
+#### 🐞 Three bugs Kapil hit on first attempt (May 2026)
+
+| Bug | Symptom | Fix |
+| --- | --- | --- |
+| `private static int maxSum = 0` | Wrong on `[-3]`; carries state across LC test cases | Instance field + reset to `Integer.MIN_VALUE` in public method |
+| No `max(0, ...)` clipping | Wrong on `[2, -1, -2]` — includes harmful children | `leftGain = Math.max(0, gain(node.left))` |
+| Returning `node.val + leftGain + rightGain` to parent | Path revisits node — illegal | Return `node.val + Math.max(leftGain, rightGain)` (one side only) |
+
+#### 🪜 Build-up ladder before attempting LC 124
+
+| Step | Problem | New concept |
+| --- | --- | --- |
+| 1 | LC 104 Max Depth | Postorder combine |
+| 2 | LC 543 Diameter | Two-purpose recursion — return height, track global |
+| 3 | LC 687 Longest Univalue Path | Two-purpose + value-matching condition |
+| 4 | LC 124 Max Path Sum | Two-purpose + negative clipping |
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 543 Diameter | Same two-purpose skeleton | Metric is length (edges), no clipping needed | Remove `max(0, ...)` clips; `lh + rh` replaces `val + lGain + rGain` |
+| LC 1245 Longest Path in DAG | Same "bent path" global tracking | DAG not tree — topological order, not recursion | BFS topo sort + DP on `dp[node]` |
+| LC 2246 Longest Path with Diff Adjacent Values | Same two-purpose on tree | Only extend child if `child.val != parent.val` | `if (node.children.get(i).val != node.val) extend` |
+
+---
 
 > Swap the left and right children of every node.
 

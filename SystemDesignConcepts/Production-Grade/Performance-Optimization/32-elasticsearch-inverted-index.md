@@ -42,6 +42,22 @@ Elasticsearch pre-builds this inverted index for all documents, making searches 
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Inverted Index** | lookup table mapping each word → list of documents containing it; enables O(1) word lookup | `"distributed"` → `[doc3, doc7, doc12]` — no scan needed |
+| **Document** | the unit indexed in Elasticsearch; equivalent to a row in a DB | `{id: 1, title: "Java Guide", body: "..."}` |
+| **Index (Elasticsearch)** | a named collection of documents with a shared mapping; like a database table | `products` index holds all product documents |
+| **Shard (Elasticsearch)** | a subset of an index stored on one node; horizontal partition for write and read scale | `products` index split into 5 shards → distributed across 5 nodes |
+| **Replica Shard** | copy of a primary shard on a different node; provides read scale and fault tolerance | each primary shard has 1 replica → shard data survives one node failure |
+| **Analyzer** | pipeline that processes text before indexing: tokenize, lowercase, remove stop words, stem | `"Running Fast"` → tokenizer → `["running", "fast"]` → stems → `["run", "fast"]` |
+| **Relevance Score (BM25)** | numerical score ranking how well a document matches a query; higher = more relevant | query `"java"` → `{doc1: 0.9, doc3: 0.4}` → doc1 ranked first |
+| **ELK Stack** | Elasticsearch + Logstash (ingest) + Kibana (visualize); the classic log analytics trio | centralized logging: Logstash collects logs → ES stores/indexes → Kibana dashboards |
+| **Near Real-Time (NRT)** | indexed documents are searchable within ~1 second of being written (not instant) | document written at T=0; searchable at T≈1s after segment refresh |
+
+---
+
 ## 🧠 The Mental Model
 
 Imagine a library catalog:
@@ -409,6 +425,43 @@ public class ElasticsearchIndexConfig {
 }
 ```
 
+### Refresh Interval — Why ES Is Not "Real-Time"
+
+A frequently missed interview gotcha: Elasticsearch does **not** make documents searchable immediately after indexing. By default there is a **1-second refresh interval** — the index is refreshed (made queryable) once per second. Between refreshes, a just-indexed document is not visible in search results.
+
+```
+Timeline with default 1s refresh interval:
+  t=0ms:   POST /logs/_doc {"message": "timeout error"}  → indexed in-memory segment
+  t=0ms:   GET  /logs/_search?q=timeout → 0 results  ← not yet refreshed!
+  t=1000ms: ES auto-refreshes index (in-memory → searchable)
+  t=1001ms: GET  /logs/_search?q=timeout → 1 result ✅
+
+Force immediate refresh (for testing or critical writes):
+  POST /logs/_doc?refresh=true {"message": "timeout error"}
+  → synchronously refreshes before returning → document immediately searchable
+  → ⚠️ Expensive at scale: forces a full refresh per document write
+```
+
+**Configuration options:**
+
+```json
+// Index setting: increase refresh interval for bulk-write workloads
+// (fewer refreshes = higher write throughput)
+PUT /logs/_settings
+{
+  "index": {
+    "refresh_interval": "5s"
+  }
+}
+
+// Disable refresh entirely during bulk indexing, then re-enable
+PUT /logs/_settings { "index": { "refresh_interval": "-1" } }
+// ... bulk index millions of docs ...
+PUT /logs/_settings { "index": { "refresh_interval": "1s" } }
+```
+
+**Interview phrasing:** *"Elasticsearch is near-real-time, not real-time. Documents are searchable after the next refresh cycle — 1 second by default. For log analytics this is fine. If a use case needs immediate visibility, use `?refresh=true` on the write request, but use this sparingly — it's expensive at high write rates. For bulk load scenarios, disable refresh entirely, load, then re-enable."*
+
 ### What is TF-IDF / BM25 Scoring, and why does it fit here?
 
 TF-IDF and BM25 are **relevance scoring algorithms**. TF = term frequency (how often does "timeout" appear in this doc?), IDF = inverse document frequency (how rare is "timeout" across all docs?). Documents where rare terms appear highly are ranked first. In an interview, if asked: *"BM25 is Elasticsearch's default scoring algorithm. It combines term frequency (how often keyword appears in doc) and document frequency (how rare is the keyword). Docs with high-frequency, rare keywords rank highest in search results."*
@@ -435,7 +488,14 @@ TF-IDF and BM25 are **relevance scoring algorithms**. TF = term frequency (how o
 | High write volume (millions of logs/sec) | Occasional writes |
 | Distributed search across large datasets | Small dataset (<100GB) on single server |
 
-**The common mistake:** Using Elasticsearch as a primary database. Elasticsearch is optimized for search, not ACID transactions. Use it alongside a primary DB (write to DB, index in Elasticsearch for search).
+**The common mistake:** Using Elasticsearch as a primary database.
+
+> **⚠️ Interview anti-pattern — always call this out explicitly:**
+> Elasticsearch has no ACID transactions, no foreign keys, no `UPDATE` semantics (updates are delete + reindex internally), and documents can be lost during shard rebalancing if replicas are misconfigured. It is a **search index, not a database**.
+>
+> **Correct pattern:** Write to primary DB (Postgres/MySQL) first. Sync to Elasticsearch asynchronously (via CDC/Outbox or dual-write). Read from Elasticsearch for search; read from primary DB for authoritative state. If ES goes down, your data is safe in the DB — just search degrades.
+>
+> In an interview, as soon as you add Elasticsearch to your design, immediately say: *"ES is a secondary search index — the source of truth stays in Postgres. We sync via CDC (Debezium) or the outbox pattern."*
 
 ---
 
@@ -450,6 +510,14 @@ TF-IDF and BM25 are **relevance scoring algorithms**. TF = term frequency (how o
 ---
 
 ## 🔬 Interview Q&As
+
+### Q: "You index a document in Elasticsearch and immediately search for it — no results. Why?" ⭐
+
+> Elasticsearch is near-real-time, not real-time. By default there is a 1-second refresh interval — documents are only searchable after the next refresh cycle. Between a write and the next refresh, the document exists in an in-memory segment but is not visible to search queries. Fix: (1) for testing, use `?refresh=true` on the write to force an immediate refresh — but avoid this in production at high write rates (expensive). (2) Increase refresh interval to 5s or more for bulk-write workloads (higher write throughput, slightly stale reads). (3) Accept the 1s lag for log analytics (users don't notice). ⭐ **Tier 1 — almost always probed**
+
+### Q: "Can I use Elasticsearch as my primary database instead of Postgres?" ⭐
+
+> No — and you should explicitly say so in interviews. ES has no ACID transactions, no foreign keys, no true UPDATE (updates are internally delete + reindex), and can lose documents during shard rebalancing if replicas aren't properly configured. It's a search index optimized for read-heavy, full-text workloads. Correct architecture: write to Postgres first (source of truth), sync to ES asynchronously via CDC (Debezium) or outbox pattern for search. If ES goes down, your data is safe; search degrades but the system remains correct. ⭐ **Tier 1 — design principle probe**
 
 ### Q: "You have 10M log documents. User searches for 'timeout'. Without Elasticsearch, scanning all 10M documents takes 10 seconds. With Elasticsearch, returns in 100ms. Why?"
 
@@ -467,7 +535,7 @@ TF-IDF and BM25 are **relevance scoring algorithms**. TF = term frequency (how o
 
 ## 🧾 TL;DR
 
-> "Elasticsearch uses inverted indexes: word → document IDs for fast full-text search. Sharding distributes index across nodes (parallel query). Replication provides redundancy. Write cost: build index. Read gain: O(1) lookup."
+> "Elasticsearch uses inverted indexes (word → document IDs) for O(1) full-text search. Sharding distributes the index across nodes (parallel query). Near-real-time: documents searchable after the 1-second refresh cycle (use `?refresh=true` for immediate, sparingly). Never use as a primary DB — no ACID, no FK; always write to Postgres first, sync to ES for search via CDC/outbox."
 
 ---
 
@@ -494,3 +562,4 @@ TF-IDF and BM25 are **relevance scoring algorithms**. TF = term frequency (how o
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 32. Covered inverted index mechanics (word → doc IDs O(1) lookup), sharding (parallel query execution), replication (redundancy), TF-IDF/BM25 scoring, ELK stack integration. |
+| July 1, 2026 | Added refresh interval section (1s default, `?refresh=true`, bulk-load pattern). Strengthened "ES is not a primary DB" as boxed interview anti-pattern. Added 2 ⭐ Tier 1 Q&As (refresh, primary DB). Updated TL;DR. |

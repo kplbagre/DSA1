@@ -20,6 +20,22 @@ When multiple servers race to perform the same critical operation (booking the l
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Distributed Lock** | a lock enforced by a shared external service (not in-process); all servers respect the same lock | Redis lock `seat:45A` — only one of 10 booking servers can hold it at a time |
+| **SETNX** | Redis "SET if Not eXists" — atomic command that creates a key only if it doesn't already exist; the primitive behind Redis locking | `SETNX lock:seat45A serverA` — returns 1 (acquired) or 0 (already held) |
+| **TTL (Lock Expiry)** | time-to-live on the lock key; auto-releases the lock if the holder crashes before unlocking | `SET lock:seat45A serverA EX 30` — lock expires in 30s even if server A dies |
+| **Fencing Token** | monotonically increasing number issued with each lock acquisition; used to reject stale lock holders | lock #5 acquired by A → A crashes → lock #6 acquired by B → A wakes up, sends token #5 → DB rejects (stale) |
+| **Redlock** | multi-node Redis locking algorithm; acquires lock on majority of N Redis nodes to tolerate single-node failure | acquire on 3 of 5 Redis nodes; lock valid only if majority responds before timeout |
+| **Lease** | time-bounded lock; holder must renew it before expiry or it's automatically released | lock lease = 30s; holder pings every 10s to renew; stops pinging (crash) → auto-release |
+| **Lock Contention** | multiple servers competing for the same lock; can cause retry storms if not managed | 1000 servers retry immediately on lock failure → thundering herd → Redis overloaded |
+| **Split-Brain** | network partition causes two servers to each believe they hold the lock simultaneously | avoided by Redlock (majority quorum) and fencing tokens (stale lock rejected by DB) |
+| **Stale Lock** | lock not released because holder crashed before unlocking; TTL + fencing tokens are the defense | server A holds lock, JVM pauses 60s (GC), TTL expires, server B takes lock, A resumes — stale |
+
+---
+
 ## 🎨 Visual — System Topology: Distributed Locking in Architecture
 
 ```

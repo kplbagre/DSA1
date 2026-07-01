@@ -241,6 +241,9 @@ if (apiResponse.status === 401) {
 }
 ```
 
+> **Why `credentials: 'include'` works — browser mechanics:**
+> The browser **automatically** sends every HttpOnly cookie for the domain with each request — your JavaScript never reads the cookie value (`HttpOnly` blocks `document.cookie` access entirely). When JS calls `POST /auth/refresh` with `credentials: 'include'`, the browser attaches `Cookie: refresh_token=...` in the request header. The server reads it via `request.getCookies()`, which is the standard servlet API that parses the `Cookie` header. No JS code touches the cookie value at any point.
+
 **Code Example — Backend:**
 
 ```java
@@ -297,6 +300,61 @@ public ResponseEntity<?> refresh(HttpServletRequest request) {
     
     return ResponseEntity.ok(new RefreshResponse(newAccessToken));
 }
+```
+
+---
+
+### 🔐 Token Rotation + Reuse Detection (OAuth 2.1)
+
+The refresh endpoint above reissues an access token but keeps the same refresh token — a weaker security model. **OAuth 2.1 mandates refresh token rotation**: every `/auth/refresh` call must issue a new refresh token and revoke the old one. The interview-signal upgrade is **reuse detection**: if a previously-rotated (revoked) refresh token is replayed, it means someone stole it. The correct response is to revoke **all sessions for that user immediately**.
+
+```java
+@PostMapping("/auth/refresh")
+public ResponseEntity<?> refreshWithRotation(HttpServletRequest request) {
+    String oldRefreshToken = extractCookieValue(request, "refresh_token");
+    RefreshTokenRecord record = refreshTokenRepo.findByToken(oldRefreshToken);
+
+    if (record == null) {
+        return ResponseEntity.status(401).body("Invalid refresh token");
+    }
+
+    if (record.isRevoked()) {
+        // REUSE DETECTED — old token replayed after rotation → assume theft
+        refreshTokenRepo.revokeAllForUser(record.getUserId());
+        return ResponseEntity.status(401).body("Refresh token reuse detected — all sessions revoked");
+    }
+
+    // Mark old token revoked BEFORE issuing new one (prevents concurrent-use race)
+    refreshTokenRepo.markRevoked(record.getId());
+
+    // Issue rotated tokens
+    User user = userRepo.findById(record.getUserId());
+    String newAccessToken = createAccessToken(user, 15 * 60);
+    String newRefreshToken = createRefreshToken(user, 7 * 24 * 60 * 60);
+    refreshTokenRepo.save(new RefreshTokenRecord(record.getUserId(), newRefreshToken));
+
+    // Rotate cookie — new refresh token replaces old one in browser
+    ResponseCookie rotatedCookie = ResponseCookie.from("refresh_token", newRefreshToken)
+        .httpOnly(true)
+        .secure(true)
+        .sameSite("Strict")
+        .path("/")
+        .maxAge(7 * 24 * 60 * 60)
+        .build();
+
+    return ResponseEntity.ok()
+        .header(HttpHeaders.SET_COOKIE, rotatedCookie.toString())
+        .body(new RefreshResponse(newAccessToken));
+}
+```
+
+**Reuse detection invariant:**
+
+```
+Token A issued → client stores A in httpOnly cookie
+Client calls /auth/refresh with A → A marked revoked, B issued → client now has B
+Attacker replays A → record.isRevoked() == true → revokeAllForUser() → all sessions killed
+Both attacker and real user are logged out → real user re-authenticates → attacker locked out
 ```
 
 ---
@@ -632,9 +690,19 @@ public class ServiceTokenManager {
 - [ ] Backend: Credentials in env vars, not code
 - [ ] HTTPS required (Secure flag)
 - [ ] SameSite=Strict for CSRF protection
+- [ ] Refresh token rotation: every /auth/refresh issues a new refresh token, revokes the old
+- [ ] Reuse detection: replayed rotated token → revoke ALL sessions for that user (OAuth 2.1)
 
 ---
 
 ## 🧾 TL;DR
 
-> **Web:** refresh_token in httpOnly cookie, access_token in memory. **Mobile:** OS secure storage (Keychain/Keystore). **Backend:** memory + env vars. **Never:** localStorage or hardcoded credentials.
+> **Web:** refresh_token in httpOnly cookie, access_token in memory. **Mobile:** OS secure storage (Keychain/Keystore). **Backend:** memory + env vars. **Never:** localStorage or hardcoded credentials. **OAuth 2.1:** rotate refresh tokens on every use; replay of a rotated token = theft → revoke all sessions.
+
+---
+
+## 🔄 Changelog
+
+| Date | Change |
+|---|---|
+| Jul 1, 2026 | Added browser auto-send mechanics callout before backend refresh code; added token rotation + reuse detection section (OAuth 2.1 `revokeAllForUser` pattern); updated checklist with rotation and reuse detection items. |

@@ -33,6 +33,7 @@ Medium-depth concept notes on core backend/system design topics that appear in S
 | `04-idempotency_advanced.md` | Idempotency — Advanced (sagas, batch, deterministic IDs) | ✅ Done |
 | `05-consistent-hashing.md` | Consistent Hashing | ✅ Done |
 | `06-distributed-locking.md` | Distributed Locking (Redis SETNX, Redlock) | ✅ Done |
+| `06-databases-types-and-selection.md` | Database Types & Selection (SQL, NoSQL, Redis, Kafka, Elasticsearch — when to pick which; CAP trade-offs per DB type) | ✅ Done |
 | `07-cdc-outbox.md` | CDC + Outbox Pattern | ✅ Done |
 | `08-bloom-filter.md` | Bloom Filter | ✅ Done |
 | `09-sharded-counters.md` | Sharded Counters | ✅ Done |
@@ -55,6 +56,7 @@ Medium-depth concept notes on core backend/system design topics that appear in S
 | `25-monitoring-observability-fundamentals.md` | Monitoring & Observability (logs, metrics, traces — three pillars) | ✅ Done |
 | `26-websocket-real-time-communication.md` | WebSocket (HTTP upgrade, bidirectional, real-time communication) | ✅ Done |
 | `27-auth-authz-fundamentals.md` | Authentication & Authorization (JWT, OAuth 2.0, RBAC, ABAC) | ✅ Done |
+| `27-jwt-token-storage-reference.md` | JWT Token Storage Reference — companion to note 27 (localStorage vs httpOnly cookie, trade-offs, XSS/CSRF risks) | ✅ Done |
 | `28-cdn-edge-caching.md` | CDN — Content Delivery Network (edge caching, TTL, invalidation) | ✅ Done |
 | `29-db-replication-failover.md` | Database Replication (master-slave, WAL, RPO/RTO, automatic failover) | ✅ Done |
 | `30-distributed-tracing-spans.md` | Distributed Tracing (trace ID, spans, latency breakdown, sampling) | ✅ Done |
@@ -77,6 +79,8 @@ Medium-depth concept notes on core backend/system design topics that appear in S
 | `47-job-scheduling-at-scale.md` | Job Scheduling at Scale (CAS claim, heartbeat, delayed jobs, exactly-once) | ✅ Done |
 | `48-feature-flags-ab-testing.md` | Feature Flags / A/B Testing (deterministic bucketing, sticky assignment, flag lifecycle) | ✅ Done |
 | `49-state-machines-workflows.md` | State Machines in Workflows (FSM transitions, CAS enforcement, compensation) | ✅ Done |
+| `50-database-indexing.md` | Database Indexing (B-tree structure, composite index leftmost-prefix rule, covering indexes, selectivity, EXPLAIN ANALYZE) | ✅ Done |
+| `51-geospatial-indexing.md` | Geospatial Indexing (geohash 9-cell boundary fix, quad tree adaptive density, H3 hexagonal equidistant neighbours, Redis GEO commands) | ✅ Done |
 
 > **Advanced Companion Files (Optional Deepeners):**
 > Companion advanced files (named `NN-concept_advanced.md`) cover variant-heavy topics. These are optional deepeners — NOT required for interview prep, but useful for readers wanting algorithmic variants and advanced patterns beyond core material. Currently available: `02-rate-limiting_advanced.md`, `03-caching_advanced.md`, `04-idempotency_advanced.md`, `09-counters_advanced.md`. See `GAP-CLOSURE-PLAN.md` for closure strategy.
@@ -152,3 +156,5 @@ Copy of the full checklist from `notes-standards.md` — abbreviated for fast re
 | June 25, 2026 | **Concepts 24-26 Complete — New Two-Diagram Topology Standard (June 25).** Created 3 critical architecture concepts with mandatory system topology diagrams (showing complete stack hierarchy Client → CDN → LB → Services → Cache → DB) plus component detail diagrams: 24-api-gateway-pattern, 25-monitoring-observability-fundamentals, 26-websocket-real-time-communication. Updated notes-standards.md Section 3 to enforce two-diagram requirement for all architectural concepts. Total: ~4,800 lines, ~8 hours effort (24: 2.5h, 25: 3h, 26: 2.5h). Resources updated with curated references for all three. |
 | June 25, 2026 | **Concepts 27-33 Complete — Week 2-3 Full Stack Coverage.** Created 7 advanced system design concepts, all following two-diagram topology + component detail standard: 27-auth-authz (JWT, OAuth, RBAC, bcrypt/RS256), 28-cdn (edge caching, TTL, invalidation), 29-db-replication (WAL, sync/async, RPO/RTO, failover), 30-distributed-tracing (trace ID, spans, sampling, OpenTelemetry), 31-cqrs (command-query separation, projections, eventual consistency), 32-elasticsearch (inverted index, sharding, full-text search, ELK), 33-grpc (Protocol Buffers, HTTP/2 multiplexing, streaming). Total: ~12,000 lines, ~16 hours effort (27: 3h, 28: 2h, 29: 2.5h, 30: 2h, 31: 2h, 32: 2.5h, 33: 2h). Resources added for all 7. |
 | June 26, 2026 | **Concepts 45-49 Complete — Gap Closure: 5 High-Priority Missing Concepts.** Gap audit identified 5 production-critical concepts absent from the knowledge base. Written: 45-hot-partition-problem (write salting, hot-key caching, partition lag monitoring), 46-push-notifications-fanout (APNs/FCM, Kafka fan-out topology, dead token cleanup), 47-job-scheduling-at-scale (CAS claim, heartbeat TTL, delayed jobs via Redis ZADD, SKIP LOCKED), 48-feature-flags-ab-testing (deterministic bucketing, sticky assignment, ops kill switch, zombie flags), 49-state-machines-workflows (FSM transition table, CAS enforcement, saga compensation states). All 5 follow full 10-section notes-standards format with two-diagram topology requirement. Total: ~5 files, ~2,000 lines. |
+| Jul 1, 2026 | **2 previously untracked files registered.** `06-databases-types-and-selection.md` (DB type selection, CAP trade-offs per DB) and `27-jwt-token-storage-reference.md` (JWT storage reference companion to note 27) were on disk but absent from AGENTS.md tracked table. Both added. `INDEX.md` created at folder root as master navigation file (49 tracked notes + 4 advanced companions). |
+| Jul 1, 2026 | **2 new gap-closure notes created.** `50-database-indexing.md` covers B-tree internals, composite index leftmost-prefix rule, covering indexes, selectivity, and EXPLAIN ANALYZE — plugs the most common schema-design follow-up probe. `51-geospatial-indexing.md` covers geohash (9-cell boundary fix), quad tree (adaptive density), H3 hexagonal grid (equidistant neighbours, k-ring=1 gives 7 cells), and Redis GEO commands — all four strategies with full Java implementations. `resources.md` updated with curated references for both. Total: 53 tracked notes. |

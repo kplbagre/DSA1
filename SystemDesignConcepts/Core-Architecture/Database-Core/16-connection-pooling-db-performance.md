@@ -188,6 +188,66 @@ HikariCP is a lightweight Java connection pooling library optimized for low late
 
 ---
 
+## 🧠 PgBouncer — When HikariCP Isn't Enough
+
+HikariCP is an **in-process pool** — each app instance maintains its own set of connections. If you have 50 app instances × 20 HikariCP connections = 1,000 connections to Postgres. That's a problem: **PostgreSQL's default `max_connections` is 100–200**, and each idle connection consumes ~5–10MB of Postgres server memory.
+
+**PgBouncer** (an external connection multiplexer) sits in front of Postgres and multiplexes many app-side connections into a small number of real database connections. This is the standard answer to *"how do you handle 10,000 concurrent connections to a Postgres database?"*
+
+```
+WITHOUT PgBouncer:
+  50 app instances × 20 HikariCP connections = 1,000 real Postgres connections
+  PostgreSQL: max_connections = 200 → connection refused errors
+
+WITH PgBouncer:
+  50 app instances × 20 HikariCP connections → PgBouncer
+                                                PgBouncer → 50 real Postgres connections
+  PostgreSQL: max_connections = 200 → only 50 used → headroom to spare
+```
+
+### PgBouncer Pooling Modes
+
+PgBouncer has three pooling modes; **transaction pooling** is what you want in almost all production scenarios:
+
+| Mode | When connection is released back to pool | Best for |
+|---|---|---|
+| **Session pooling** | When the client disconnects (same as no pooling) | Legacy apps that use session-level state |
+| **Transaction pooling** | After each transaction commits or rolls back | ✅ Stateless web services — most efficient |
+| **Statement pooling** | After each SQL statement | Rarely used; breaks multi-statement transactions |
+
+**Transaction pooling example:**
+
+```
+App sends: BEGIN; UPDATE ...; COMMIT;
+  BEGIN     → PgBouncer borrows real connection from pool
+  UPDATE    → executes on that connection
+  COMMIT    → transaction done; real connection returned to pool
+  (next app query might get a different real connection)
+```
+
+**Why transaction pooling is so effective:** A typical web request holds a DB connection for 5ms (query time), but the thread lives for 200ms (total request). With transaction pooling, the real Postgres connection is free for 195ms of that 200ms — available to serve 39 other requests.
+
+**⚠️ Transaction pooling limitation:** Cannot use server-side session state between transactions — `SET` variables, advisory locks, prepared statements, and `LISTEN/NOTIFY` don't survive across connection borrows. Design your app to be stateless between transactions.
+
+### RDS Proxy — The AWS Managed PgBouncer
+
+If you're on AWS RDS or Aurora, **RDS Proxy** is the managed equivalent of PgBouncer. It pools connections from your application to RDS, absorbs connection spikes, and integrates with IAM + Secrets Manager for credential rotation.
+
+| | PgBouncer | RDS Proxy |
+|---|---|---|
+| **Setup** | You deploy and operate it | AWS manages it |
+| **Databases** | Postgres, MySQL, others | RDS/Aurora (MySQL, Postgres) |
+| **Latency overhead** | ~0.1ms (in same VPC) | ~1ms |
+| **IAM auth** | Manual config | Native integration |
+| **Cost** | Free (open source) | Paid (hourly per vCPU) |
+| **Best for** | On-prem or self-managed DB | AWS-native deployments |
+
+**Interview answer for "how do you handle Postgres connection exhaustion at scale?"**
+
+> *"HikariCP in each app instance is necessary but not sufficient at high scale. We add PgBouncer as an infrastructure-level connection multiplexer between our apps and Postgres. PgBouncer in transaction pooling mode means a Postgres connection is only held during the actual DB transaction (5–10ms), then returned to the pool — so 50 real Postgres connections can serve 500 concurrent app requests. On AWS we'd use RDS Proxy as a managed equivalent."*
+
+---
+
 ## 🏢 Real World — Where Companies Use This
 
 - **Razorpay** (payment processing): 100K+ concurrent requests during checkout bursts. Connection pool sized to match peak card-processing throughput. Oversizing wastes memory; undersizing causes checkout timeout failures.
@@ -242,6 +302,14 @@ HikariCP is a lightweight Java connection pooling library optimized for low late
 
 > Prepared statements are per-connection. When you borrow a connection from the pool, you can prepare statements on it. Ideally, reuse the PreparedStatement object across requests (prepared statements are thread-safe), not create new ones each time. If you create a new PreparedStatement every request, you add parsing overhead. Some pools support **statement caching** — automatically cache compiled statements per connection. In HikariCP + Spring, use `PreparedStatementCache` on the actual DataSource. ⭐ **Tier 2 — optimization**
 
+### Q: "You have 100 app instances connecting to a Postgres database. How do you prevent connection exhaustion?" ⭐
+
+> HikariCP alone is not enough. If 100 instances × 20-connection pool = 2,000 connections, but Postgres default `max_connections` is 100–200, you get "too many connections" rejections. The solution is **PgBouncer** — an external connection multiplexer deployed as a sidecar or standalone service. Apps connect to PgBouncer (which accepts thousands of connections); PgBouncer maintains a small number of real Postgres connections (e.g., 50). In transaction pooling mode, a real connection is held only during the active DB transaction (5–10ms) then returned — so 50 real connections can serve 500 concurrent app requests. On AWS, use RDS Proxy as the managed equivalent. ⭐ **Tier 1 — probed on every Postgres scaling question**
+
+### Q: "What is PgBouncer transaction pooling mode and why does it matter?"
+
+> PgBouncer has three modes: session pooling (real connection held for the entire client session — barely better than no pooling), transaction pooling (real connection returned after each `COMMIT`/`ROLLBACK` — most efficient), and statement pooling (returned after each SQL statement — breaks multi-statement transactions). Transaction pooling is the right default: a typical web request holds the DB connection for 5–10ms (query time) but the app thread lives for 200ms total. Transaction pooling means the real Postgres connection is free for 190ms of that 200ms — available to 38 other requests. The limitation: you can't use server-side session state (`SET` variables, advisory locks, `LISTEN/NOTIFY`) between transactions, so your app must be stateless across transaction boundaries. ⭐ **Tier 2 — follow-up to PgBouncer question**
+
 ### Q: "Your app is deployed across 3 regions. Does connection pooling change?"
 
 > Each region has its own database (likely read replicas in other regions, writes to the primary). Each app instance in a region maintains its own connection pool. If region A has 10 app instances × 20-connection pool, that's 200 connections to the region A database — this is expected and correct. If you're accessing remote databases across regions, latency increases (100ms round-trip), so you might use a higher pool size to hide that latency. But primary rule stays: size = concurrent queries you're willing to sustain, not total requests. ⭐ **Tier 2 — distributed systems**
@@ -250,7 +318,7 @@ HikariCP is a lightweight Java connection pooling library optimized for low late
 
 ## 🧾 TL;DR
 
-> "Connection pooling reuses TCP connections across requests to hide the cost of connection setup. Size the pool to match peak concurrent requests, not total throughput; over-sizing wastes memory and can exceed the database's own connection limit. If your database is slow, check pool saturation metrics first — it's often the culprit."
+> "Connection pooling reuses TCP connections to hide the 10–100ms setup cost. Size HikariCP pool to match peak concurrent requests, not total throughput. At high instance counts (50+ app instances → Postgres max_connections exhaustion), add PgBouncer in transaction pooling mode — it multiplexes thousands of app connections into dozens of real DB connections. On AWS, use RDS Proxy as the managed equivalent. If DB is slow: check pool saturation metrics first (`hikaricp.connections.pending`), then query plans."
 
 ---
 
@@ -278,3 +346,4 @@ HikariCP is a lightweight Java connection pooling library optimized for low late
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 16. Added mental model (valet lot), HikariCP code example, sizing formula. |
+| July 1, 2026 | Added PgBouncer section (session/transaction/statement pooling modes, ASCII multiplexer diagram), RDS Proxy comparison table, and 2 new interview Q&As. Updated TL;DR. |

@@ -45,6 +45,22 @@ If primary crashes, replica has entire log and can replay to catch up.
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **WAL (Write-Ahead Log)** | append-only log of every database write, recorded before applying to tables; foundation of durability and replication | `INSERT INTO orders ...` → written to WAL → applied to table → shipped to replicas |
+| **Binlog** | MySQL's equivalent of WAL; can be statement-based (SQL text) or row-based (before/after image) | row-based binlog: records exact before/after state of each changed row |
+| **Synchronous Replication** | primary waits for replica to confirm write before returning success to client; zero data loss, higher write latency | write takes 5ms (primary) + 15ms (replica ack) = 20ms total |
+| **Asynchronous Replication** | primary returns success immediately; replica catches up in the background; faster but risks data loss on crash | primary acks in 5ms; if primary crashes before replica syncs → last writes lost |
+| **Replication Lag** | delay between primary committing a write and replica applying it; reads from replica may return stale data | primary writes at T=0; replica applies at T=500ms → 500ms of stale reads possible |
+| **RPO (Recovery Point Objective)** | maximum acceptable data loss measured in time | RPO=0 → synchronous replication required; RPO=5min → async replication acceptable |
+| **RTO (Recovery Time Objective)** | maximum acceptable downtime duration after a failure | RTO=30s → automated failover required; RTO=4h → manual promotion acceptable |
+| **Failover Promotion** | replica is elected and promoted to primary after primary failure; DNS or VIP updated to point to new primary | replica detects 3 missed heartbeats → promotes itself → Route53 DNS updated |
+| **Quorum** | majority of replicas must acknowledge a write for it to be considered durable | 3 replicas: quorum=2; write committed only when 2 of 3 confirm receipt |
+
+---
+
 ## 🧠 The Mental Model
 
 Imagine a manuscript author with a scribe:

@@ -17,6 +17,22 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Isolation Level** | setting that controls how much one concurrent transaction can see from another's uncommitted work | `@Transactional(isolation = Isolation.READ_COMMITTED)` in Spring |
+| **Dirty Read** | reading another transaction's uncommitted data; that data may be rolled back → you read something that never existed | T1 writes balance=200, not committed; T2 reads 200; T1 rolls back → T2 acted on phantom data |
+| **Non-Repeatable Read** | reading same row twice in one transaction and getting different values because another transaction committed between the two reads | T1 reads balance=100; T2 commits balance=50; T1 reads again → gets 50 (changed!) |
+| **Phantom Read** | running same query twice in one transaction and getting different row COUNT because another transaction inserted/deleted rows between the reads | T1 queries `SELECT * WHERE age>18` → 10 rows; T2 inserts 5 new adults; T1 re-queries → 15 rows |
+| **READ_UNCOMMITTED** | sees uncommitted writes from other transactions; fastest, dirtiest; never use for financial data | can see a row that gets rolled back 1ms later |
+| **READ_COMMITTED** | only sees committed writes; default in most databases (Postgres, Oracle); prevents dirty reads | T2's uncommitted balance change is invisible to T1 |
+| **REPEATABLE_READ** | same row always returns same value within one transaction; MySQL default; prevents dirty + non-repeatable reads | T1 reads balance=100 twice → gets 100 both times even if T2 committed a change |
+| **SERIALIZABLE** | transactions execute as if they ran one at a time; prevents all anomalies; heaviest locking | prevents phantom reads; use for financial summations and inventory checks |
+| **MVCC** | Multi-Version Concurrency Control — DB keeps multiple versions of a row so readers don't block writers | Postgres: readers see a snapshot; writers create a new version; no reader-writer blocking |
+
+---
+
 ## 🎯 Why This Matters
 
 The right isolation level is the difference between a correct financial ledger and a double-charged customer. It surfaces in **system design rounds** whenever you discuss databases, transactions, or consistency guarantees — and in **deep-dive rounds** when an interviewer asks "how does your inventory system prevent overselling." Senior engineers are expected to name the specific isolation level and explain the trade-off, not just say "wrap it in a transaction."

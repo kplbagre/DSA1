@@ -28,6 +28,23 @@ Imagine an airport. Two security checkpoints:
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Authentication** | verifying identity — "are you who you claim to be?" | user submits username + password → system verifies → "yes, this is Alice" |
+| **Authorization** | verifying permissions — "are you allowed to do this?" | Alice is authenticated, but can she delete Order #99? Check her role → no |
+| **JWT (JSON Web Token)** | self-contained signed token encoding user identity and claims; stateless — no DB lookup needed to validate | `Header.Payload.Signature` — payload contains `{user_id, role, exp}` |
+| **OAuth 2.0** | authorization framework for delegating access; lets a user grant a third party limited access to their resources | "Sign in with Google" → Google issues access token → your app uses it |
+| **Access Token** | short-lived token (minutes to hours) proving the user is authenticated; sent with every API request | `Authorization: Bearer eyJhbGci...` in HTTP header |
+| **Refresh Token** | long-lived token (days to weeks) used only to get a new access token when the old one expires | stored securely (httpOnly cookie); sent to `/auth/refresh` when access token expires |
+| **RBAC (Role-Based Access Control)** | permissions assigned to roles, roles assigned to users; simple and scalable | `ADMIN` role can DELETE; `USER` role can READ; assign role to user |
+| **ABAC (Attribute-Based Access Control)** | permissions based on attributes of user, resource, and environment; fine-grained | `user.dept='finance' AND resource.classification='financial' AND time.hour<18` |
+| **HMAC Signature** | JWT signature computed as `HMAC-SHA256(header + payload, secret)`; any tampering invalidates the signature | server re-computes signature; if it doesn't match the token's → reject `401` |
+| **Scopes** | OAuth 2.0 named permissions granted to a token; limits what the token can do | `scope: read:orders write:cart` — token can read orders but not delete them |
+
+---
+
 ## 🎨 Visual — Auth/Authz in System Architecture
 
 ### Full System Topology — Where Auth Happens

@@ -26,6 +26,110 @@ With a CDN:
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **CDN (Content Delivery Network)** | A globally distributed network of servers that cache content close to end-users. Requests are routed to the nearest edge location, cutting latency from 200ms+ (origin far away) to 50ms (edge nearby). | Cloudflare, AWS CloudFront, Akamai. A video hosted in the US is served to Tokyo users from a Tokyo edge server. |
+| **Edge Location / PoP (Point of Presence)** | A single CDN server or small cluster in a specific city or region. PoP stands for Point of Presence — the physical location where the CDN has hardware. Users are routed to their nearest PoP automatically. | Cloudflare has 200+ PoPs worldwide. A user in Mumbai is routed to Cloudflare's Mumbai PoP, not to the US origin. |
+| **Pull CDN** | The CDN edge starts empty. The **first user** to request a file triggers a cache miss → edge fetches from your origin → caches it for future users. Zero setup required. Cold on first hit per edge, then fast. | First Tokyo user gets `song.mp4` in 200ms (origin round-trip). Every user after gets it in 50ms from Tokyo edge cache. |
+| **Push CDN** | You proactively **upload content to all edges before any user requests it** — no cold cache miss is possible. Every user gets a cache hit from request #1. Requires you to manage content lifecycle manually (when does pushed content expire?). | Before a movie premiere, push `avengers.mp4` to all 200 PoPs. When the film drops, every user globally gets a cache hit immediately — no origin storm. |
+| **Cache Hit** | The requested file is found in the edge's local cache and has not yet expired (TTL is still valid). Served instantly from edge without contacting origin. | Edge has `song.mp4` (expires in 24h). User requests it 2h in: cache hit, 50ms response. |
+| **Cache Miss** | The file is NOT in the edge cache — either never fetched or the TTL expired. Edge must fetch from origin. Slower: full origin round-trip. | Edge has no `song.mp4`. Fetches from US origin (200ms), caches it, returns to user. Next request is a hit. |
+| **TTL (Time-To-Live)** | How long a cached file stays valid at the edge before being discarded. Set via `Cache-Control: max-age=86400` (24 hours). After TTL expires, the next request is a cache miss. | Static JS: `max-age=31536000` (1 year — file never changes). API response: `max-age=60` (refresh every minute). |
+| **Cache Invalidation (Purge)** | Explicitly deleting a cached file from all edge locations **before its TTL expires** — forcing the next request to fetch fresh content from origin. Propagates to all PoPs in 1–2 minutes. | You update `logo.png`. Call CDN API: `PURGE /images/logo.png`. All edges delete it. Next user triggers a miss and fetches the new logo. |
+| **Anycast** | A routing technique where the **same IP address is simultaneously announced from multiple geographic locations** via BGP. Internet routers automatically send each packet to the nearest announcing location. No DNS TTL lag on failover — BGP re-routes in seconds when an PoP goes down. | Cloudflare's IP `1.1.1.1` is served from 200+ PoPs. A Tokyo user reaches Tokyo; a London user reaches London — same IP, different physical servers. |
+| **Signed URL** | A time-limited CDN URL with an HMAC signature embedded in the query params. The CDN edge validates the signature and expiry timestamp before serving the file — no round-trip to origin for authorization. Used for private paid content. | Netflix generates a signed URL for `avengers.mp4` valid for 6 hours. If a user shares the URL, it expires. The video stays cached at the edge; only the access token times out. |
+
+---
+
+## 🧠 Push vs Pull CDN
+
+CDNs operate in two fundamentally different modes that determine *how* content gets to the edge.
+
+### Pull CDN (default — CloudFront, Cloudflare, Akamai)
+
+**How it works:** Edge starts empty. First user to request a file triggers a cache miss → edge fetches from origin → caches it. Every subsequent user gets a cache hit.
+
+```
+First request (Tokyo edge empty):
+  User (Tokyo) → CDN edge (Tokyo) → MISS → Origin (US) → content
+  CDN edge now caches the content for TTL duration.
+
+Subsequent requests:
+  User (Tokyo) → CDN edge (Tokyo) → HIT → user (no origin involved)
+```
+
+**Best for:** Long-tail content (millions of unique files — not all popular), or when you don't know which edges need which content.
+
+**Downside:** First user to hit each edge gets full origin latency (cold cache). Flash releases (a movie premiere) will have many simultaneous cache misses.
+
+### Push CDN
+
+**How it works:** You proactively upload content to all edges *before* any user requests it. No cache miss possible — every user gets a HIT from the first request.
+
+```
+Before launch (your action):
+  You → CDN API: PUSH /movies/avengers.mp4 to ALL edges
+  CDN propagates file to Tokyo, London, São Paulo, Sydney edges.
+
+At launch (user request):
+  User (Tokyo) → CDN edge (Tokyo) → HIT (always) → user
+```
+
+**Best for:** Predictable popular content — movie releases, flash sale assets, software downloads where the first request wave must be fast.
+
+**Downside:** You pay to store content on every edge (even edges no one ever requests from). Must manage lifecycle — when does the pushed content expire?
+
+**Rule of thumb:** Start with pull CDN (zero config). Switch to push CDN for content you know will spike globally on a known date (Super Bowl, Diwali sale, game launch).
+
+---
+
+## 🧠 How Users Get to the Nearest Edge (Anycast & DNS Geo-Routing)
+
+A frequently missed question: *"When I type cdn.example.com, how does my request go to the Tokyo edge and not the London edge?"*
+
+Two mechanisms:
+
+### 1. DNS Geo-Routing (AWS Route53, Cloudflare)
+
+```
+User in Tokyo resolves cdn.example.com:
+  DNS query → Authoritative DNS server
+  DNS checks: where is the user's IP coming from? (→ Japan)
+  DNS returns: 203.0.113.20 (Tokyo edge IP)
+
+User in London resolves cdn.example.com:
+  DNS query → Authoritative DNS server
+  DNS checks: where is the user's IP coming from? (→ UK)
+  DNS returns: 198.51.100.40 (London edge IP)
+
+Different users → different IPs → different physical servers
+```
+
+**Limitation:** DNS TTL caches the IP. If Tokyo edge fails, users in Japan may still be routed there for several minutes until DNS TTL expires.
+
+### 2. Anycast IP (Cloudflare, Fastly)
+
+```
+Both Tokyo edge and London edge advertise the SAME IP: 104.16.0.1
+
+User in Tokyo sends packet to 104.16.0.1:
+  BGP routing: multiple data centers claim this IP
+  Internet routers pick the shortest path → Tokyo data center
+
+User in London sends packet to 104.16.0.1:
+  BGP routing: shortest path → London data center
+
+Same IP, physically different servers — routing by network topology
+```
+
+**Advantage:** Instant failover. If Tokyo goes down, BGP re-routes all Tokyo traffic to next-nearest PoP (Point of Presence) within seconds — no DNS TTL wait.
+
+**Interview phrasing:** *"CDN providers use anycast: the same IP is advertised from hundreds of data centers. BGP routing naturally sends your packet to the nearest one — like how water flows to the lowest point. This is why Cloudflare can claim sub-20ms latency for most users globally."*
+
+---
+
 ## 🎨 Visual — CDN Architecture
 
 ### Full System Topology — Where CDN Sits
@@ -351,6 +455,105 @@ CloudFront is **AWS's CDN service** that caches content at edge locations global
 
 ---
 
+### Cache-Control Directives — The Complete Table
+
+`Cache-Control` is the HTTP header that tells both browsers and CDN edges how to cache a response. Getting this wrong is how you accidentally cache private data or serve stale content for a week.
+
+| Directive | Who it applies to | Effect |
+|---|---|---|
+| `max-age=3600` | Browser + CDN | Cache for 3600 seconds (1 hour). Most common. |
+| `s-maxage=86400` | CDN only (shared caches) | Overrides `max-age` for CDN edges only. Browser still uses `max-age`. Use to give CDN a longer TTL than browser. |
+| `public` | Browser + CDN | Explicitly allow caching by shared caches (CDN). Default for most CDNs. |
+| `private` | Browser only | Browser may cache; CDN and shared caches MUST NOT cache. Use for user-personalized responses. |
+| `no-cache` | Browser + CDN | Cache the content, but **must revalidate with origin before serving**. Not "don't cache" — it's "always check freshness." |
+| `no-store` | Browser + CDN | **Do not cache anywhere.** Every request goes to origin. Use for sensitive data (banking, auth tokens). |
+| `must-revalidate` | Browser + CDN | Once the cached copy is stale (past `max-age`), it MUST be revalidated. Never serve a stale copy even if origin is down. |
+| `stale-while-revalidate=60` | Browser + some CDNs | Serve the stale copy immediately (fast), while fetching a fresh copy in the background for next requests. Accepts 60s of staleness. |
+| `immutable` | Browser | Content at this URL will NEVER change. Browser skips revalidation entirely within `max-age`. Use only with versioned URLs (`/app.v2.js`). |
+
+**⚠️ Critical interview gotcha:** `no-cache` ≠ `no-store`.
+- `no-cache` = "cache it, but always ask origin if it's still fresh" (uses ETag/Last-Modified for cheap validation)
+- `no-store` = "never cache, period" (every request is a full round-trip to origin)
+
+**Practical pattern for static assets with versioned filenames** (e.g., `main.a1b2c3.js`):
+```java
+// Fingerprinted asset — content never changes at this URL
+// Browser and CDN cache forever; deploy new URL for new content
+response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+```
+
+**Practical pattern for API responses:**
+```java
+// Shared data: cache at CDN for 1 min, browser for 30s
+response.setHeader("Cache-Control", "public, s-maxage=60, max-age=30, stale-while-revalidate=10");
+
+// Private user data: browser only, always revalidate
+response.setHeader("Cache-Control", "private, no-cache");
+
+// Sensitive auth response: never cache
+response.setHeader("Cache-Control", "no-store");
+```
+
+---
+
+### Signed URLs — Private Content at CDN Scale
+
+For paid or private content (Netflix movies, premium downloads), you can't make CDN URLs public — anyone with the URL would be able to download. **Signed URLs** solve this: a time-limited, HMAC-signed URL that the CDN edge validates before serving content. No separate auth round-trip needed at the edge.
+
+**How it works:**
+
+```
+1. User clicks "Play" on a paid Netflix movie
+         │
+         ▼
+2. Netflix backend (authenticated request):
+   - Verifies user has a valid subscription
+   - Generates a signed URL valid for 6 hours:
+     https://cdn.netflix.com/movies/avengers.mp4
+       ?Expires=1719859200
+       &Signature=abc123hmacSignedWithPrivateKey
+       &Key-Pair-Id=APKAJDKJSK12345
+         │
+         ▼
+3. Signed URL returned to player
+         │
+         ▼
+4. Player fetches video from CDN edge using signed URL
+         │
+         ▼
+5. CDN edge validates:
+   - Is Expires timestamp in the future? ✅ / ❌
+   - Is Signature valid (HMAC matches)? ✅ / ❌
+   If both pass → serve content directly from edge cache
+   If either fails → 403 Forbidden (no origin round-trip)
+```
+
+**Result:** If someone shares the URL, it expires after 6 hours. No permanent piracy window. The private video stays in the CDN cache — it's the *access token* that expires, not the content.
+
+```java
+// CloudFront signed URL generation (Java)
+public String generateSignedUrl(String videoPath, int expiryHours) {
+    Date expiry = Date.from(
+        Instant.now().plus(expiryHours, ChronoUnit.HOURS)
+    );
+
+    // Step 2 — build signed URL config
+    SignedUrlConfig signedUrlConfig = SignedUrlConfig.builder()
+        .url("https://cdn.netflix.com/" + videoPath)
+        .expiration(expiry)
+        .privateKeyFile(new File("/secrets/cloudfront-private.key"))
+        .keyPairId("CLOUDFRONT_KEY_PAIR_ID")
+        .build();
+
+    // Step 2 — HMAC sign and return URL
+    return CloudFrontUrlSigner.getSignedURLWithCannedPolicy(signedUrlConfig);
+}
+```
+
+**Interview phrasing:** *"For private paid content we use CloudFront signed URLs. The backend generates a URL with a 6-hour expiry and an HMAC signature using our CloudFront key pair. The edge validates the signature before serving — zero extra auth round-trips, so latency is the same as public CDN content. The video itself stays cached at the edge; only the access token expires."*
+
+---
+
 ## 🏢 Real World — Where Companies Use This
 
 - **Netflix (custom CDN + partnerships):** Netflix content cached at ISP edge locations and Cloudflare CDN. Most users get bitrate-adaptive video from edge (cached after first 10 requests). Reduces origin bandwidth cost by 95%.
@@ -403,6 +606,22 @@ CloudFront is **AWS's CDN service** that caches content at edge locations global
 
 > Don't use CDN for personalized content. Personalized videos should bypass CDN (fetch directly from origin). Set `Cache-Control: private` (browser caches, CDN doesn't) or `Cache-Control: no-cache, no-store` (no caching at all). For semi-personalized content, use `Vary` header: `Vary: Accept-Language` tells CDN to cache per language (separate cache for English vs Spanish versions). ⭐ **Tier 2 — Security**
 
+### Q: "What's the difference between push and pull CDN? When do you use each?" ⭐
+
+> Pull CDN starts empty — edge fetches from origin on the first request (cache miss), then caches for subsequent users. Zero setup, zero storage cost for cold content. Pull CDN is default for most use cases (CloudFront, Cloudflare). Push CDN: you proactively upload content to all edges before any user requests it — no cold cache miss possible. Use push when you have predictable, globally popular content on a known date: movie premiere, flash sale, game launch. If a billion users hit your CDN 30 seconds after launch, pull means 30 million simultaneous cache misses hammering origin; push means every edge already has the file. ⭐ **Tier 1 — always asked for CDN design**
+
+### Q: "How does a CDN know to route my request to the nearest edge?" ⭐
+
+> Two mechanisms: (1) **DNS geo-routing** — your DNS server returns a different IP based on where the query originates (Route53, Cloudflare). User in Tokyo gets Tokyo edge IP; user in London gets London edge IP. Limitation: DNS TTL means failover takes minutes. (2) **Anycast** — same IP is advertised from every edge PoP (Point of Presence) via BGP. Internet routers naturally route packets to the nearest advertiser. If Tokyo goes down, BGP re-routes to the next-nearest PoP in seconds. Cloudflare uses anycast — that's how 1.1.1.1 works from anywhere in the world. For interviews: default answer is "DNS geo-routing via Route53 or Cloudflare," then mention anycast as the more sophisticated mechanism. ⭐ **Tier 2 — probed in depth questions**
+
+### Q: "Explain Cache-Control: no-cache vs no-store. When do you use each?"
+
+> `no-cache` means "you CAN cache this, but check with origin before every serve." The cached copy is held in reserve; if origin says ETag matches, you serve the cached copy (304 Not Modified — saves bandwidth). Use for semi-dynamic content where freshness matters but bandwidth optimization is valuable. `no-store` means "never cache anywhere, ever." Every request is a full round-trip. Use for auth tokens, session IDs, banking responses — anything that must never be retrievable from any cache. The common mistake: using `no-store` for everything "to be safe" — this kills CDN hit rate and hammers origin. Use `private, no-cache` for user-specific content; reserve `no-store` for actual secrets. ⭐ **Tier 2 — common interview trap**
+
+### Q: "How do you serve private paid video content via CDN without making it publicly accessible?"
+
+> Use signed URLs. When a user pays and clicks "Play": backend verifies subscription, then generates a signed URL with (a) an expiry timestamp (e.g., 6 hours) and (b) an HMAC signature using your CDN private key. User's player fetches video from CDN edge using this signed URL. Edge validates the signature and expiry — no round-trip to origin for auth. If someone shares the URL, it expires after 6 hours. The content stays cached at the edge; only the access token expires. CloudFront calls these "signed URLs" (canned or custom policy). This is Netflix's model for paid content. ⭐ **Tier 2 — security + CDN design**
+
 ### Q: "Your cache hit rate is 80% but you want 95%. How do you improve?"
 
 > Check what's missing: (1) Increase TTL (longer cache retention). (2) Analyze cache misses — are unpopular files taking space? Implement LRU eviction. (3) Pre-warm cache — upload videos to edges before launch. (4) Check for cache busting headers — if origin sends `Cache-Control: no-cache` on static assets, change to `max-age=31536000`. ⭐ **Tier 2 — Optimization**
@@ -411,7 +630,7 @@ CloudFront is **AWS's CDN service** that caches content at edge locations global
 
 ## 🧾 TL;DR
 
-> "CDN caches content at geographically distributed edge locations. Users fetch from nearby edge (50-100ms) instead of distant origin (200-500ms). TTL determines cache expiry; purge invalidates manually. Trade-off: reduced latency/bandwidth cost vs cache staleness and CDN vendor costs."
+> "CDN caches content at geographically distributed edge locations — users fetch from nearby edge (50ms) instead of distant origin (200ms+). Pull CDN fetches from origin on first miss; push CDN pre-positions content before launch. Users reach the nearest edge via DNS geo-routing or anycast BGP. Sensitive paid content uses signed URLs (HMAC-signed, time-limited). Cache-Control directives control who caches what: `s-maxage` for CDN-only TTL, `private` for user data, `no-store` for secrets, `stale-while-revalidate` for background refresh."
 
 ---
 
@@ -438,3 +657,4 @@ CloudFront is **AWS's CDN service** that caches content at edge locations global
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 28. Covered CDN as distributed edge caching layer, two-diagram topology (global edge distribution), cache hit/miss mechanics, TTL vs explicit invalidation, ETag revalidation, bandwidth and latency trade-offs. |
+| July 1, 2026 | Added push vs pull CDN section, Anycast/DNS geo-routing explanation, full Cache-Control directives table, signed URLs section with CloudFront Java example, and 4 new interview Q&As. Updated TL;DR. Added Terminology Table (CDN, edge location/PoP, pull CDN, push CDN, cache hit/miss, TTL, cache invalidation/purge, anycast, signed URL) — PoP and anycast used in diagrams before being defined. |

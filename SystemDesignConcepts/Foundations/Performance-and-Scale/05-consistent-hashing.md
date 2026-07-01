@@ -20,6 +20,21 @@ When you distribute data across multiple servers (sharding), you need a rule for
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Hash Ring** | conceptual circle of hash values 0–2³²; both servers and keys are placed on it | `hash("user:123") = 190°` on the ring |
+| **Clockwise Walk** | to find a key's server, walk clockwise from the key's hash position until hitting a server node | key at 190°; nearest server clockwise is at 210° → key owned by that server |
+| **Modular Hashing** | naïve approach: `hash(key) % N`; breaks when N changes because almost all keys remap | N=4 → N=5: ~80% of keys get a new server → cache stampede |
+| **Virtual Nodes (vnodes)** | each physical server owns multiple positions on the ring; smooths uneven key distribution | Server A occupies ring positions 45°, 135°, 270° instead of just one |
+| **K/N Key Migration** | when a server is added or removed, only ~1/N of total keys need to move | 3 servers → add 1 → only ~25% of keys migrate, not all of them |
+| **MurmurHash** | fast, uniform non-cryptographic hash function used for ring placement | `MurmurHash("user:123")` produces a consistent ring position across all nodes |
+| **TreeMap (implementation)** | sorted map of ring positions → server; `ceilingKey()` performs the clockwise walk in O(log N) | `TreeMap<Long, Server>` in Java: `treeMap.ceilingKey(hash(key))` |
+| **Cache Stampede (rehash)** | when modular hashing remaps all keys at once, all cache misses hit the database simultaneously | adding 1 server with `% N` → 80% cache miss → DB overwhelmed |
+
+---
+
 ## 🎨 Visual — System Topology: Consistent Hashing in Architecture
 
 ```

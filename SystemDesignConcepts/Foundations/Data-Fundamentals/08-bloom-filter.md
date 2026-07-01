@@ -8,6 +8,21 @@ A Bloom filter answers "have we seen this before?" in O(1) time and near-zero me
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Bit Array** | the underlying data structure — a fixed-size array of 0/1 bits; very space-efficient | 1 million bits = 125 KB; stores membership for ~700K items at 1% false positive rate |
+| **Hash Functions (K)** | K independent hash functions each mapping an element to a position in the bit array | K=3: `hash1("user:alice")=1`, `hash2=4`, `hash3=7` → set bits 1, 4, 7 |
+| **False Positive** | filter says "probably exists" but item was never inserted; caused by bit collisions from other items | "user:carol" → checks bits 3,4,7 → all set by other users → incorrectly says "present" |
+| **False Negative** | filter says "definitely not present" for an item that WAS inserted — impossible by construction | if "user:alice" was inserted, her 3 bits are always set → never a false negative |
+| **"Definitely No" Guarantee** | any bit OFF in the K positions → item was never inserted (100% certain) | bit 3 is 0 → this item was never added; skip the expensive DB lookup |
+| **"Probably Yes"** | all K bits ON → item was probably inserted; but could be a false positive → verify with DB | all bits ON → do the actual DB lookup to confirm; filter just prevented wasted lookups |
+| **Fill Ratio** | fraction of bits set to 1; as more items are inserted, more bits flip → false positive rate rises | at 50% fill rate, false positive rate approaches 100%; keep fill rate ≤ 50% |
+| **m / n / k** | m = bit array size; n = number of items inserted; k = number of hash functions | m=10M bits, n=700K items, k=3 → ~1% false positive rate |
+
+---
+
 ## 🧠 The Mental Model
 
 Imagine a nightclub with a **VIP deny list** — a list of people who are permanently banned. The bouncer has a giant poster board with 1,000 light switches, all starting in the OFF position.

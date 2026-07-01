@@ -12,6 +12,21 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Offset Pagination** | skip N rows then take M: `LIMIT 10 OFFSET 50000`; DB scans 50,010 rows to discard 50,000 | page 5001 of 10: `OFFSET 50000 LIMIT 10` → DB reads 50,010 rows, returns 10 |
+| **Cursor Pagination (Keyset)** | use last-seen row's key as a WHERE clause: `WHERE id > 8374921 LIMIT 10`; index seek, O(log N) | `WHERE created_at < '2024-01-15T10:30:00' ORDER BY created_at DESC LIMIT 10` |
+| **Cursor Token** | opaque, client-facing encoding of the keyset value (usually base64); hides DB internals from clients | `next_cursor: "eyJpZCI6ODM3NDkyMX0="` decodes to `{id: 8374921}` |
+| **Keyset Pagination** | same as cursor pagination; the "key" is one or more indexed columns that define sort order | keyset: `(created_at, id)` — composite cursor for stable ordering when timestamps collide |
+| **Stable Results** | cursor pagination returns consistent pages even if rows are inserted/deleted between requests | row deleted at offset 4999: offset page 5001 skips a row; cursor page picks up at exact key |
+| **Drift / Skip (offset problem)** | concurrent inserts/deletes shift row positions; offset pagination shows duplicates or skips items | user A deletes row 5000; user B fetching page 501 at OFFSET 5000 sees row 5001 twice |
+| **Opaque Cursor** | base64-encoded cursor the client passes back; client cannot parse or manipulate it | `eyJpZCI6ODM3NDkyMX0=` — client treats as opaque string; server decodes internally |
+| **Composite Cursor** | cursor encoding multiple sort columns when primary key alone doesn't guarantee stable order | `{created_at: "2024-01-15T10:30", id: 8374}` — handles ties in created_at |
+
+---
+
 ## 🎯 Why This Matters
 
 - **Problem solved:** Offset pagination causes DB full-scans at high offsets (LIMIT 10 OFFSET 1,000,000 means the database reads 1,000,010 rows to discard 1,000,000 of them) and produces inconsistent pages if rows are inserted or deleted between requests.

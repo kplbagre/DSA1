@@ -10,6 +10,21 @@ Your system has 10 internal microservices. Each needs authentication, rate limit
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **API Gateway** | single-entry-point proxy that handles cross-cutting concerns (auth, routing, rate limits) before forwarding to internal services | Kong, AWS API Gateway, Spring Cloud Gateway |
+| **Request Routing** | forwarding incoming requests to the correct downstream service based on path, headers, or host | `/api/orders` → Order Service; `/api/users` → User Service |
+| **JWT Validation** | verifying a signed token at the gateway edge so internal services skip auth logic | gateway extracts token, validates signature, injects user-id header downstream |
+| **Rate Limiting (gateway)** | counting requests per client at the entry point and rejecting excess with HTTP 429 | 100 req/min per API key; request 101 → `429 Too Many Requests` |
+| **Protocol Translation** | converting between external protocol (REST/JSON) and internal protocol (gRPC/Protobuf) | mobile client sends JSON → gateway translates to gRPC for Order Service |
+| **Trace ID Injection** | gateway stamps a unique trace ID on every request so distributed traces can be assembled later | `X-Trace-Id: abc123` header added at entry; propagated through all services |
+| **L7 Proxy** | operates at the HTTP layer, can inspect headers, paths, and cookies — unlike L4 (TCP) which is blind to HTTP semantics | path-based routing, cookie-based sticky sessions — only possible at L7 |
+| **BFF (Backend for Frontend)** | gateway variant tailored per client type; aggregates multiple microservice calls into one response shaped for that client | mobile BFF combines User + Orders + Cart into one payload to reduce round trips |
+
+---
+
 ## 🧠 The Mental Model
 
 Imagine a theme park with 10 different attractions. Without a gate:

@@ -22,6 +22,21 @@ You have 4 microservices: Order, Payment, Inventory, Delivery. A customer places
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Saga** | sequence of local transactions across multiple services, coordinated with compensations on failure | Book flight → Book hotel → Book car; if car fails → cancel hotel → cancel flight |
+| **Compensating Transaction** | the "undo" action for a completed step; run when a later step fails to roll back previous work | `PaymentRefunded` compensates `PaymentCharged`; `InventoryReleased` compensates `InventoryReserved` |
+| **Orchestration** | central saga orchestrator service controls the flow step-by-step via direct calls; knows the full workflow | `SagaOrchestrator` calls Inventory → calls Payment → calls Delivery; handles failures centrally |
+| **Choreography** | services react to events and publish their own events; no central coordinator; decoupled but harder to debug | `OrderCreated` → Inventory listens → `InventoryReserved` → Payment listens → `PaymentCharged` |
+| **Saga Orchestrator** | stateful service that tracks saga progress and decides next step or compensation | Spring State Machine or Temporal workflow tracking `{PENDING, INVENTORY, PAYMENT, COMPLETE}` |
+| **Eventual Consistency** | saga achieves consistency across services over time, not immediately; intermediate states are valid | after step 2 of 4, the system is partially consistent; full consistency reached at step 4 |
+| **Idempotency in Sagas** | each saga step must be safe to retry; duplicate execution must not cause double-charges or double-booking | `chargePayment(orderId, idempotencyKey)` — DB checks if already charged; skips if yes |
+| **Two-Phase Commit vs Saga** | 2PC provides atomic distributed transactions but requires all services to lock; saga is eventual but lock-free | 2PC: all services hold locks until commit; Saga: each service commits independently |
+
+---
+
 ## 🎨 Visual — System Topology: Saga in Architecture
 
 ```

@@ -22,6 +22,22 @@ You have 3 database replicas. Which one is the primary (handles writes)? If the 
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Leader Election** | process by which nodes in a cluster agree on which single node is the primary (leader) | 3 Postgres replicas: elect one as primary to handle writes; others become followers |
+| **Raft** | consensus algorithm designed to be understandable; nodes vote for a leader; leader replicates log to followers | etcd and CockroachDB use Raft; leader elected when majority vote in a term |
+| **Term (Raft)** | monotonically increasing counter that increments each time an election happens; stale messages from old terms are ignored | term=5 leader sending term=3 messages → rejected as stale; prevents old-leader interference |
+| **Heartbeat** | periodic signal from leader to followers proving it's alive; missing heartbeats trigger a new election | leader sends heartbeat every 150ms; follower waits 300ms → no heartbeat → starts election |
+| **Quorum** | majority of nodes (`floor(N/2) + 1`) that must agree for a decision to be committed | 5 nodes: quorum=3; any write acknowledged by 3 nodes is durable even if 2 fail |
+| **Split-Brain** | network partition causes two separate groups each electing their own leader; quorum requirement prevents it | cluster of 5, partition into 2+3: group of 2 cannot reach quorum → no leader; group of 3 elects leader |
+| **Log Replication** | leader sends each committed entry to all followers; entry considered committed when quorum confirms receipt | leader appends `{term:5, index:100, value:"x=3"}`; 3 of 5 followers confirm → commit |
+| **Zookeeper** | distributed coordination service using ZAB consensus protocol; used for service registries and distributed locks | Kafka uses Zookeeper (legacy) for broker leader election and topic partition leadership |
+| **etcd** | Raft-based distributed key-value store; Kubernetes uses it as its cluster state store | Kubernetes stores all cluster state in etcd; every `kubectl apply` writes to etcd |
+
+---
+
 ## 🎨 Visual — System Topology: Leader Election in Architecture
 
 ```

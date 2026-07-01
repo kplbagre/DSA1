@@ -22,6 +22,21 @@ You store an order: `{order_id: 123, status: "shipped"}`. Later, you need to kno
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Event** | immutable fact that something happened; never updated or deleted | `OrderCreated`, `PaymentApproved`, `OrderShipped` |
+| **Event Store** | append-only database that stores all events in order; the single source of truth | EventStoreDB, Kafka log, or a `events` table with append-only inserts |
+| **Aggregate** | domain object whose state is reconstructed by replaying its events | `Order` aggregate: replay `OrderCreated + ItemAdded + PaymentApproved` → current order state |
+| **Append-Only Log** | storage structure where records are only added, never updated or deleted | event log row: `(event_id, aggregate_id, type, payload, timestamp)` — no UPDATE, no DELETE |
+| **Event Replay** | reconstructing current state by processing all historical events from the beginning | `order.apply(OrderCreated) → apply(ItemAdded) → apply(PaymentApproved)` = current state |
+| **Projection** | a read-optimized view built by processing events; updated asynchronously as new events arrive | `OrderSummaryProjection` table: `{order_id, status, total}` updated from event stream |
+| **Snapshot** | periodic checkpoint of aggregate state to avoid replaying all events from the beginning | every 100 events, save current state; replay only from latest snapshot |
+| **Command** | intent to change state; validated first, then generates an event if valid | `ShipOrder(order_id=123)` command → validates → generates `OrderShipped` event |
+
+---
+
 ## 🎨 Visual — System Topology: Event Sourcing in Architecture
 
 ```
@@ -373,6 +388,107 @@ public class TemporalOrderQuery {
 
 ---
 
+**Pattern 3: Snapshotting — Avoiding Full Replay on Every Load**
+
+The replay-from-event-zero approach works for orders with 50 events. An account with 500,000 transactions would take seconds to rebuild on every request. **Snapshotting** saves the computed state every N events so replay starts from the snapshot, not from the beginning.
+
+```java
+// Snapshot: persisted computed state at a known event offset
+public class OrderSnapshot {
+    private String orderId;
+    private String status;
+    private BigDecimal totalPrice;
+    // Step 1 — which event offset this snapshot was built from
+    private long snapshotOffset;
+
+    public OrderSnapshot(String orderId, String status, BigDecimal totalPrice, long offset) {
+        this.orderId = orderId;
+        this.status = status;
+        this.totalPrice = totalPrice;
+        this.snapshotOffset = offset;
+    }
+
+    // Getters
+    public long getSnapshotOffset() { return snapshotOffset; }
+    public String getStatus() { return status; }
+    public BigDecimal getTotalPrice() { return totalPrice; }
+}
+
+@Component
+public class SnapshotStore {
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    // Step 2 — Save snapshot every N events
+    public void saveSnapshot(OrderSnapshot snapshot) {
+        jdbcTemplate.update(
+            "INSERT INTO order_snapshots (order_id, status, total_price, snapshot_offset) " +
+            "VALUES (?, ?, ?, ?) ON CONFLICT (order_id) DO UPDATE SET " +
+            "status = EXCLUDED.status, total_price = EXCLUDED.total_price, " +
+            "snapshot_offset = EXCLUDED.snapshot_offset",
+            snapshot.getOrderId(),
+            snapshot.getStatus(),
+            snapshot.getTotalPrice(),
+            snapshot.getSnapshotOffset()
+        );
+    }
+
+    // Step 3 — Load most recent snapshot
+    public Optional<OrderSnapshot> loadSnapshot(String orderId) {
+        return jdbcTemplate.query(
+            "SELECT * FROM order_snapshots WHERE order_id = ?",
+            new Object[]{orderId},
+            (rs, rowNum) -> new OrderSnapshot(
+                rs.getString("order_id"),
+                rs.getString("status"),
+                rs.getBigDecimal("total_price"),
+                rs.getLong("snapshot_offset")
+            )
+        ).stream().findFirst();
+    }
+}
+
+public static Order rebuildFromEventsWithSnapshot(String orderId) {
+    // Step 3 — Try to load snapshot first
+    Optional<OrderSnapshot> snapshot = snapshotStore.loadSnapshot(orderId);
+
+    Order order;
+    long startOffset;
+
+    if (snapshot.isPresent()) {
+        // Step 3 — Restore state from snapshot (skip old events)
+        order = new Order(orderId);
+        order.status = snapshot.get().getStatus();
+        order.totalPrice = snapshot.get().getTotalPrice();
+        startOffset = snapshot.get().getSnapshotOffset() + 1;
+    } else {
+        // No snapshot: replay from event 0
+        order = new Order(orderId);
+        startOffset = 0;
+    }
+
+    // Step 4 — Replay only events AFTER the snapshot offset
+    List<Order.OrderEvent> events = eventStore.getEventsAfterOffset(orderId, startOffset);
+    for (Order.OrderEvent event : events) {
+        order.applyEvent(event);
+    }
+
+    // Step 2 — Save snapshot every 100 events (for next load)
+    long totalEvents = startOffset + events.size();
+    if (totalEvents % 100 == 0) {
+        snapshotStore.saveSnapshot(new OrderSnapshot(
+            orderId, order.status, order.totalPrice, totalEvents
+        ));
+    }
+
+    return order;
+}
+```
+
+**When to snapshot:** Every 50–500 events depending on entity update frequency and acceptable load latency. For a financial account with millions of transactions, snapshot every 1,000 events; for an order with 20 events, snapshotting is overkill.
+
+---
+
 **What is Event Store, Aggregate Root, and Projection, and why do they fit here?**
 
 - **Event Store:** Immutable append-only log of all domain events. Can be a database table or Kafka topic. In an interview: *"Event store is the single source of truth; all state is derived from replaying events."*
@@ -429,9 +545,59 @@ public class TemporalOrderQuery {
 
 > Read hits an outdated projection (lag: event published but listener hasn't processed it yet). For non-critical reads, this is acceptable ("customers see order status delayed by 1–2s"). For critical reads (payment confirmation), query the event store directly or wait for the projection to catch up. This is a fundamental trade-off in event sourcing — eventual consistency. Mitigation: read-own-writes pattern (after you publish an event, read from the event store directly, not the projection). ⭐ **Tier 2 — consistency**
 
-### Q: "Your event schema changed (added a field). How do you replay old events?"
+### Q: "Your event schema changed (added a field). How do you replay old events?" ⭐
 
-> Old events don't have the new field. On replay, either (1) provide a default value (upcasting: if event doesn't have field X, set X = null), or (2) versioning: old events are v1, new events are v2, replay logic handles both. Example: ItemAddedEvent v1 has (sku, qty); v2 adds (supplier). Replay logic: if v1, supplier = "unknown"; if v2, use supplier. This is the "event versioning" problem — solved with schema versioning or upcasting handlers. ⭐ **Tier 2 — operational**
+> Old events don't have the new field. Standard solution: **upcasting** — transform the old event into the new shape before applying it to the aggregate. The upcaster sits between the event store and the `applyEvent` call; old events get the missing field set to a safe default, new events pass through unchanged.
+
+```java
+// Upcasting: transform old event format → new event format at replay time
+public class ItemAddedEventUpcaster {
+
+    // v1: {orderId, sku, qty, price}
+    // v2: {orderId, sku, qty, price, supplier} ← new field added
+
+    public Order.ItemAddedEvent upcast(Map<String, Object> rawEvent) {
+        String version = (String) rawEvent.getOrDefault("version", "v1");
+
+        String orderId  = (String) rawEvent.get("orderId");
+        String sku      = (String) rawEvent.get("sku");
+        int qty         = (int) rawEvent.get("qty");
+        BigDecimal price = new BigDecimal(rawEvent.get("price").toString());
+        long timestamp  = (long) rawEvent.get("timestamp");
+
+        // Step — provide safe default for missing field in old events
+        String supplier = version.equals("v2")
+            ? (String) rawEvent.get("supplier")
+            : "UNKNOWN";
+
+        return new Order.ItemAddedEvent(orderId, sku, qty, price, supplier, timestamp);
+    }
+}
+
+// Usage in replay
+public static Order rebuildFromEvents(String orderId) {
+    Order order = new Order(orderId);
+    List<Map<String, Object>> rawEvents = eventStore.getRawEventsForAggregate(orderId);
+    ItemAddedEventUpcaster upcaster = new ItemAddedEventUpcaster();
+
+    for (Map<String, Object> raw : rawEvents) {
+        String eventType = (String) raw.get("eventType");
+
+        Order.OrderEvent event;
+        if (eventType.equals("ItemAddedEvent")) {
+            // Upcast regardless of version — upcaster handles both
+            event = upcaster.upcast(raw);
+        } else {
+            event = deserialize(raw);
+        }
+
+        order.applyEvent(event);
+    }
+    return order;
+}
+```
+
+**Interview phrasing:** *"We use upcasters: a small transformation function that converts an old event format to the current schema before applying it to the aggregate. The event store stays immutable — we never rewrite historical events. The upcaster is the adapter layer that handles version differences at replay time."* ⭐ **Tier 2 — operational**
 
 ### Q: "How does event sourcing differ from CDC (Change Data Capture)?"
 
@@ -473,3 +639,4 @@ public class TemporalOrderQuery {
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 22. Covered event store, replay, temporal queries, aggregate root, projections, versioning challenges. |
+| July 1, 2026 | Added snapshotting Pattern 3 with full Java implementation (snapshot save/load/resume). Added upcasting code example to schema versioning Q&A. |

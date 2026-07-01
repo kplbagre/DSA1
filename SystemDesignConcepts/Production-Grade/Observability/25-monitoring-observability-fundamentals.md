@@ -39,6 +39,84 @@ Imagine you're a restaurant manager. A customer complains: "My order took too lo
 
 ---
 
+## 🧠 RED & USE — The SRE Frameworks for "What Do I Instrument?"
+
+Knowing *what* to measure is as important as knowing *how* to measure. Two SRE mnemonics answer this:
+
+### RED Method — For Services (APIs, Microservices)
+
+> **R**ate · **E**rrors · **D**uration
+
+Every service you own should have exactly these three metrics on its dashboard:
+
+| Signal | What to measure | Example metric |
+|---|---|---|
+| **Rate** | Requests per second (throughput) | `http_requests_total` (counter, rate over 1m) |
+| **Errors** | Error rate (% of requests that fail) | `http_errors_total / http_requests_total` |
+| **Duration** | Latency distribution (P50, P95, P99) | `http_request_duration_seconds` (histogram) |
+
+**Why RED?** These three signals tell you *everything* about service health:
+- Rate drops → fewer users hitting the service (traffic problem upstream)
+- Errors spike → something is broken (5xx, dependency down)
+- Duration increases → service is slow (DB, GC, downstream latency)
+
+If you can only put 3 panels on a dashboard for your service — use RED.
+
+```
+Service dashboard: Order Service
+┌────────────────┬────────────────┬─────────────────────────┐
+│ Rate           │ Errors         │ Duration                │
+│ 1,200 req/s    │ 0.3%           │ P50: 45ms               │
+│ (↑ from 900)   │ (↓ from 2.1%)  │ P95: 210ms              │
+│                │                │ P99: 480ms  ⚠️          │
+└────────────────┴────────────────┴─────────────────────────┘
+Reading: Traffic is up 33%, errors improving, but P99 latency is high — investigate.
+```
+
+### USE Method — For Resources (CPU, DB Pool, Disk, Network)
+
+> **U**tilization · **S**aturation · **E**rrors
+
+Every resource (infrastructure component) should be monitored with these three signals:
+
+| Signal | What to measure | Example metric |
+|---|---|---|
+| **Utilization** | % of time the resource is busy | CPU usage 85%, connection pool active 18/20 (90%) |
+| **Saturation** | Queue depth or wait time (resource is overloaded) | Connection pool pending queue = 47, CPU run queue > 1 |
+| **Errors** | Resource-level error count | Disk I/O errors, network packet drops, OOM kills |
+
+**Why USE?** Resources fail in a predictable pattern:
+1. Utilization climbs (getting busier)
+2. Saturation starts (requests start queuing)
+3. Errors appear (requests start failing)
+
+Monitoring all three lets you catch problems at stage 1 (utilization warning) instead of stage 3 (user-visible errors).
+
+```
+Resource dashboard: HikariCP Connection Pool
+┌──────────────────────┬──────────────────────┬─────────────────┐
+│ Utilization          │ Saturation           │ Errors          │
+│ active = 18/20 (90%) │ pending_queue = 12   │ timeout = 0     │
+│ idle = 2             │ avg_wait = 85ms ⚠️   │                 │
+└──────────────────────┴──────────────────────┴─────────────────┘
+Reading: Pool is 90% utilized and requests are queuing (85ms avg wait) — 
+increase maxPoolSize or add PgBouncer before timeouts start.
+```
+
+### RED vs USE — Which to use where
+
+| Subject | Framework | Reason |
+|---|---|---|
+| HTTP API / microservice | RED | Captures user-facing experience (throughput, errors, latency) |
+| CPU, disk, memory | USE | Captures infrastructure health (busy, overloaded, broken) |
+| DB connection pool | USE | Pool is a resource — utilization (% used), saturation (queue), errors (timeouts) |
+| Message queue consumer | RED | Consumer is a service — rate (msgs/s), errors (DLQ count), duration (processing time) |
+| CDN edge | RED | Edge is a service — hit rate (as "Rate"), miss+error rate, response time |
+
+**Interview phrasing:** *"For service health I follow the RED method — Rate, Errors, Duration. For infrastructure I follow USE — Utilization, Saturation, Errors. Together they give complete coverage: RED tells me if users are impacted; USE tells me which resource is the root cause."*
+
+---
+
 ## 🎨 Visual — Observability Architecture
 
 ### Full System Topology — Where Observability Sits (OUTSIDE Main Request Path)
@@ -408,6 +486,10 @@ OpenTelemetry is an **open standard for collecting traces, metrics, and logs** f
 
 > Prometheus stores historical data; alerts are based on that history (e.g., "if latency was >500ms for 5 min, fire alert"). If Prometheus crashed 2 days ago but just recovered, you've lost 2 days of history, but you can still query the last day and fire alerts going forward. However, you can't detect slow degradation over 2 days (might not notice if latency crept up gradually). Mitigation: use remote storage (Prometheus → TSDB like Cortex) so history survives Prometheus crashes. ⭐ **Tier 2 — Resilience**
 
+### Q: "What are the RED and USE methods, and when do you apply each?" ⭐
+
+> RED is for services: **R**ate (requests/sec), **E**rrors (error rate), **D**uration (latency percentiles). Every microservice should have these 3 panels on its dashboard — they tell you if users are being impacted. USE is for resources: **U**tilization (% busy), **S**aturation (queue depth or wait time), **E**rrors (resource-level failures). Every infrastructure resource — CPU, connection pool, disk — should have these 3. Apply them together: if P99 latency (RED Duration) is high, check connection pool saturation (USE Saturation on the pool) — if pending queue is growing, pool is the bottleneck. RED tells you *that* users are impacted; USE tells you *which resource* is the root cause. ⭐ **Tier 1 — SRE/monitoring design question**
+
 ### Q: "How do you distinguish between a real alert (something is broken) and a false positive (alert fired but system is fine)?"
 
 > Define **alert SLA**: if alert fires, on-call engineer should be able to action it within 15 min and resolve within 1 hour. If alert fires but issue takes 8 hours to resolve (or is false), the alert threshold is wrong. Example: "P99 latency > 500ms" might be too strict (fires every week, but users don't notice). Change to "P99 latency > 1000ms for 5 min". Use burn rate: if latency is barely over threshold (like 505ms), don't fire; if it's clearly bad (1500ms), fire immediately. ⭐ **Tier 2 — Alert tuning**
@@ -416,7 +498,7 @@ OpenTelemetry is an **open standard for collecting traces, metrics, and logs** f
 
 ## 🧾 TL;DR
 
-> "Observability = three pillars: Logs (what happened?), Metrics (how much?), Traces (where's the bottleneck?). All three are needed to diagnose issues. Logs stored in Elasticsearch (queryable), Metrics in Prometheus (time-series), Traces in Jaeger (request causality). Correlate via trace_id (MDC) injected in logs."
+> "Observability = three pillars: Logs (what happened?), Metrics (how much?), Traces (where's the bottleneck?). All three are needed to diagnose issues. Logs stored in Elasticsearch, Metrics in Prometheus, Traces in Jaeger — correlated via trace_id in MDC. For what to instrument: use RED (Rate, Errors, Duration) for every service; use USE (Utilization, Saturation, Errors) for every resource. RED tells you if users are impacted; USE identifies which resource is the root cause."
 
 ---
 
@@ -444,3 +526,4 @@ OpenTelemetry is an **open standard for collecting traces, metrics, and logs** f
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 25. Covered three pillars (logs, metrics, traces), architectural topology showing observability as parallel layer, MDC for correlation, OpenTelemetry standard, SLI/SLO/SLA foundation, code examples with Micrometer + Jaeger. |
+| July 1, 2026 | Added RED method (Rate/Errors/Duration for services) and USE method (Utilization/Saturation/Errors for resources) with comparison table, dashboard mockups, and interview Q&A. Updated TL;DR. |

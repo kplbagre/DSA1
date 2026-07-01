@@ -281,6 +281,100 @@ void printNTo1(int n) {
 
 ---
 
+## 🔨 Designing the Function Signature — Phase 1
+
+> **⬛ The most frequent Phase 1 failure in recursion:** starting to write the body before answering "what are my parameters?" The signature determines everything — mis-sign the parameters and the whole function fights you.
+
+---
+
+### The 3-Way Parameter Classification
+
+Every parameter in a recursive function is one of three kinds:
+
+| Parameter kind | What it is | Changes per call? | Example |
+| --- | --- | --- | --- |
+| **Immutable input** | The data you process — same reference on every call | No | `int[] nums`, `String s`, `TreeNode root` |
+| **Mutable cursor** | Where you are in the input — what makes the problem smaller | Yes | `int ind`, `int left`, `int right`, `TreeNode node` |
+| **Accumulated state** | What you've built or counted so far — flows down (parameter-way) or up (functional-way) | Yes | `int acc`, `List<Integer> path`, `int sum` |
+
+---
+
+### Rule: Don't Re-Pass Immutable Input Unless Necessary
+
+The most common signature bloat: passing `int[] nums` or `String s` through every recursive call when it never changes. Java passes arrays by reference (4 bytes, not a copy), so passing it is cheap — but you have two cleaner options when it clutters the signature:
+
+```java
+// ✅ Option A — pass the array once; only the cursor changes
+private int helper(int[] nums, int ind) {
+    // nums is the same reference every call — it's fine here
+    if (ind == nums.length) {
+        return 0;
+    }
+    return nums[ind] + helper(nums, ind + 1);
+}
+
+// ✅ Option B — store as a class field when many helpers share it
+class Solution {
+    private int[] nums;
+
+    public int solve(int[] input) {
+        this.nums = input;
+        return helper(0);
+    }
+
+    private int helper(int ind) {
+        // nums accessed via `this` — no extra parameter
+        if (ind == nums.length) {
+            return 0;
+        }
+        return nums[ind] + helper(ind + 1);
+    }
+}
+```
+
+---
+
+### The Standard Pattern: Public Wrapper + Private Helper
+
+**Steps in plain English:**
+
+1. **Public method (Phase 1)** — accept the raw problem input, do any pre-processing (sort, build memo, prefix sum), then call the private helper with the full initial state.
+2. **Private helper (Phase 2)** — carries only the mutable cursor + mutable state; the immutable input is either a field or passed once.
+
+```java
+public int solve(int[] nums) {
+    // Step 1 — Phase 1: pre-processing before recursion
+    int[] memo = new int[nums.length];
+    Arrays.fill(memo, -1);
+    // Step 2 — Phase 2: kick off the recursion
+    return helper(nums, 0, memo);
+}
+
+private int helper(int[] nums, int ind, int[] memo) {
+    // Base case
+    if (ind == nums.length) {
+        return 0;
+    }
+    // Memoization check
+    if (memo[ind] != -1) {
+        return memo[ind];
+    }
+    // Recursive case
+    return memo[ind] = nums[ind] + helper(nums, ind + 1, memo);
+}
+```
+
+---
+
+> **⬛ Pre-flight: design the signature in 4 questions before writing any body:**
+>
+> 1. **What is the immutable input?** (array, string, tree) → pass it once or store as field; don't think about it again.
+> 2. **What is the cursor?** (index, node, pointer range) → always a parameter; changes every call; makes the problem smaller.
+> 3. **Does accumulated state flow DOWN (parameter-way) or UP (functional-way)?** → parameter-way: add `path` / `acc` to signature. Functional-way: captured in the return value — no extra parameter needed.
+> 4. **Do I need memoization?** → add `int[] memo` (or `Map<State, Result>`) to the signature; initialize with `-1` (or `null`) in the public wrapper.
+
+---
+
 ## 🧪 Warm-Up Drills (Striver's Lectures 2–4 Equivalents)
 
 A handful of "look mom, no loops" problems to cement the parameter-way habit before you hit subsequences.
@@ -2711,51 +2805,33 @@ public List<Integer> preorder(TreeNode root) {
 
 ## 🔬 Worked Walkthroughs
 
-### Walkthrough 1: Climbing Stairs (LC 70)
+---
 
-> You can climb 1 or 2 steps at a time. How many distinct ways to reach step `n`?
+### WW-1 — LC 70 Climbing Stairs
 
-**Apply the 3-question template:**
+Count distinct ways to climb `n` stairs taking 1 or 2 steps at a time.
 
-1. **Base case:** `n == 0` (already at top — 1 way: do nothing). `n == 1` (one step — 1 way).
-2. **Recursive case:** to reach step `n`, my last move was either +1 (so I came from step n-1) or +2 (so I came from step n-2). Total ways = ways(n-1) + ways(n-2).
-3. **Combine:** literally add the two.
+**Brute force:** Recursively try both choices at each step — take 1 or take 2. Every call spawns two more calls, so the recursion tree doubles at each level. O(2^n) time, O(n) stack. Times out on LeetCode for n > 30.
 
-**Naive — Steps in plain English:**
+**Intuition bridge:** The number of ways to reach step `n` depends only on step `n-1` and step `n-2` — identical sub-problems are recomputed O(2^n) times in the naïve tree. A memo array collapses the tree to a single path: each state is computed once.
 
-1. **Base case** — for `n <= 1`, there is exactly 1 way (do nothing or take 1 step).
-2. **Sum the two predecessors** — `climbStairs(n-1) + climbStairs(n-2)`.
+**Steps in plain English:**
 
-```java
-// Naive — O(2^n), times out on LC for n > 30
-public int climbStairs(int n) {
-    // Step 1 — base case
-    if (n <= 1) {
-        return 1;
-    }
-    // Step 2 — sum two predecessors
-    return climbStairs(n - 1) + climbStairs(n - 2);
-}
-```
-
-**Memoized — Steps in plain English:**
-
-1. **Allocate cache** — `int[n + 1]` filled with `-1` sentinel.
-2. **Helper base case** — `n <= 1` returns 1.
-3. **Cache hit** — if `memo[n] != -1`, return it.
+1. **Allocate cache** — `int[n + 1]` filled with `-1` sentinel so 0 (a valid answer) is never mistaken for "not computed."
+2. **Base cases** — `n <= 1` returns 1 (0 stairs = stand still; 1 stair = one move).
+3. **Cache hit** — if `memo[n] != -1`, return stored result immediately.
 4. **Compute, store, return** — sum the two predecessors, write to `memo[n]`, return.
 
 ```java
-// Memoized — O(n) time, O(n) space
 public int climbStairs(int n) {
-    // Step 1 — cache with -1 sentinel
+    // Step 1 — allocate cache with -1 sentinel
     int[] memo = new int[n + 1];
     Arrays.fill(memo, -1);
     return helper(n, memo);
 }
 
 private int helper(int n, int[] memo) {
-    // Step 2 — base case
+    // Step 2 — base cases
     if (n <= 1) {
         return 1;
     }
@@ -2769,31 +2845,78 @@ private int helper(int n, int[] memo) {
 }
 ```
 
-**The point:** identical structure to Fibonacci. Once you see one, you see all.
+**Time:** O(n) — each of the n states computed once. **Space:** O(n) memo + O(n) stack.
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 509 Fibonacci | Return `fib(n-1) + fib(n-2)` instead of counting ways — same structure | `return helper(n - 1, memo) + helper(n - 2, memo);` is unchanged |
+| LC 746 Min Cost Climbing Stairs | Minimize cost instead of count; choose min(cost[n-1], cost[n-2]) | `memo[n] = Math.min(helper(n - 1, memo) + cost[n - 1], helper(n - 2, memo) + cost[n - 2]);` |
+| LC 198 House Robber | Same 2-predecessor recurrence; combiner is max(skip, take+nums[i]) | `memo[i] = Math.max(helper(i - 1, memo), helper(i - 2, memo) + nums[i]);` |
 
 ---
 
-### Walkthrough 2: Generate All Subsets (LC 78)
+### WW-2 — LC 21 Merge Two Sorted Lists
 
-> Return all 2^n subsets of an array.
+Merge two sorted linked lists and return the head of the sorted merged list.
 
-**Apply the 3-question template:**
+**Brute force:** Collect all node values into an array, sort, then rebuild a new linked list. O((m+n) log(m+n)) time, O(m+n) space — works but loses the existing nodes and uses a sort when a merge suffices.
 
-1. **Base case:** "we've considered every element" → record the current subset.
-2. **Recursive case:** at each index `i`, we have **two choices** — include `nums[i]` in the subset or not.
-3. **Combine:** the union of (subsets with `nums[i]`) ∪ (subsets without `nums[i]`).
-
-**Two equivalent codings:**
-
-**Style A — for-loop with backtracking (the standard)**
+**Intuition bridge:** The merged list's head is whichever current head is smaller. That smaller head's `.next` should be the merge of its remaining tail and the other list — recursion handles the pointer stitching automatically, no temporary array needed.
 
 **Steps in plain English:**
 
-1. **Snapshot every state** — every prefix of `path` is a valid subset, so record on entry.
-2. **Loop from `start`** — only consider elements ≥ `start` to avoid duplicates.
-3. **TRY** — append `nums[i]`.
-4. **RECURSE** with `i + 1` (next branch picks strictly later elements).
-5. **UNDO** — remove the last element so the next iteration is clean.
+1. **Base cases** — if either list is null, the merge result is just the other list.
+2. **Pick the smaller head** — compare `l1.val` vs `l2.val`; the winner becomes the current node.
+3. **Recurse on the tail** — winner's `.next` = `mergeTwoLists(winner.next, loser)`.
+4. **Return the winner** — it is now the head of the correctly merged chain.
+
+```java
+public ListNode mergeTwoLists(ListNode l1, ListNode l2) {
+    // Step 1 — base cases: empty list merges to the other
+    if (l1 == null) {
+        return l2;
+    }
+    if (l2 == null) {
+        return l1;
+    }
+    // Steps 2-4 — smaller head wins; recurse on its tail + the other list
+    if (l1.val <= l2.val) {
+        l1.next = mergeTwoLists(l1.next, l2);
+        return l1;
+    } else {
+        l2.next = mergeTwoLists(l1, l2.next);
+        return l2;
+    }
+}
+```
+
+**Time:** O(m+n) — each node visited once. **Space:** O(m+n) call stack depth.
+
+> **Iterative version is also valid** — use a dummy head and a `curr` pointer. Both should be in your toolkit.
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 148 Sort List | Merge sort on a linked list; this function is the merge step | Call `mergeTwoLists` on the two halves after splitting at mid |
+| LC 23 Merge k Sorted Lists | Repeatedly merge pairs (divide-and-conquer) using this exact function | Outer loop: `result = mergeTwoLists(result, lists[i])` |
+| LC 88 Merge Sorted Array | Same merge logic but in-place from the end (two pointers, no recursion) | Replace with `while (p1 >= 0 && p2 >= 0)` iterative merge |
+
+---
+
+### WW-3 — LC 78 Subsets
+
+Return all 2^n subsets of an integer array with distinct elements.
+
+**Brute force:** Iterate over all 2^n bitmasks from 0 to 2^n − 1; for each mask, include `nums[i]` wherever bit `i` is set. O(n × 2^n) time. This IS the optimal time complexity — you must generate all 2^n subsets — so this is not really a "worse" approach, just a different coding style (bit manipulation vs recursion).
+
+**Intuition bridge:** Each element is a binary decision — include or exclude. A recursion tree models this naturally: at depth `i`, branch on `nums[i]`. The for-loop style avoids rebuilding `path` at every node and generalises directly to combinations and permutations by changing one parameter.
+
+**Steps in plain English (Style A — for-loop backtracking):**
+
+1. **Snapshot on entry** — every prefix of `path` is a valid subset; record it immediately.
+2. **Loop from `start`** — only consider elements ≥ `start` index to avoid duplicate subsets.
+3. **TRY** — add `nums[i]` to `path`.
+4. **RECURSE** — call with `i + 1` so the next level picks strictly later elements.
+5. **UNDO** — remove the last element before the next iteration.
 
 ```java
 public List<List<Integer>> subsets(int[] nums) {
@@ -2805,11 +2928,11 @@ public List<List<Integer>> subsets(int[] nums) {
 private void backtrack(int[] nums, int start, List<Integer> path, List<List<Integer>> results) {
     // Step 1 — snapshot current path as a valid subset
     results.add(new ArrayList<>(path));
-    // Step 2 — branch on each element from `start` onward
+    // Step 2 — consider elements from `start` onward only
     for (int i = start; i < nums.length; i++) {
         // Step 3 — TRY
         path.add(nums[i]);
-        // Step 4 — RECURSE
+        // Step 4 — RECURSE with i+1 (no re-picking earlier elements)
         backtrack(nums, i + 1, path, results);
         // Step 5 — UNDO
         path.remove(path.size() - 1);
@@ -2817,77 +2940,176 @@ private void backtrack(int[] nums, int start, List<Integer> path, List<List<Inte
 }
 ```
 
-**Style B — explicit two-choice (include / exclude)**
+**Time:** O(n × 2^n) — 2^n subsets, each copied in O(n). **Space:** O(n) recursion depth.
 
-**Steps in plain English:**
-
-1. **Base case** — when `i == nums.length`, every element has been decided; snapshot `path` and return.
-2. **Choice 1 — skip `nums[i]`** — recurse with `i + 1` without modifying `path`.
-3. **Choice 2 — include `nums[i]`** — add to `path`, recurse with `i + 1`, then UNDO.
-
-```java
-private void backtrack(int[] nums, int i, List<Integer> path, List<List<Integer>> results) {
-    // Step 1 — base case: all decisions made
-    if (i == nums.length) {
-        results.add(new ArrayList<>(path));
-        return;
-    }
-    // Step 2 — Choice 1: skip nums[i]
-    backtrack(nums, i + 1, path, results);
-    // Step 3 — Choice 2: include nums[i], then undo
-    path.add(nums[i]);
-    backtrack(nums, i + 1, path, results);
-    path.remove(path.size() - 1);
-}
-```
-
-Both are O(n × 2^n) — there are 2^n subsets and copying each is O(n). Style A is more flexible (extends to combinations and permutations); Style B is more "obviously" two-choice.
-
-> **Pick Style A for interviews** — it's the canonical pattern that generalizes to LC 39, 46, 22, 17, 79.
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 90 Subsets II | Input has duplicates; sort first, then skip `nums[i] == nums[i-1]` when `i > start` | Add `if (i > start && nums[i] == nums[i - 1]) continue;` inside the loop |
+| LC 39 Combination Sum | Elements can be reused; recurse with `i` instead of `i+1`; prune when `sum > target` | `backtrack(nums, i, path, results, remaining - nums[i]);` |
+| LC 46 Permutations | No `start` — every unused element is valid at each level; track with `used[]` boolean | Replace `start` parameter with `boolean[] used`; loop from 0 each time |
 
 ---
 
-### Walkthrough 3: Merge Two Sorted Lists (LC 21)
+### WW-4 — LC 50 Pow(x, n)
 
-> Merge two sorted linked lists and return the sorted merged list.
+Implement `x^n` where `n` can be negative and as large as ±2^31 − 1.
 
-**Apply the 3-question template:**
+**Brute force:** Multiply `x` by itself `|n|` times. O(n) time. For `n = 2^31 − 1`, that's ~2 billion multiplications — times out completely.
 
-1. **Base case:** if either list is empty, return the other.
-2. **Recursive case:** the smaller head goes first; recurse on (its tail) and (the other list).
-3. **Combine:** the smaller head's `.next` becomes the merged tail.
+**Intuition bridge:** `x^n = (x^(n/2))^2` — squaring the half-result halves the problem at each step, giving O(log n) multiplications. The two traps that kill most interviews: negative `n` requires the reciprocal, and negating `Integer.MIN_VALUE` overflows a 32-bit int (−2^31 has no positive counterpart in `int` — use `long`).
 
 **Steps in plain English:**
 
-1. **Empty-list short-circuits** — if `l1` is null, the merged list is just `l2` (and vice-versa).
-2. **Pick the smaller head** — compare `l1.val` and `l2.val`; the smaller one is the merged list's head.
-3. **Recurse on the rest** — call `mergeTwoLists` on (the chosen head's tail, the other list); set the result as the chosen head's `.next`.
-4. **Return the chosen head** — its `.next` chain is now the entire merged list.
+1. **Cast n to long** — prevents overflow when negating `Integer.MIN_VALUE`.
+2. **Negative n** — return `1.0 / myPow(x, -n)`.
+3. **Base case** — `n == 0` returns 1.0 (anything to the power 0 is 1).
+4. **Even n** — compute half = `myPow(x, n/2)`; return `half * half` (one recursive call, not two).
+5. **Odd n** — return `x * myPow(x, n - 1)` (peel off one factor, make n even).
 
 ```java
-public ListNode mergeTwoLists(ListNode l1, ListNode l2) {
-    // Step 1 — empty-list short-circuits
-    if (l1 == null) {
-        return l2;
+public double myPow(double x, int n) {
+    // Step 1 — cast to long to handle Integer.MIN_VALUE safely
+    long N = n;
+    // Step 2 — negative exponent → reciprocal
+    if (N < 0) {
+        return 1.0 / myPow(x, -N);
     }
-    if (l2 == null) {
-        return l1;
+    return powHelper(x, N);
+}
+
+private double powHelper(double x, long n) {
+    // Step 3 — base case
+    if (n == 0) {
+        return 1.0;
     }
-    // Step 2 + 3 — smaller head wins; recurse on its tail + the other list
-    if (l1.val <= l2.val) {
-        l1.next = mergeTwoLists(l1.next, l2);
-        // Step 4 — return chosen head
-        return l1;
+    // Step 4 — even: square the half-result (ONE recursive call)
+    if (n % 2 == 0) {
+        double half = powHelper(x, n / 2);
+        return half * half;
+    }
+    // Step 5 — odd: peel one factor, recurse on n-1 (now even)
+    return x * powHelper(x, n - 1);
+}
+```
+
+**Time:** O(log n) — halves each even step. **Space:** O(log n) call stack.
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 372 Super Pow | Same halving but modular arithmetic; base cycles mod `1337` | Wrap every multiplication with `% 1337` |
+| LC 1922 Count Good Numbers | Modular pow — call `myPow(4, n/2) % MOD` inside the solution | `return (long) powHelper(base, exp) % MOD;` |
+| LC 509 Fibonacci (matrix form) | Matrix exponentiation uses the same "square the half" trick on 2×2 matrices | `powHelper(matrix, n/2)` then `multiply(half, half)` |
+
+---
+
+### WW-5 — LC 206 Reverse Linked List
+
+Reverse a singly linked list using recursion and return the new head.
+
+**Brute force:** Iterative — maintain `prev`, `curr`, `next` pointers; march forward updating links. O(n) time, O(1) space. Perfectly correct but uses no recursion, so it skips the main lesson here.
+
+**Intuition bridge:** "Leap of faith" — assume `reverseList(head.next)` already returns a perfectly reversed sublist. Then two pointer moves finish the job: `head.next.next = head` points the tail of the reversed sublist back to `head`, and `head.next = null` severs the old forward link (otherwise a cycle forms). The recursion handles everything; you only write two assignments.
+
+**Steps in plain English:**
+
+1. **Base case** — if `head == null` or `head.next == null`, a single node is already its own reversed list; return `head`.
+2. **Recurse** — `newHead = reverseList(head.next)` — take the leap: the rest is now reversed.
+3. **Re-attach** — `head.next.next = head` — the last node of the reversed sublist must point back to `head`.
+4. **Cut forward link** — `head.next = null` — remove the old forward edge or a cycle forms.
+5. **Return `newHead`** — the head of the originally last node is now the head of the whole list.
+
+```java
+public ListNode reverseList(ListNode head) {
+    // Step 1 — base case: empty or single node
+    if (head == null || head.next == null) {
+        return head;
+    }
+    // Step 2 — leap of faith: reverse the tail
+    ListNode newHead = reverseList(head.next);
+    // Step 3 — tail of reversed sublist points back to head
+    head.next.next = head;
+    // Step 4 — cut the old forward link (prevents cycle)
+    head.next = null;
+    // Step 5 — newHead is unchanged throughout all recursive calls
+    return newHead;
+}
+```
+
+**Time:** O(n). **Space:** O(n) call stack.
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 92 Reverse Linked List II | Reverse only the subrange [left, right]; same `head.next.next = head` trick applied within range | Walk to position `left - 1`, then apply the reversal on the next `right - left + 1` nodes |
+| LC 234 Palindrome Linked List | Reverse second half using this function; compare with first half | `ListNode secondHalf = reverseList(slow);` then walk both halves comparing |
+| LC 25 Reverse Nodes in k-Group | Reverse one k-length chunk at a time; recurse on the remainder | `tail.next = reverseKGroup(nextGroup, k);` after reversing each chunk |
+
+---
+
+### WW-6 — LC 779 K-th Symbol in Grammar
+
+Row 1 is `"0"`. Each `"0"` expands to `"01"`, each `"1"` expands to `"10"`. Return the k-th symbol (1-indexed) in row n.
+
+**Brute force:** Build row 1, then row 2, ..., then row n by string expansion. Row n contains 2^(n−1) characters — up to 2^29 ≈ 500 million characters for the largest inputs. Exponential space, infeasible.
+
+**Intuition bridge:** You never need to build the string. The character at position `k` in row `n` is derived from position `⌈k/2⌉` in row `n-1`: if `k` is odd the child equals the parent; if `k` is even the child is the parent's complement. Recurse until row 1, which is always `0`.
+
+### 🎨 Visual — Parent-child position mapping across rows
+
+```
+Row 1:  0
+        |       |
+Row 2:  0       1
+       / \     / \
+Row 3: 0   1   1   0
+      /\ /\  /\ /\
+Row 4:01 10  10 01
+
+Position k in row n:
+  parent position = (k + 1) / 2  ← integer division (= ceil(k/2))
+
+  k odd  → child == parent value
+  k even → child == 1 − parent value  (complement)
+
+Example: row 4, k=6 → parent at row 3, k=(6+1)/2=3 → value=1 → k even → 1-1=0 ✓
+
+KEY INVARIANT:
+   Each symbol is fully determined by its ancestry back to row 1 ("0").
+   No string is ever built — position reduction shrinks n by 1 each call.
+```
+
+**Steps in plain English:**
+
+1. **Base case** — row 1 always contains a single `0`; return 0.
+2. **Find parent position** — `parentK = (k + 1) / 2` (integer division = ceiling of k/2).
+3. **Recurse** — get the parent's value: `int parent = kthGrammar(n - 1, parentK)`.
+4. **Derive child** — if `k` is odd, child equals parent; if `k` is even, child is `1 - parent`.
+
+```java
+public int kthGrammar(int n, int k) {
+    // Step 1 — base case: row 1 is always "0"
+    if (n == 1) {
+        return 0;
+    }
+    // Step 2 — parent sits at ceil(k/2) in the row above
+    int parentK = (k + 1) / 2;
+    // Step 3 — recurse to get parent's value
+    int parent = kthGrammar(n - 1, parentK);
+    // Step 4 — odd position: same as parent; even position: complement
+    if (k % 2 == 1) {
+        return parent;
     } else {
-        l2.next = mergeTwoLists(l1, l2.next);
-        return l2;
+        return 1 - parent;
     }
 }
 ```
 
-**Why this is beautiful:** the recursion handles all the pointer juggling that the iterative version requires. Six lines, O(m + n) time, O(m + n) stack space.
+**Time:** O(n) — one recursive call per level, n levels. **Space:** O(n) call stack.
 
-> **Iterative version is also valid** — uses a dummy head and a current pointer. Both should be in your toolkit.
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 1545 Find Kth Bit in Nth Binary String | Same position-reduction pattern; string has a different expansion rule (invert + reverse) | Adjust parent derivation formula for the new expansion rule |
+| LC 880 Decoded String at Index | Reduce the target index without building the exponentially large decoded string | Walk backward through the encoding, halving `index` at each repeat marker |
+| LC 1823 Find the Winner of the Circular Game (Josephus) | Position reduction — winning position in a circle of n maps to a circle of n-1 | `return (josephus(n - 1, k) + k) % n;` |
 
 ---
 

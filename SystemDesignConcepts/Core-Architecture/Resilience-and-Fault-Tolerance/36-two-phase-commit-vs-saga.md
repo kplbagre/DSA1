@@ -132,49 +132,89 @@ KEY INVARIANT:
 
 3. **Compensation — Reverse order:** Service A compensates (refund). This is a NEW transaction, not a rollback.
 
-**Code example — 2PC (Java with JDBC):**
+**Code example — 2PC (Java with JTA/XA — the correct implementation):**
+
+> ⚠️ **Common interview mistake:** Two sequential `connection.commit()` calls is NOT 2PC — it has no coordinator, no PREPARE phase, and no recovery log. If `conn1.commit()` succeeds but `conn2.commit()` fails, the money is already gone from Account A with no way to reverse it. That's exactly the problem 2PC was invented to solve.
+>
+> **True 2PC** requires a Transaction Manager (TM) that drives the PREPARE → COMMIT/ROLLBACK protocol. In Java, this is the JTA/XA standard.
+
+**Steps (PREPARE/COMMIT/ROLLBACK phases):**
+
+1. **Phase 1 — PREPARE:** Coordinator (TM) sends `PREPARE` to each participant (XAResource). Each participant: locks the resources, writes to its undo/redo log, and votes YES or NO. Voted YES means: "I can commit if told to."
+2. **Phase 2 — COMMIT or ROLLBACK:** If ALL voted YES → TM broadcasts `COMMIT`. If ANY voted NO → TM broadcasts `ROLLBACK`. Participants finalize accordingly and release locks.
 
 ```java
-public class TwoPhaseCommitTransfer {
-    private Connection bank1Conn; // Account A
-    private Connection bank2Conn; // Account B
-    
-    public void transfer(String accountA, String accountB, BigDecimal amount) {
-        try {
-            // Phase 1 — Prepare
-            // Set autocommit false (manual transaction control)
-            bank1Conn.setAutoCommit(false);
-            bank2Conn.setAutoCommit(false);
-            
-            // Service A: deduct and lock
-            bank1Conn.executeUpdate(
-                "UPDATE accounts SET balance = balance - ? WHERE id = ?" ,
-                amount, accountA
+// JTA/XA: true 2PC with a Transaction Manager as coordinator
+// UserTransaction is the JTA API — the TM implements Phase 1 (PREPARE) and Phase 2 (COMMIT/ROLLBACK)
+@Service
+public class XATransfer {
+    // UserTransaction is the JTA coordinator — manages the PREPARE/COMMIT lifecycle
+    @Autowired
+    private UserTransaction userTransaction;
+
+    // XADataSource wraps each DB connection so the TM can drive its PREPARE/COMMIT phases
+    @Autowired
+    @Qualifier("bank1XADataSource")
+    private DataSource bank1DS;
+
+    @Autowired
+    @Qualifier("bank2XADataSource")
+    private DataSource bank2DS;
+
+    public void transfer(String accountA, String accountB, BigDecimal amount) throws Exception {
+        // TM enlists both XADataSource connections as participants in this transaction
+        userTransaction.begin();
+        try (Connection c1 = bank1DS.getConnection();
+             Connection c2 = bank2DS.getConnection()) {
+            // Phase 1 — PREPARE: TM asks each DB to prepare (locks rows, writes redo log, votes YES)
+            c1.createStatement().executeUpdate(
+                "UPDATE accounts SET balance = balance - " + amount + " WHERE id = '" + accountA + "'"
             );
-            // At this point, row is locked, but not committed
-            
-            // Service B: add and lock
-            bank2Conn.executeUpdate(
-                "UPDATE accounts SET balance = balance + ? WHERE id = ?",
-                amount, accountB
+            c2.createStatement().executeUpdate(
+                "UPDATE accounts SET balance = balance + " + amount + " WHERE id = '" + accountB + "'"
             );
-            // Both locked, both modified in memory
-            
-            // Phase 2 — Commit
-            // If we reach here, vote YES
-            bank1Conn.commit(); // Finalize, unlock
-            bank2Conn.commit(); // Finalize, unlock
-            
-        } catch (SQLException e) {
-            // Abort — rollback both
-            try {
-                bank1Conn.rollback();
-                bank2Conn.rollback();
-            } catch (SQLException ignored) {}
-            throw new TransactionFailedException("Transfer failed", e);
+            // Phase 2 — COMMIT: TM broadcasts COMMIT only after both voted YES
+            // If c2 had thrown, we'd fall into rollback below — TM broadcasts ROLLBACK to both
+            userTransaction.commit();
+        } catch (Exception e) {
+            // Phase 2 — ROLLBACK: TM broadcasts ROLLBACK to all participants
+            userTransaction.rollback();
+            throw e;
         }
     }
 }
+```
+
+### 🐞 Coordinator Failure — The Blocking Problem
+
+This is the critical 2PC weakness. Interviewers probe it: *"What happens if the coordinator crashes mid-commit?"*
+
+```
+Timeline of coordinator failure:
+
+Phase 1 complete: Both participants voted YES. TM writes "PREPARE complete" to its recovery log.
+                                       ↓
+                          TM CRASHES HERE
+                                       ↓
+Participants are now stuck:
+  - They voted YES (locked their resources, wrote redo log)
+  - They cannot commit (no COMMIT signal received from TM)
+  - They cannot abort (they already voted YES — aborting would violate the vote)
+  - They hold their locks indefinitely
+
+Result: deadlock until the TM recovers.
+
+Recovery path:
+  TM restarts → reads recovery log → "I was mid-commit, all voted YES"
+              → re-sends COMMIT to all participants
+              → participants apply the committed state, release locks
+
+Failure if recovery log is lost: manual operator intervention required.
+This is why 2PC is called a "blocking protocol" — participants block until the TM recovers.
+Three-Phase Commit (3PC) was invented to solve this, but adds another round trip and is rarely used.
+```
+
+> **Interview line:** "2PC's fundamental weakness is the blocking problem — if the coordinator crashes between Phase 1 and Phase 2, all participants hold their locks indefinitely until the coordinator recovers. This is why 2PC is impractical across geographic regions with unreliable network links."
 
 // Saga Pattern (Orchestration variant)
 public class SagaOrchestrator {

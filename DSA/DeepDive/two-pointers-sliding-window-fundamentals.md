@@ -97,7 +97,9 @@ This is the single most common terminology trap. Same trap appears in arrays-fun
 
 ---
 
-## 🛠️ Java Skeleton & Idioms
+## 🔨 Setup — Phase 1 Before the Window Loop
+
+> **The Phase 1 question for two pointers / sliding window:** *Before I write the main loop, how do I initialize the window, which skeleton do I use (fixed vs variable vs converging), and what guards go at the top?* The most common two-pointer bugs are not algorithmic — they're setup failures: wrong pointer starting positions, forgetting the fixed-window pre-population step, or missing the `atMost(k) − atMost(k−1)` frame for exact-K problems.
 
 ```java
 // Generic sliding window skeleton — memorize this shape, then specialize
@@ -158,6 +160,93 @@ if (newCount == 0) {
     map.put(left, newCount);
 }
 ```
+
+### Window Initialization — `left = 0, right = 0` (universal starting point)
+
+Both pointers start at index 0. `right` expands; `left` shrinks. **Never start with `right = -1`** — that forces a special-case first iteration.
+
+```java
+int left = 0;   // ✅ always 0
+int right = 0;  // ✅ always 0 — the outer for-loop advances right on every tick
+```
+
+The outer loop `for (int right = 0; right < n; right++)` moves `right` forward unconditionally. The inner `while` moves `left` forward only when the window violates the constraint. Both pointers traverse the array at most once → O(n).
+
+---
+
+### Fixed-Window Pre-Population Trap
+
+For a fixed window of size `k`, populate the first window in a **separate loop before the sliding loop** — not inside it.
+
+```java
+// ❌ WRONG — tries to handle the first window inside the slide loop
+for (int right = 0; right < n; right++) {
+    windowSum += nums[right];
+    if (right >= k) {                          // ← misses recording the first window
+        windowSum -= nums[right - k];
+        best = Math.max(best, windowSum);
+    }
+}
+
+// ✅ CORRECT — Phase 1: build first window; Phase 2: slide
+long windowSum = 0;
+for (int i = 0; i < k; i++) {                  // Phase 1 — first window (indices 0..k-1)
+    windowSum += nums[i];
+}
+long best = windowSum;                          // record BEFORE sliding
+for (int right = k; right < n; right++) {      // Phase 2 — slide one step at a time
+    windowSum += nums[right];
+    windowSum -= nums[right - k];
+    best = Math.max(best, windowSum);
+}
+```
+
+> **Why the ❌ version breaks:** when `n == k` (the first window IS the only window), the `if (right >= k)` branch never triggers, so `best` stays 0. See full template in `#### Template 1 — Fixed-Size Window` below.
+
+---
+
+### Exact-K Recognition → Two-Call Setup
+
+The instant you read **"number of subarrays with exactly K distinct / K sum / K odd..."** in the problem, stop and write the two-call frame FIRST before implementing anything:
+
+```java
+// Step 1 — write this shell immediately on seeing "exactly K":
+public int countExactlyK(int[] nums, int k) {
+    return atMost(nums, k) - atMost(nums, k - 1);  // ← write this line FIRST
+}
+
+// Step 2 — then implement the helper:
+private int atMost(int[] nums, int k) {
+    int left = 0;
+    int count = 0;
+    // ... variable window that counts subarrays with AT MOST k of the thing
+    return count;
+}
+```
+
+**Why this is Phase 1, not an optimization:** a single window for "exactly K" breaks — shrinking may overshoot valid windows because distinct-count is not monotone with shrinking. Writing `atMost(k) - atMost(k-1)` first locks in the correct structure before any loop appears.
+
+**Edge case already handled:** when `k = 0`, `atMost(nums, -1)` returns 0 naturally — the `while` loop can never reduce distinct count below 0, so no subarrays are counted.
+
+---
+
+### Edge Case Guards Before the Loop
+
+Write these at the top of the method, before any loop:
+
+```java
+// Guard 1 — fixed window: k larger than input (always add for Template 1)
+if (nums.length < k) {
+    return 0;
+}
+
+// Guard 2 — empty input (only if constraints don't guarantee 1 ≤ n)
+if (nums == null || nums.length == 0) {
+    return 0;
+}
+```
+
+> **Rule:** Guard 1 is mandatory for every fixed-window problem. Guard 2 only if LeetCode constraints say `n ≥ 1` is NOT guaranteed (rare — check constraints first). If your loop breaks on a single element, the bug is in the loop logic, not a missing guard.
 
 ---
 
@@ -247,6 +336,11 @@ Every sliding-window problem reduces to answering three questions:
 3. **What do I track?** `max length`, `min length`, `count`, `existence`, `actual subarray`.
 
 Answer these three and the code writes itself.
+
+> **⬛ Before writing the loop — answer these 3 setup questions first:**
+> 1. **Which template?** Fixed K / longest valid / shortest valid / count-exactly → pick one before touching the loop.
+> 2. **Fixed window (Template 1)?** → pre-populate the first `k` elements in a separate loop BEFORE the sliding loop. See `### Fixed-Window Pre-Population Trap` above.
+> 3. **"Exactly K" in the problem?** → write `return atMost(k) - atMost(k-1);` FIRST, then implement `atMost`. See `### Exact-K Recognition → Two-Call Setup` above.
 
 ### The Four Canonical Templates
 
@@ -1124,150 +1218,731 @@ These red flags mean sliding window will *not* work:
 
 ## 🔬 Worked Walkthroughs
 
-Pick a problem, watch the window state evolve frame-by-frame. These are the five most teaching-dense problems in the playlist.
+Eleven canonical problems — one per structurally unique shape. Every walkthrough follows the 5-part format: Problem → Brute Force → Intuition Bridge → Steps + Code → Transfers To.
+
+> **Note:** LC 1004 Max Consecutive Ones III was in an earlier version of this section. It transfers directly from WW-6 (LC 424) — same template, binary values instead of 26 chars. See that Transfers-to table.
 
 ---
 
-### Walkthrough 1 — LC 3: Longest Substring Without Repeating [L3] ✅
+### WW-1 — LC 167 Two Sum II
 
-**Input:** `s = "abcabcbb"`
+> **Problem:** Given a **sorted** array `numbers` and a `target`, return the 1-indexed positions of the two numbers that add up to `target`. Exactly one solution exists.
 
-**Approach:** Template 2 (Longest Valid). Window invariant: no char repeats. Shrink whenever the new right-char is already in the window.
+**Brute force:** Try every pair `(i, j)` with `i < j`, check if `numbers[i] + numbers[j] == target`. O(n²) pairs.
+> **Time:** O(n²) | **Space:** O(1)
 
-| Step | right | c | window before | freq state | shrink? | left after | window after | answer |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 0 | 'a' | `""` | `{a:1}` | no | 0 | `"a"` | 1 |
-| 2 | 1 | 'b' | `"a"` | `{a:1, b:1}` | no | 0 | `"ab"` | 2 |
-| 3 | 2 | 'c' | `"ab"` | `{a:1, b:1, c:1}` | no | 0 | `"abc"` | 3 |
-| 4 | 3 | 'a' | `"abc"` | a now 2 — shrink | yes | 1 | `"bca"` | 3 |
-| 5 | 4 | 'b' | `"bca"` | b now 2 — shrink | yes | 2 | `"cab"` | 3 |
-| 6 | 5 | 'c' | `"cab"` | c now 2 — shrink | yes | 3 | `"abc"` | 3 |
-| 7 | 6 | 'b' | `"abc"` | b now 2 — shrink twice | yes | 5 | `"cb"` | 3 |
-| 8 | 7 | 'b' | `"cb"` | b now 2 — shrink twice | yes | 7 | `"b"` | 3 |
+**Intuition bridge — what cracks it open:** The array is sorted. Start with the widest possible window — left at 0, right at n-1. If the sum is too large, we must decrease it: the only way is to move right leftward (smaller value). If too small, move left rightward. Every step eliminates one element with certainty — no wasted moves. O(n) total.
 
-**Answer: 3** — `"abc"`.
+**Steps in plain English:**
 
-> **Pedagogy:** Each shrink restores the invariant. Each `right` step records the answer once. Total work = 2n.
+1. **Two pointers:** `left = 0`, `right = n - 1`.
+2. **While `left < right`:** compute `sum = numbers[left] + numbers[right]`.
+   - If `sum == target`: return `{left+1, right+1}` (1-indexed).
+   - If `sum > target`: `right--` (sum too big; make it smaller).
+   - If `sum < target`: `left++` (sum too small; make it bigger).
 
----
+```java
+public int[] twoSum(int[] numbers, int target) {
+    // Step 1
+    int left = 0;
+    int right = numbers.length - 1;
 
-### Walkthrough 2 — LC 1004: Max Consecutive Ones III [L4] ✅
+    // Step 2
+    while (left < right) {
+        int sum = numbers[left] + numbers[right];
+        if (sum == target) {
+            return new int[]{ left + 1, right + 1 };
+        } else if (sum > target) {
+            right--;
+        } else {
+            left++;
+        }
+    }
+    // guaranteed to find solution per problem statement
+    return new int[]{ -1, -1 };
+}
+```
 
-**Input:** `nums = [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0]`, `k = 2`
+**Time:** O(n) | **Space:** O(1)
 
-**Approach:** Template 2. Invariant: at most `k` zeros in window. State: a single `int zeros` counter.
+**Transfers to:**
 
-| right | nums[r] | zeros | shrink? | left | win len | answer |
-| --- | --- | --- | --- | --- | --- | --- |
-| 0 | 1 | 0 | no | 0 | 1 | 1 |
-| 1 | 1 | 0 | no | 0 | 2 | 2 |
-| 2 | 1 | 0 | no | 0 | 3 | 3 |
-| 3 | 0 | 1 | no | 0 | 4 | 4 |
-| 4 | 0 | 2 | no | 0 | 5 | 5 |
-| 5 | 0 | 3 | **shrink to 3** | 4 | 2 | 5 |
-| 6 | 1 | 3 | **shrink to 2** | 5 | 2 | 5 |
-| 7 | 1 | 2 | no | 5 | 3 | 5 |
-| 8 | 1 | 2 | no | 5 | 4 | 5 |
-| 9 | 1 | 2 | no | 5 | 5 | 5 |
-| 10 | 0 | 3 | **shrink to 2** | 6 | 5 | 5 |
-
-**Answer: 6** — wait, let me re-check this... Actually it's `6` because the window `[5, 6, 7, 8, 9]` is `[0, 1, 1, 1, 1]` — len 5, then at right=10, `nums[10]=0`, zeros becomes 3, shrink past index 4 (zero) and index 5 (zero) — left jumps to 6, window `[6..10]` = `[1, 1, 1, 1, 0]` len 5. Hmm, so max stays 5.
-
-Let me re-trace with actual answer **6**: at right=9 with window `[3..9]` = `[0, 0, 0, 1, 1, 1, 1]` — that's 3 zeros, invalid. Shrink — actually `[4..9]` = `[0, 0, 1, 1, 1, 1]` — still 2 zeros, valid, len 6. So answer = 6 from right=9.
-
-**Answer: 6** — flip the two zeros at indices 4 and 5 to get `[1, 1, 1, 1, 1, 1]` of length 6 starting at index 4.
-
-> **Pedagogy:** "Zeros" is the perfect state for K-flip problems. Don't store the full freq map when you only care about one element type.
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 15 3Sum | Converging two pointers on sorted array | Outer loop fixes one element; skip duplicates | `for (int i = 0; i < n-2; i++) { left = i+1; right = n-1; ... }` |
+| LC 16 3Sum Closest | Same converging pointers | Track closest sum instead of exact match | `if (Math.abs(sum - target) < Math.abs(best - target)) best = sum` |
+| LC 977 Squares of a Sorted Array | Same two-pointer, same converge direction | Build result from outside-in (largest squares at ends) | `result[pos--] = leftSq > rightSq ? leftSq++ : rightSq--` |
 
 ---
 
-### Walkthrough 3 — LC 992: Subarrays with K Different Integers [L11] ⭐
+### WW-2 — LC 15 3Sum
 
-**Input:** `nums = [1, 2, 1, 2, 3]`, `k = 2`
+> **Problem:** Given `nums`, return all unique triplets `[a, b, c]` such that `a + b + c == 0`.
 
-**Approach:** Template 4. `exactly(2) = atMost(2) − atMost(1)`.
+**Brute force:** Try every triple `(i, j, k)` — O(n³). Deduplicate in a set. Still slow.
+> **Time:** O(n³) | **Space:** O(n) for dedup set
 
-**atMost(2) trace** (window must have ≤ 2 distinct):
+**Intuition bridge — what cracks it open:** Fix one element `nums[i]` and reduce to Two Sum on the remaining sorted portion — exactly WW-1 with `target = -nums[i]`. Sorting upfront lets us skip duplicates by checking `nums[i] == nums[i-1]` and `nums[left] == nums[left-1]` after a match.
 
-| right | nums[r] | freq | distinct | shrink? | left | win len | count += |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 1 | {1:1} | 1 | no | 0 | 1 | 1 |
-| 1 | 2 | {1:1, 2:1} | 2 | no | 0 | 2 | 2 |
-| 2 | 1 | {1:2, 2:1} | 2 | no | 0 | 3 | 3 |
-| 3 | 2 | {1:2, 2:2} | 2 | no | 0 | 4 | 4 |
-| 4 | 3 | {1:2, 2:2, 3:1} | 3 | shrink to {2:2, 3:1} | 2 | 3 | 3 |
+**Steps in plain English:**
 
-`atMost(2) = 1 + 2 + 3 + 4 + 3 = 13`
+1. **Sort `nums`.**
+2. **Outer loop** from `i = 0` to `n-3`: skip if `nums[i] == nums[i-1]` (duplicate outer element).
+3. **Two-pointer inner loop** on `[i+1, n-1]` with `target = -nums[i]`.
+4. On match: record triplet, skip duplicate `left` and `right` values, advance both pointers.
 
-**atMost(1) trace** (window must have ≤ 1 distinct):
+```java
+public List<List<Integer>> threeSum(int[] nums) {
+    // Step 1
+    Arrays.sort(nums);
+    List<List<Integer>> result = new ArrayList<>();
+    int n = nums.length;
 
-| right | nums[r] | freq | shrink? | left | count += |
-| --- | --- | --- | --- | --- | --- |
-| 0 | 1 | {1:1} | no | 0 | 1 |
-| 1 | 2 | shrink | yes | 1 | 1 |
-| 2 | 1 | shrink | yes | 2 | 1 |
-| 3 | 2 | shrink | yes | 3 | 1 |
-| 4 | 3 | shrink | yes | 4 | 1 |
+    // Step 2
+    for (int i = 0; i < n - 2; i++) {
+        if (i > 0 && nums[i] == nums[i - 1]) {
+            continue;
+        }
+        // Step 3 — two-pointer on [i+1, n-1]
+        int left = i + 1;
+        int right = n - 1;
+        while (left < right) {
+            int sum = nums[i] + nums[left] + nums[right];
+            if (sum == 0) {
+                // Step 4 — record and skip duplicates
+                result.add(Arrays.asList(nums[i], nums[left], nums[right]));
+                while (left < right && nums[left] == nums[left + 1]) {
+                    left++;
+                }
+                while (left < right && nums[right] == nums[right - 1]) {
+                    right--;
+                }
+                left++;
+                right--;
+            } else if (sum < 0) {
+                left++;
+            } else {
+                right--;
+            }
+        }
+    }
+    return result;
+}
+```
 
-`atMost(1) = 1 + 1 + 1 + 1 + 1 = 5`
+**Time:** O(n²) | **Space:** O(1) output excluded
 
-**Answer: 13 − 5 = 8.**
+**Transfers to:**
 
-Verifying by listing subarrays of `[1, 2, 1, 2, 3]` with exactly 2 distinct: `[1,2]`, `[2,1]`, `[1,2,1]`, `[2,1,2]`, `[1,2]` (the second one starting at index 2), `[1,2,1,2]`, `[2,1,2]`(from index 1), and… you get 8. ✓
-
-> **Pedagogy:** This is the canonical "atMost(K) − atMost(K−1)" problem. Internalize this trace. Reproduce it on a whiteboard if you can't.
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 16 3Sum Closest | Same outer + inner two-pointer | Track closest sum, no dedup needed | `if (Math.abs(sum) < Math.abs(best)) best = sum` |
+| LC 18 4Sum | Same outer loop + inner two-pointer | Two outer loops fix two elements | `for (int i = ...) for (int j = i+1; ...) { left = j+1; right = n-1; }` |
+| LC 259 3Sum Smaller | Same sort + outer + inner | Count pairs where sum < target instead of equal | `result += right - left` when sum < target (all pairs [left..right] work) |
 
 ---
 
-### Walkthrough 4 — LC 424: Longest Repeating Character Replacement [L8] ⭐
+### WW-3 — LC 11 Container With Most Water
 
-**Input:** `s = "AABABBA"`, `k = 1`
+> **Problem:** Given `height[i]` representing vertical lines, find two lines that together with the x-axis form a container holding the most water.
 
-**Approach:** Template 2 with `maxFreqEver` trick. Invariant: `windowLen − maxFreq ≤ k`.
+**Brute force:** Try every pair `(i, j)`, compute `min(height[i], height[j]) × (j - i)`, track the max. O(n²).
+> **Time:** O(n²) | **Space:** O(1)
 
-| right | c | freq[c] after | maxFreq | windowLen | windowLen − maxFreq | shrink? | left | answer |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | A | A:1 | 1 | 1 | 0 | no | 0 | 1 |
-| 1 | A | A:2 | 2 | 2 | 0 | no | 0 | 2 |
-| 2 | B | A:2, B:1 | 2 | 3 | 1 | no | 0 | 3 |
-| 3 | A | A:3, B:1 | 3 | 4 | 1 | no | 0 | 4 |
-| 4 | B | A:3, B:2 | 3 | 5 | 2 | shrink once | 1 | 4 |
-| 5 | B | A:2, B:3 | 3 (stale!) | 5 | 2 | shrink once | 2 | 4 |
-| 6 | A | A:3, B:3 | 3 (stale!) | 5 | 2 | shrink once | 3 | 4 |
+**Intuition bridge — what cracks it open:** Start at the widest possible container (left=0, right=n-1). Moving the taller line inward strictly shrinks width AND keeps the same bottleneck (min height stays ≤ the taller line) — can only hurt. Moving the shorter line inward shrinks width but has a chance of finding a taller line — the only move that could possibly increase area. So always move the pointer on the shorter side.
 
-**Answer: 4** — `"AABA"` (flip the B at index 2) or `"ABBA"` (flip the A at index 3).
+**Steps in plain English:**
 
-> **Notice:** at step 5, `maxFreq` is recorded as 3 but the actual max in the window `[2..5]` is `B:3` — actually still 3. At step 6, real max is `A:3` and `B:3` — still 3. So in this trace, `maxFreq` is *not* stale. But the algorithm tolerates staleness gracefully. Try the input `"BAAAB"` with `k = 0` to see actual staleness.
+1. **Two pointers:** `left = 0`, `right = n - 1`, `maxArea = 0`.
+2. **While `left < right`:** compute `area = min(height[left], height[right]) × (right - left)`; update `maxArea`.
+3. **Move the shorter side:** if `height[left] <= height[right]`, `left++`; else `right--`.
+4. **Return `maxArea`.**
+
+```java
+public int maxArea(int[] height) {
+    // Step 1
+    int left = 0;
+    int right = height.length - 1;
+    int maxArea = 0;
+
+    // Step 2, 3
+    while (left < right) {
+        int area = Math.min(height[left], height[right]) * (right - left);
+        maxArea = Math.max(maxArea, area);
+        if (height[left] <= height[right]) {
+            left++;
+        } else {
+            right--;
+        }
+    }
+    // Step 4
+    return maxArea;
+}
+```
+
+**Time:** O(n) | **Space:** O(1)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 42 Trapping Rain Water | Two-pointer, running max from each side | Sum water at EVERY bar, not just between two lines | `water += Math.min(leftMax, rightMax) - height[mid]` per bar |
+| LC 84 Largest Rectangle in Histogram | Maximize area × width | Monotonic stack, not two-pointer | `area = height[stack.pop()] * (right - left - 1)` |
 
 ---
 
-### Walkthrough 5 — LC 76: Minimum Window Substring [L12] 🟡
+### WW-4 — LC 42 Trapping Rain Water
 
-**Input:** `s = "ADOBECODEBANC"`, `t = "ABC"`
+> **Problem:** Given `height[]` representing an elevation map, compute how much water can be trapped after raining.
 
-**Approach:** Template 3 + `formed` counter trick.
+**Brute force:** For each bar `i`, find `maxLeft[i]` and `maxRight[i]` by scanning left and right. Water at `i = min(maxLeft[i], maxRight[i]) - height[i]`. Two O(n) precomputation arrays, then one pass.
+> **Time:** O(n) | **Space:** O(n)
 
-Setup: `need = {A:1, B:1, C:1}`, `required = 3` (3 distinct chars to cover).
+**Intuition bridge — what cracks it open:** We need both `maxLeft` and `maxRight` at every position, but we don't need to precompute them all upfront. Two pointers from each end maintain running maxes. The key insight: water at position `i` is determined by the *smaller* of the two wall maxes. If `leftMax < rightMax`, we know the left side is the bottleneck — process left pointer and advance it, guaranteed we have enough info. Mirror for the right side.
 
-| right | c | window | freq[c] after | formed | shrink loop? | bestLen | bestLeft |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | A | A | A:1 | 1 | no | ∞ | — |
-| 1 | D | AD | A:1, D:1 | 1 | no | ∞ | — |
-| 2 | O | ADO | + O:1 | 1 | no | ∞ | — |
-| 3 | B | ADOB | + B:1 | 2 | no | ∞ | — |
-| 4 | E | ADOBE | + E:1 | 2 | no | ∞ | — |
-| 5 | C | ADOBEC | + C:1 | **3** | yes — shrink to "DOBEC" then formed drops | 6 | 0 |
-| 6 | O | DOBECO | continue | 2 | no | 6 | 0 |
-| 7 | D | DOBECOD | continue | 2 | no | 6 | 0 |
-| 8 | E | DOBECODE | continue | 2 | no | 6 | 0 |
-| 9 | B | DOBECODEB | + B:2 | 2 | no | 6 | 0 |
-| 10 | A | DOBECODEBA | + A:1 | **3** | yes — shrink to "OBECODEBA" then "BECODEBA" then "ECODEBA" then "CODEBA" then "ODEBAN"... | 6 ➝ tighter at len 5 → "CODEBA" len 6, etc. | … |
-| 11 | N | CODEBAN | C:1, A:1, B:1 still | 3 | yes — shrink | … | … |
-| 12 | C | CODEBANC | C:2 | 3 | yes — shrink past first C → "ODEBANC" then "DEBANC" then "EBANC" then "BANC" | **4** | 9 |
+**Steps in plain English:**
 
-**Answer: `"BANC"`** — length 4, starting at index 9.
+1. **Two pointers** `left = 0`, `right = n-1`; `leftMax = 0`, `rightMax = 0`, `water = 0`.
+2. **While `left < right`:**
+   - If `height[left] <= height[right]`: `leftMax` is the bottleneck. Water at left = `leftMax - height[left]` (if positive). Advance `left`.
+   - Else: `rightMax` is the bottleneck. Water at right = `rightMax - height[right]`. Advance `right`.
+3. **Return `water`.**
 
-> **Pedagogy:** The `formed` counter eliminates the per-step map comparison. Window is valid iff `formed == required`. When you decrement a freq below its required, you decrement `formed`. Beautiful trick.
+```java
+public int trap(int[] height) {
+    // Step 1
+    int left = 0;
+    int right = height.length - 1;
+    int leftMax = 0;
+    int rightMax = 0;
+    int water = 0;
+
+    // Step 2
+    while (left < right) {
+        if (height[left] <= height[right]) {
+            // left side is the bottleneck — we know rightMax >= height[right] >= height[left]
+            leftMax = Math.max(leftMax, height[left]);
+            water += leftMax - height[left];
+            left++;
+        } else {
+            rightMax = Math.max(rightMax, height[right]);
+            water += rightMax - height[right];
+            right--;
+        }
+    }
+    // Step 3
+    return water;
+}
+```
+
+**Time:** O(n) | **Space:** O(1)
+
+### 🎨 Visual — two-pointer water accumulation on [0,1,0,2,1,0,1,3,2,1,2,1]
+
+```
+height:  0  1  0  2  1  0  1  3  2  1  2  1
+         L→                             ←R
+
+At L=0: leftMax=0, rightMax=0, height[L]=0  → water += 0-0=0,  L→1
+At L=1: leftMax=1, height[L]=1              → water += 1-1=0,  L→2
+At L=2: leftMax=1, height[L]=0              → water += 1-0=1,  L→3
+At L=3: leftMax=2, height[L]=2              → water += 2-2=0,  L→4
+At L=4: leftMax=2, height[L]=1              → water += 2-1=1,  L→5
+At L=5: leftMax=2, height[L]=0              → water += 2-0=2,  L→6
+        ... and so on until L meets R
+
+Total water = 6
+
+KEY INVARIANT:
+  When height[left] ≤ height[right], leftMax is the true cap on water at left
+  because rightMax (≥ height[right] ≥ height[left]) is guaranteed to be larger.
+  The smaller side is always safe to process.
+```
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 11 Container With Most Water | Two pointers, move shorter side | Only two bars matter, no inner bars | `area = min(h[l], h[r]) * (r - l)` — no accumulation |
+| LC 407 Trapping Rain Water II | Same water-at-min-wall concept | 3D grid — use min-heap (BFS from boundary) | `PriorityQueue<int[]> pq = new PriorityQueue<>((a,b) -> a[2]-b[2])` |
+
+---
+
+### WW-5 — LC 3 Longest Substring Without Repeating Characters
+
+> **Problem:** Given string `s`, return the length of the longest substring that contains no repeating characters.
+
+**Brute force:** Check every substring `s[i..j]` for uniqueness (via HashSet). O(n²) substrings × O(n) check = O(n³). With a set reuse trick, O(n²).
+> **Time:** O(n²) | **Space:** O(min(n, 26))
+
+**Intuition bridge — what cracks it open:** Keep a window `[left, right]` with no duplicates. When `s[right]` is already in the window, we must shrink from the left until the duplicate is gone — but not one step further. A HashMap tracking each char's last-seen index lets us jump `left` directly past the duplicate instead of shrinking one-by-one.
+
+**Steps in plain English:**
+
+1. **`HashMap<Character, Integer> lastSeen`** to track each char's most recent index.
+2. **Scan `right` from 0 to n-1:** if `s[right]` is in the map AND its last index ≥ `left`, jump `left` to `lastSeen.get(s[right]) + 1` (skip past the old occurrence).
+3. **Update `lastSeen`** with current index. Record `maxLen = max(maxLen, right - left + 1)`.
+4. **Return `maxLen`.**
+
+```java
+public int lengthOfLongestSubstring(String s) {
+    // Step 1
+    Map<Character, Integer> lastSeen = new HashMap<>();
+    int maxLen = 0;
+    int left = 0;
+
+    // Step 2, 3
+    for (int right = 0; right < s.length(); right++) {
+        char c = s.charAt(right);
+        if (lastSeen.containsKey(c) && lastSeen.get(c) >= left) {
+            // jump left past the previous occurrence
+            left = lastSeen.get(c) + 1;
+        }
+        lastSeen.put(c, right);
+        maxLen = Math.max(maxLen, right - left + 1);
+    }
+    // Step 4
+    return maxLen;
+}
+```
+
+**Time:** O(n) | **Space:** O(min(n, charset))
+
+### 🎨 Visual — left pointer jumps on "abcabcbb"
+
+```
+s:    a  b  c  a  b  c  b  b
+idx:  0  1  2  3  4  5  6  7
+
+right=0: c='a', left=0 → window [a],      len=1
+right=1: c='b', left=0 → window [ab],     len=2
+right=2: c='c', left=0 → window [abc],    len=3
+right=3: c='a', last='a'@0 ≥ left=0 → left jumps to 1
+                           window [bca],   len=3
+right=4: c='b', last='b'@1 ≥ left=1 → left jumps to 2
+                           window [cab],   len=3
+right=5: c='c', last='c'@2 ≥ left=2 → left jumps to 3
+                           window [abc],   len=3
+right=6: c='b', last='b'@4 ≥ left=3 → left jumps to 5
+                           window [cb],    len=2
+right=7: c='b', last='b'@6 ≥ left=5 → left jumps to 7
+                           window [b],     len=1
+
+maxLen = 3
+
+KEY INVARIANT:
+  left always sits one step past the most recent duplicate of whatever right just saw.
+  The check `lastSeen.get(c) >= left` prevents stale map entries from pulling left backward.
+```
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 159 Longest Substring with At Most Two Distinct | Same variable window + shrink | Shrink when distinct count exceeds 2 | `while (freq.size() > 2) { remove freq[s[left]]; left++ }` |
+| LC 340 Longest Substring with At Most K Distinct | Same template | Parameterized on K distinct | Replace `> 2` with `> k` |
+| LC 424 Longest Repeating Char Replacement | Variable window | Track dominant freq instead of uniqueness | See WW-6 below |
+
+---
+
+### WW-6 — LC 424 Longest Repeating Character Replacement
+
+> **Problem:** Given string `s` and integer `k`, return the length of the longest substring you can get by replacing at most `k` characters to make all chars the same.
+
+**Brute force:** Try every substring, count replacements needed (window size − max frequency in window), check if ≤ k. O(n²) substrings × O(26) per window = O(26n²).
+> **Time:** O(26n²) | **Space:** O(26)
+
+**Intuition bridge — what cracks it open:** Replacements needed for a window = `windowLen - maxFreqInWindow`. Instead of shrinking until valid and losing progress, slide (not shrink) the window when it becomes invalid. Track `maxFreqEver` — a global high-water mark that only increases. If `windowLen - maxFreqEver > k`, slide one step right. This preserves the length of the best valid window found so far and never shrinks below it.
+
+**Steps in plain English:**
+
+1. **`int[] freq`** (size 26), `maxFreqEver = 0`, `left = 0`.
+2. **Scan `right`:** increment `freq[c]`; update `maxFreqEver = max(maxFreqEver, freq[c])`.
+3. **If `(right - left + 1) - maxFreqEver > k`:** slide — decrement `freq[s[left]]`, `left++`.
+4. **Answer = `right - left + 1`** at the end of the loop (window never shrinks, only slides).
+
+```java
+public int characterReplacement(String s, int k) {
+    // Step 1
+    int[] freq = new int[26];
+    int maxFreqEver = 0;
+    int left = 0;
+
+    // Step 2, 3
+    for (int right = 0; right < s.length(); right++) {
+        freq[s.charAt(right) - 'A']++;
+        maxFreqEver = Math.max(maxFreqEver, freq[s.charAt(right) - 'A']);
+
+        if ((right - left + 1) - maxFreqEver > k) {
+            // slide — don't shrink; just shift the window one step
+            freq[s.charAt(left) - 'A']--;
+            left++;
+        }
+    }
+    // Step 4 — window is at its maximum valid length
+    return s.length() - left;
+}
+```
+
+**Time:** O(n) | **Space:** O(26) = O(1)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 1004 Max Consecutive Ones III | Exact same slide-not-shrink template | Binary (0/1) — `maxFreqEver` is just count of 1s | `freq[nums[right]]++; maxFreqEver = Math.max(maxFreqEver, freq[1])` |
+| LC 2024 Maximize the Confusion | Same template | Maximize window where either T or F can be the dominant char — run twice | Run characterReplacement logic for 'T' and for 'F', take max |
+| LC 3 Longest Substring No Repeat | Same variable window | Uniqueness constraint, not replacement count | Uses HashSet/HashMap instead of freq + maxFreq |
+
+---
+
+### WW-7 — LC 567 Permutation in String
+
+> **Problem:** Given strings `s1` and `s2`, return true if any permutation of `s1` is a substring of `s2`.
+
+**Brute force:** Generate all permutations of `s1`, check each against `s2`. O(len(s1)! × len(s2)) — completely impractical.
+> **Time:** O(n!) | **Space:** O(n)
+
+**Intuition bridge — what cracks it open:** A permutation of `s1` is a substring of `s2` iff some fixed-length window of `s2` has exactly the same character frequencies as `s1`. Fixed window size = `len(s1)`. Slide it across `s2`, updating one character in/out per step, and compare freq arrays in O(26) each step.
+
+**Steps in plain English:**
+
+1. **Build `need[26]`** from `s1`. **Build `window[26]`** from the first `len(s1)` chars of `s2`.
+2. **If `window == need`**, return true immediately.
+3. **Slide** from index `len(s1)` to `len(s2) - 1`: add `s2[right]`, remove `s2[right - len(s1)]`, compare arrays.
+4. **Return false** if no match found.
+
+```java
+public boolean checkInclusion(String s1, String s2) {
+    if (s1.length() > s2.length()) {
+        return false;
+    }
+    int[] need = new int[26];
+    int[] window = new int[26];
+    int k = s1.length();
+
+    // Step 1
+    for (int i = 0; i < k; i++) {
+        need[s1.charAt(i) - 'a']++;
+        window[s2.charAt(i) - 'a']++;
+    }
+    // Step 2
+    if (Arrays.equals(window, need)) {
+        return true;
+    }
+    // Step 3
+    for (int right = k; right < s2.length(); right++) {
+        window[s2.charAt(right) - 'a']++;
+        window[s2.charAt(right - k) - 'a']--;
+        if (Arrays.equals(window, need)) {
+            return true;
+        }
+    }
+    // Step 4
+    return false;
+}
+```
+
+**Time:** O(26 × n) = O(n) | **Space:** O(26) = O(1)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 438 Find All Anagrams in a String | Exact same fixed-window freq comparison | Collect ALL matching start indices, not just true/false | `if (Arrays.equals(window, need)) result.add(right - k + 1)` |
+| LC 76 Minimum Window Substring | Same idea (cover all of s1's chars) | Variable window (not fixed); minimize length | See WW-8 — much harder variant |
+| LC 30 Substring with Concatenation | Same fixed total window, freq match | Words as units (len > 1), not single chars | See WW-11 |
+
+---
+
+### WW-8 — LC 76 Minimum Window Substring
+
+> **Problem:** Given strings `s` and `t`, return the minimum window substring of `s` that contains all characters of `t`. Return empty string if none exists.
+
+**Brute force:** Try every substring of `s`; check if it contains all chars of `t`. O(n²) substrings × O(m) check per substring.
+> **Time:** O(n²m) | **Space:** O(m)
+
+**Intuition bridge — what cracks it open:** Expand right until the window is valid (covers all of `t`). Then shrink from the left to find the minimum valid window. The `formed` counter tracks how many distinct chars in `t` have been satisfied — avoiding a full map comparison on every step. Shrink until `formed < required`, then expand again.
+
+**Steps in plain English:**
+
+1. **Build `need`** map from `t`. `required = need.size()` (distinct chars needed).
+2. **Expand `right`:** increment `windowFreq[c]`; if `windowFreq[c] == need.get(c)`, increment `formed`.
+3. **When `formed == required`:** record window if it's the best. Shrink from left — decrement freq of `s[left]`; if it drops below `need`, decrement `formed`. Advance `left`.
+4. **Return the best window substring,** or `""` if none found.
+
+```java
+public String minWindow(String s, String t) {
+    if (s.isEmpty() || t.isEmpty()) {
+        return "";
+    }
+    // Step 1
+    Map<Character, Integer> need = new HashMap<>();
+    for (char c : t.toCharArray()) {
+        need.merge(c, 1, Integer::sum);
+    }
+    int required = need.size();
+    Map<Character, Integer> windowFreq = new HashMap<>();
+    int formed = 0;
+    int left = 0;
+    int bestLen = Integer.MAX_VALUE;
+    int bestLeft = 0;
+
+    // Step 2
+    for (int right = 0; right < s.length(); right++) {
+        char c = s.charAt(right);
+        windowFreq.merge(c, 1, Integer::sum);
+        if (need.containsKey(c) && windowFreq.get(c).equals(need.get(c))) {
+            formed++;
+        }
+
+        // Step 3 — shrink while valid
+        while (formed == required) {
+            if (right - left + 1 < bestLen) {
+                bestLen = right - left + 1;
+                bestLeft = left;
+            }
+            char lc = s.charAt(left);
+            windowFreq.merge(lc, -1, Integer::sum);
+            if (need.containsKey(lc) && windowFreq.get(lc) < need.get(lc)) {
+                formed--;
+            }
+            left++;
+        }
+    }
+    // Step 4
+    return bestLen == Integer.MAX_VALUE ? "" : s.substring(bestLeft, bestLeft + bestLen);
+}
+```
+
+**Time:** O(n + m) | **Space:** O(n + m)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 567 Permutation in String | Same coverage check | Fixed window (simpler); freq arrays not maps | `Arrays.equals(window, need)` |
+| LC 727 Minimum Window Subsequence | Same minimize-window goal | `t` must appear as a **subsequence** — DP/two-pass | Forward pass finds end; backward pass finds minimal start |
+| LC 1234 Replace the Substring for Balanced String | Same shrink-when-valid | Target is balance across 4 chars, not coverage of t | Track excess per char; shrink while all excesses ≤ n/4 |
+
+---
+
+### WW-9 — LC 992 Subarrays with K Different Integers
+
+> **Problem:** Given `nums` and `k`, return the number of subarrays with **exactly** `k` distinct integers.
+
+**Brute force:** Try every subarray `[i..j]`, count distinct with a set, check if equals `k`. O(n²) subarrays × O(n) per check = O(n³); O(n²) with a set maintained incrementally.
+> **Time:** O(n²) | **Space:** O(n)
+
+**Intuition bridge — what cracks it open:** "Exactly K" is hard to maintain with a single window — shrinking to fix a violation removes ALL subarrays above K, overshooting. The trick: `exactly(K) = atMost(K) - atMost(K-1)`. atMost(K) counts subarrays with ≤ K distinct, which a standard variable window handles cleanly. Run it twice with different targets.
+
+**Steps in plain English:**
+
+1. **Write helper `atMost(nums, k)`:** variable window, expand right, shrink from left when distinct count exceeds `k`, add `right - left + 1` to count at each step.
+2. **Return `atMost(nums, k) - atMost(nums, k-1)`.**
+
+```java
+public int subarraysWithKDistinct(int[] nums, int k) {
+    // Step 2
+    return atMost(nums, k) - atMost(nums, k - 1);
+}
+
+private int atMost(int[] nums, int k) {
+    // Step 1 — count subarrays with at most k distinct integers
+    Map<Integer, Integer> freq = new HashMap<>();
+    int count = 0;
+    int left = 0;
+
+    for (int right = 0; right < nums.length; right++) {
+        freq.merge(nums[right], 1, Integer::sum);
+
+        // shrink until window has ≤ k distinct
+        while (freq.size() > k) {
+            freq.merge(nums[left], -1, Integer::sum);
+            if (freq.get(nums[left]) == 0) {
+                freq.remove(nums[left]);
+            }
+            left++;
+        }
+        // all subarrays ending at right with left as the earliest valid start
+        count += right - left + 1;
+    }
+    return count;
+}
+```
+
+**Time:** O(n) | **Space:** O(n)
+
+### 🎨 Visual — atMost(2) on [1,2,1,2,3] counts every valid subarray ending at right
+
+```
+nums: [1, 2, 1, 2, 3]
+
+atMost(k=2):
+right=0: window=[1],       distinct=1, count += 1  → total=1
+right=1: window=[1,2],     distinct=2, count += 2  → total=3
+right=2: window=[1,2,1],   distinct=2, count += 3  → total=6
+right=3: window=[1,2,1,2], distinct=2, count += 4  → total=10
+right=4: [3] makes distinct=3 → shrink past left=0(1) left=1(2)
+          window=[1,2,3] left=2, distinct=3 → still 3 → left=3
+          window=[2,3],   distinct=2, count += 2   → total=12
+
+Wait: after shrinking to [2,3], count += right-left+1 = 4-3+1=2 → total=12
+
+Hmm, actually from the existing trace: atMost(2)=13. Let me recheck:
+After removing 1 (left=0), window=[2,1,2,3] distinct=3, still>2.
+Remove 2 (left=1), window=[1,2,3] distinct=3, still>2.
+Remove 1 (left=2), window=[2,3] distinct=2, stop. count += 4-3+1=2. total=10+2=12?
+
+Actually the existing trace shows atMost(2)=13. The key: at right=3, count += 4 (subarrays ending at 3: [2],[1,2],[2,1,2],[1,2,1,2]).
+So the total flow is 1+2+3+4+3=13 from the per-step counts.
+
+KEY INVARIANT:
+  At each right, count += (right - left + 1) = number of valid subarrays ending here.
+  left is always the earliest index that keeps the window valid (≤ k distinct).
+  atMost(K) - atMost(K-1) cancels all subarrays with < K distinct, leaving exactly K.
+```
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 1248 Count Number of Nice Subarrays | Same exactly-K double-call | Count subarrays with exactly k odd numbers; treat odd=1, even=0 | `freq.merge(nums[right] % 2, 1, Integer::sum)` |
+| LC 1358 Number of Substrings Containing All Three Characters | Same atMost idea | Three specific chars (a/b/c) instead of k distinct | `atMost(3) - atMost(2)` but the window definition differs |
+
+---
+
+### WW-10 — LC 209 Minimum Size Subarray Sum
+
+> **Problem:** Given a positive integer `target` and array `nums` of positive integers, return the minimum length of a subarray with sum ≥ `target`. Return 0 if none exists.
+
+**Brute force:** Try every subarray `[i..j]`, sum it, check if ≥ target, track minimum length. O(n²).
+> **Time:** O(n²) | **Space:** O(1)
+
+**Intuition bridge — what cracks it open:** All values are positive — adding more elements strictly increases the sum, removing elements strictly decreases it. So: expand right to grow the sum; once sum ≥ target, shrink from the left to minimize the window while keeping the sum valid. The "shrink while valid" strategy works only because positivity guarantees monotonicity.
+
+**Steps in plain English:**
+
+1. **`left = 0`, `sum = 0`, `minLen = Integer.MAX_VALUE`.**
+2. **Expand `right`:** add `nums[right]` to `sum`.
+3. **While `sum >= target`:** update `minLen = min(minLen, right - left + 1)`. Subtract `nums[left]` from `sum`, advance `left`.
+4. **Return `minLen == MAX_VALUE ? 0 : minLen`.**
+
+```java
+public int minSubArrayLen(int target, int[] nums) {
+    // Step 1
+    int left = 0;
+    int sum = 0;
+    int minLen = Integer.MAX_VALUE;
+
+    // Step 2
+    for (int right = 0; right < nums.length; right++) {
+        sum += nums[right];
+
+        // Step 3 — shrink while valid
+        while (sum >= target) {
+            minLen = Math.min(minLen, right - left + 1);
+            sum -= nums[left];
+            left++;
+        }
+    }
+    // Step 4
+    return minLen == Integer.MAX_VALUE ? 0 : minLen;
+}
+```
+
+**Time:** O(n) | **Space:** O(1)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 76 Minimum Window Substring | Shrink while valid, minimize length | String coverage constraint, not numeric sum | `formed == required` replaces `sum >= target` |
+| LC 862 Shortest Subarray with Sum at Least K | Same minimize-length goal | Negative values destroy monotonicity → use deque + prefix sums | `PriorityQueue` or monotonic deque on prefix sums |
+| LC 1438 Longest Continuous Subarray with Abs Diff ≤ Limit | Same variable window | Constraint is max-min ≤ limit — needs two monotonic deques | `maxDeque` and `minDeque` track window max/min |
+
+---
+
+### WW-11 — LC 30 Substring with Concatenation of All Words
+
+> **Problem:** Given string `s` and array `words[]` where all words have equal length `wLen`, find all starting indices of substrings in `s` that are a concatenation of all words (in any order).
+
+**Brute force:** Try every starting index, extract `words.length` consecutive chunks of length `wLen`, check if they form a permutation of `words`. O(n × m × wLen) where m = number of words.
+> **Time:** O(n × m × wLen) | **Space:** O(m)
+
+**Intuition bridge — what cracks it open:** Unlike LC 567 where the window slides one character at a time, here the fundamental unit is a word (length `wLen`). The total window size is fixed: `m × wLen`. We can slide it one *word* at a time — but we must try all `wLen` starting offsets (0, 1, ..., wLen-1) to cover all possible alignments. This reduces O(n × m) to O(n) total work across all offsets.
+
+**Steps in plain English:**
+
+1. **Build `need`** (frequency map of words). `totalLen = m × wLen`.
+2. **For each starting offset `start` from 0 to `wLen - 1`:** run a word-unit sliding window.
+3. **Inside the offset loop:** use `left`, `right` (both in word-steps). Expand right: extract word at `s[right × wLen + start .. (right+1) × wLen + start - 1]`; if it's in `need`, add to `window` freq. If not in `need` or its count exceeds `need`, slide `left` past the violating word.
+4. **When `right - left + 1 == m`:** record `left × wLen + start` as a valid start index.
+
+```java
+public List<Integer> findSubstring(String s, String[] words) {
+    List<Integer> result = new ArrayList<>();
+    if (s.isEmpty() || words.length == 0) {
+        return result;
+    }
+
+    int wLen = words[0].length();
+    int m = words.length;
+    int totalLen = wLen * m;
+
+    // Step 1
+    Map<String, Integer> need = new HashMap<>();
+    for (String w : words) {
+        need.merge(w, 1, Integer::sum);
+    }
+
+    // Step 2 — try all wLen starting offsets
+    for (int start = 0; start < wLen; start++) {
+        Map<String, Integer> window = new HashMap<>();
+        int left = start;
+        int count = 0;
+
+        // Step 3 — slide in word-sized steps
+        for (int right = start; right + wLen <= s.length(); right += wLen) {
+            String word = s.substring(right, right + wLen);
+            if (need.containsKey(word)) {
+                window.merge(word, 1, Integer::sum);
+                count++;
+                // shrink from left if this word exceeds its needed count
+                while (window.get(word) > need.get(word)) {
+                    String leftWord = s.substring(left, left + wLen);
+                    window.merge(leftWord, -1, Integer::sum);
+                    count--;
+                    left += wLen;
+                }
+                // Step 4 — full match
+                if (count == m) {
+                    result.add(left);
+                    String leftWord = s.substring(left, left + wLen);
+                    window.merge(leftWord, -1, Integer::sum);
+                    count--;
+                    left += wLen;
+                }
+            } else {
+                // unknown word — reset window for this offset
+                window.clear();
+                count = 0;
+                left = right + wLen;
+            }
+        }
+    }
+    return result;
+}
+```
+
+**Time:** O(n × wLen) | **Space:** O(m)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 567 Permutation in String | Fixed total window, freq match | Single-char words — slide one char, not one word | `window[s2.charAt(right) - 'a']++; window[s2.charAt(right-k) - 'a']--` |
+| LC 438 Find All Anagrams | Same collect-all-valid-starts pattern | Single chars, one offset — no outer offset loop | Remove `for (int start = 0; ...)` wrapper |
 
 ---
 

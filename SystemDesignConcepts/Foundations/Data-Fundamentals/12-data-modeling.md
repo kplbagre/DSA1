@@ -322,33 +322,47 @@ In modern Postgres/MySQL, this is a metadata-only change — doesn't rewrite the
 **Step 2 — Backfill in batches (avoid lock contention):**
 
 ```sql
--- Backfill in chunks of 10,000 rows at a time
--- Allows other transactions to interleave writes
-DECLARE @batchSize INT = 10000;
-DECLARE @maxId BIGINT = (SELECT MAX(id) FROM expense_reports);
+-- PostgreSQL: PL/pgSQL anonymous block
+-- Backfills 10,000 rows at a time; other transactions interleave between batches
+DO $$
+DECLARE
+    batch_size INT    := 10000;
+    max_id     BIGINT;
+    i          BIGINT := 0;
+BEGIN
+    SELECT MAX(id) INTO max_id FROM expense_reports;
 
-FOR @i = 0 TO @maxId STEP @batchSize BEGIN
-    UPDATE expense_reports
-    SET approved_by = 1  -- or any default logic
-    WHERE id BETWEEN @i AND @i + @batchSize - 1
-      AND approved_by IS NULL;
-    
-    -- Small sleep between batches to reduce I/O contention
-    WAITFOR DELAY '00:00:00.100';
+    WHILE i <= max_id LOOP
+        UPDATE expense_reports
+        SET approved_by = 1
+        WHERE id BETWEEN i AND i + batch_size - 1
+          AND approved_by IS NULL;
+
+        -- Small sleep between batches to reduce I/O contention
+        PERFORM pg_sleep(0.1);
+
+        i := i + batch_size;
+    END LOOP;
 END
+$$;
 ```
+
+> **MySQL equivalent:** Replace the `DO $$ ... $$` block with an application-layer loop (Java/Python calling UPDATE in a loop with `Thread.sleep(100)`) — MySQL has no PL/SQL by default. The logic is identical; only the runtime changes.
 
 **Step 3 — Add the constraint once backfilled (now it's safe):**
 
 ```sql
+-- PostgreSQL syntax
 ALTER TABLE expense_reports
-MODIFY COLUMN approved_by BIGINT NOT NULL;
+ALTER COLUMN approved_by SET NOT NULL;
 
 -- Optional: add the FK constraint
 ALTER TABLE expense_reports
 ADD CONSTRAINT fk_approved_by FOREIGN KEY (approved_by)
     REFERENCES users(id) ON DELETE SET NULL;
 ```
+
+> **MySQL syntax:** Use `MODIFY COLUMN approved_by BIGINT NOT NULL` instead of `ALTER COLUMN ... SET NOT NULL`.
 
 **Key invariants:**
 - Every column add at scale is: **NULL add → batch backfill → constraint add**.

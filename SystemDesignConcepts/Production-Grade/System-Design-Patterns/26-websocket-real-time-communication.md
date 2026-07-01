@@ -28,6 +28,21 @@ With WebSocket:
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **WebSocket Handshake** | initial HTTP request with `Upgrade: websocket` header; server agrees → connection promoted to persistent TCP socket | `GET /chat HTTP/1.1` + `Upgrade: websocket` → `101 Switching Protocols` |
+| **Bidirectional** | both client and server can send messages at any time without waiting for a request | server pushes new chat message to client; client sends typing indicator to server |
+| **Frame** | WebSocket data unit; much smaller overhead than HTTP (2 bytes vs 200+ bytes of HTTP headers) | text frame: `0x81 0x05 Hello` — 7 bytes total for "Hello" |
+| **Long Polling** | client sends request, server holds it open until data is available, then responds; repeat | client: `GET /messages` → server holds 30s → new message → respond → client repeats |
+| **SSE (Server-Sent Events)** | one-way server-to-client stream over HTTP; simpler than WebSocket; no client-to-server channel | live score updates, stock ticker — server pushes only, client never sends |
+| **Sticky Session (WebSocket)** | load balancer must route all requests from a client to the same server node that holds their connection | client connected to WS Server #1 — all messages must route to #1, not #2 or #3 |
+| **Redis Pub/Sub Fan-out** | all WebSocket servers subscribe to a Redis channel; message published once reaches all servers which relay to their clients | User A (on Server #1) sends message → Redis → Server #2 → User B (connected there) |
+| **Heartbeat / Ping-Pong** | periodic ping from one side to confirm connection is alive; if no pong → close and clean up | server sends `PING` every 30s; client responds `PONG`; no response → evict connection |
+
+---
+
 ## 🎨 Visual — WebSocket in System Architecture
 
 ### Full System Topology — Where WebSocket Sits
@@ -361,11 +376,80 @@ socket.addEventListener('error', function(event) {
 
 ### What is the WebSocket upgrade handshake, and why does it fit here?
 
+> **⚠️ Sticky Sessions — The Most Commonly Missed WebSocket Interview Topic**
+>
+> WebSocket connections are **stateful**: each open socket is bound to a specific server instance. This breaks standard round-robin load balancing. Without sticky sessions, a client's HTTP request after connect might route to a different server that has no open socket for that client → immediate connection error. Configure your L7 load balancer (AWS ALB) to use duration-based session affinity cookies so every request from Client A always hits Server A. Only after sticky sessions are configured should you layer Kafka on top for cross-server message fan-out.
+
 The upgrade handshake is the **HTTP → WebSocket protocol switch**. Client sends HTTP GET with `Upgrade: websocket` header; server responds with HTTP 101 Switching Protocols. After this, the TCP connection is no longer HTTP — it becomes a bidirectional message channel. In an interview, if asked: *"WebSocket starts as HTTP (so it can traverse proxies that don't understand WebSocket), then upgrades to a persistent TCP connection using the HTTP 101 response code. This is why WebSocket works even in restrictive networks — it looks like HTTP initially."*
 
 ### What is Sec-WebSocket-Key, and why does it fit here?
 
 Sec-WebSocket-Key is a **security header** that prevents WebSocket from being confused with HTTP Upgrade for other protocols. Server uses this key to calculate Sec-WebSocket-Accept (proof that server understands WebSocket). In an interview, if asked: *"Sec-WebSocket-Key is a base64-encoded random value sent by the client. Server hashes it with a magic string (RFC 6455) and sends back the hash. This prevents misconfigured proxies from speaking WebSocket when they shouldn't, and prevents cache poisoning."*
+
+---
+
+## 🧠 WebSocket at Scale: Sticky Sessions + Broker Pattern
+
+WebSocket connections are **stateful** — each open socket is bound to a specific server instance. Standard round-robin load balancing breaks WebSocket. Here's the full solution:
+
+### Step 1: Sticky sessions (prerequisite)
+
+Without sticky sessions, HTTP upgrade requests and subsequent frames can route to different servers:
+
+```
+WITHOUT sticky sessions:
+  Client A: WS upgrade → LB → Server 1 (socket opened)
+  Client A: sends frame → LB round-robins → Server 2 (no socket!) → Error
+
+WITH sticky sessions (ALB duration cookie):
+  Client A: WS upgrade → LB → Server 1 (cookie: lb=server1)
+  Client A: sends frame → LB reads cookie → Server 1 (socket found) ✅
+  Client A: reconnects  → LB reads cookie → Server 1 ✅
+```
+
+**AWS ALB configuration:** Enable "Stickiness" with duration-based cookies in the target group settings. ALB sets `AWSALB` cookie; all future requests from that browser hit the same target.
+
+**Nginx:** Use `ip_hash` directive in the upstream block to pin by client IP.
+
+**Limitation:** Sticky sessions alone don't survive server crashes. If Server 1 dies, Client A reconnects and gets a new server — all in-memory subscription state is lost (which rooms they joined, etc.). Clients must re-subscribe on reconnect.
+
+### Step 2: Message broker for cross-server fan-out
+
+Even with sticky sessions, clients on Server 1 need to receive messages from clients on Server 2:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Client A (Server 1)  ──sends message──►  Server 1           │
+│                                           ↓ publishes         │
+│                                        Kafka: "room:123"      │
+│                                           ↓ all servers sub   │
+│  Client B (Server 2)  ◄──forwards──   Server 2               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Both sticky sessions AND a message broker are required. Neither alone is sufficient.
+
+---
+
+## 🧠 SSE vs WebSocket — Choosing the Right Protocol
+
+A table interviewers love to probe. The decision axis is: does the **client** also need to send data?
+
+| Dimension | WebSocket | Server-Sent Events (SSE) |
+|---|---|---|
+| **Direction** | Bidirectional (client AND server push) | Server → client only |
+| **Protocol** | WebSocket protocol (WS/WSS, HTTP upgrade) | Plain HTTP/1.1 chunked response |
+| **Load balancing** | ⚠️ Requires sticky sessions | ✅ Standard HTTP — any LB works |
+| **Reconnection** | Manual (write your own reconnect logic) | ✅ Built-in (browser auto-reconnects) |
+| **Proxy / firewall** | Some proxies block WS upgrade | ✅ Works through all HTTP proxies |
+| **Overhead per message** | ~2 bytes framing (very low) | ~6 bytes `data: ` prefix (slightly higher) |
+| **Use cases** | Chat, collaborative editing, gaming | Stock tickers, notifications, log tail, live feeds |
+
+**Decision rule:**
+- Client needs to **send** data too → WebSocket
+- Only server pushes, client only receives → **SSE is simpler** (no sticky sessions, auto-reconnect, works through all proxies)
+
+**Interview phrasing:** *"For our notification bell — server-to-client only — SSE is the better choice. No sticky sessions needed, browser handles reconnection automatically, and it works through all corporate proxies. WebSocket would add operational complexity (sticky sessions, reconnect logic) for a feature that's only one-directional. We use WebSocket only for chat where clients also send messages."*
 
 ---
 
@@ -417,9 +501,13 @@ Sec-WebSocket-Key is a **security header** that prevents WebSocket from being co
 
 > Client doesn't know the message failed (WebSocket just closed without error notification at app level). Must implement timeout: if no response/ACK within 5s, assume message lost, retry. OR use message ID: client sends message with ID 123, server ACKs: "message 123 received". If no ACK within timeout, client retries. This requires idempotency: same message (same ID) sent twice should have same effect. ⭐ **Tier 2 — Reliability**
 
-### Q: "How is WebSocket different from Server-Sent Events (SSE)?"
+### Q: "Why does WebSocket require sticky sessions, and how do you configure them?" ⭐
 
-> SSE is one-direction (server → client only). WebSocket is bidirectional (both directions). SSE uses HTTP (lighter weight, simpler), WebSocket uses its own protocol (more powerful). Use SSE for real-time updates FROM server (stock prices, log tails). Use WebSocket when client ALSO needs to send data (chat, multiplayer games). ⭐ **Tier 1 — Protocol comparison**
+> WebSocket connections are stateful — the open socket lives on a specific server instance. Without sticky sessions, a client's HTTP upgrade request may route to Server 1 (opens socket), but subsequent frames may round-robin to Server 2 (no socket for this client → error). Configure your ALB to use duration-based session affinity: ALB sets an `AWSALB` cookie, and all requests from that browser hit the same target for the cookie's duration. Sticky sessions are only the first half — you still need Kafka/Redis Pub-Sub so that messages from clients on Server 1 can reach clients on Server 2. Both are required. ⭐ **Tier 1 — Scaling prerequisite, almost always probed**
+
+### Q: "How is WebSocket different from Server-Sent Events (SSE)? When do you choose SSE?" ⭐
+
+> SSE is one-direction (server → client only, HTTP chunked response). WebSocket is bidirectional (both sides can push). Key trade-off: SSE works through all HTTP proxies and load balancers with zero config; WebSocket requires sticky sessions and some proxies block the upgrade. SSE has built-in browser reconnection; WebSocket reconnect must be hand-coded. Use SSE when only the server pushes (stock tickers, notification bell, live feed) — simpler, no sticky sessions. Use WebSocket when the client also sends data (chat, collaborative editing, gaming). Default to SSE unless you have a strong reason for bidirectionality. ⭐ **Tier 1 — Protocol comparison**
 
 ### Q: "You want to broadcast a message to 1M users at once. How?"
 
@@ -433,7 +521,7 @@ Sec-WebSocket-Key is a **security header** that prevents WebSocket from being co
 
 ## 🧾 TL;DR
 
-> "WebSocket is a persistent, bidirectional protocol built on HTTP upgrade (HTTP 101). Unlike polling, client and server both push messages anytime. Scales via Kafka: server publishes to topic, all servers subscribe and broadcast to their clients. Requires sticky sessions and careful memory management; each connection ~100KB."
+> "WebSocket is a persistent, bidirectional protocol (HTTP 101 upgrade). Scales with two things working together: sticky sessions (ALB cookie affinity — so reconnects hit the same server) + message broker (Kafka/Redis Pub-Sub — so messages cross server boundaries). Choose SSE instead when only the server pushes data — simpler, no sticky sessions, auto-reconnect built in."
 
 ---
 
@@ -461,3 +549,4 @@ Sec-WebSocket-Key is a **security header** that prevents WebSocket from being co
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 26. Covered WebSocket protocol (HTTP upgrade, frames, heartbeat), bidirectional messaging, scaling via Kafka, Spring WebSocket code example, comparison with polling/SSE. |
+| July 1, 2026 | Added sticky sessions section (ALB cookie affinity, why required, limitation on crash), SSE vs WebSocket comparison table, expanded SSE/sticky Q&As to ⭐ Tier 1. Updated TL;DR. |

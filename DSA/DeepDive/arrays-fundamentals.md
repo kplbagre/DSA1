@@ -218,6 +218,80 @@ Streams (`Arrays.stream(arr).boxed().collect(Collectors.toList())`) work too but
 
 ---
 
+## 🔨 Pre-Processing — Phase 1 Before the Algorithm Loop
+
+> **The Phase 1 question for arrays:** *Before I write the main loop, do I need to transform the raw input first?* Choosing the wrong pre-processing (or skipping it when you need it) blocks you from seeing the algorithm at all. This section is the decision you make before you write a single line of the solution.
+
+### Pre-Processing Decision Table
+
+| Pre-processing | When to use it | Which patterns it unlocks | When NOT to use it |
+| --- | --- | --- | --- |
+| **Sort** (`Arrays.sort(arr)`) | Input order doesn't matter; you need relative order to apply a pointer trick | Two Pointers (2Sum sorted, 3Sum), Dutch Flag, Interval Merge, Greedy (jump game by sorted order) | Kadane's (destroys subarray structure), Prefix Sum (order matters), any problem where original indices must be preserved |
+| **Prefix Sum** | Repeated range-sum queries, or subarray sum = K with all non-negative values | Range sum in O(1), Subarray sum = K (non-negative), 2D grid range queries | Problems with negatives + target sum (use Prefix Sum + HashMap instead) |
+| **Prefix Sum + HashMap** | Subarray sum = K with negative values; XOR-based subarray count | Subarray sum = K (general), Longest subarray with sum K, Count subarrays with XOR = K | Problems where you only need total sum (overkill), when the window is fixed (use Sliding Window instead) |
+| **Frequency Map** (`Map<Integer,Integer>`) | "Find a pair", "first duplicate", "anagram check", "missing/extra element" | Two-pass pair lookup, Anagram sliding window (fix-size), Group Anagrams | Problems where relative order / position matters (map destroys index info) |
+| **Nothing** | The array IS the data structure the algorithm runs on | Kadane's, Cyclic Sort, Moore's Voting, Sliding Window (variable), Monotonic stack on raw array | Never skip when a range/sum query will repeat — pay the O(n) build cost once |
+
+### Phase 1 Code Stubs — Paste Before the Algorithm
+
+**Sort:**
+
+```java
+// Phase 1 — sort when order doesn't matter and pointer/greedy logic needs relative order
+Arrays.sort(arr);
+```
+
+**Prefix Sum:**
+
+```java
+// Phase 1 — build prefix sum for O(1) range queries
+int[] prefix = new int[arr.length + 1];
+// prefix[0] = 0 (sentinel — lets range [0..r] work without an if-check)
+for (int i = 0; i < arr.length; i++) {
+    prefix[i + 1] = prefix[i] + arr[i];
+}
+// range sum [l..r] (0-indexed, inclusive) = prefix[r + 1] - prefix[l]
+```
+
+**Prefix Sum + HashMap (subarray sum = K):**
+
+```java
+// Phase 1 — prefix sum + frequency map for subarray sum = K (handles negatives)
+Map<Integer, Integer> freq = new HashMap<>();
+// seed with 0 → 1: a subarray starting at index 0 has prefix 0 before reading any element
+freq.put(0, 1);
+int sum = 0;
+int count = 0;
+for (int x : arr) {
+    sum += x;
+    // if (sum - k) has been seen before, those prefixes form valid subarrays ending here
+    count += freq.getOrDefault(sum - k, 0);
+    freq.merge(sum, 1, Integer::sum);
+}
+```
+
+**Frequency Map:**
+
+```java
+// Phase 1 — frequency map for pair/duplicate/anagram problems
+Map<Integer, Integer> freq = new HashMap<>();
+for (int x : arr) {
+    freq.merge(x, 1, Integer::sum);
+}
+```
+
+### Pre-Flight Checklist
+
+```
+Before writing the main loop, answer:
+  □ Will I need range sums more than once? → build prefix sum first
+  □ Are there negatives + a target sum?    → prefix sum + HashMap (not plain prefix)
+  □ Do I need "has X appeared before"?     → frequency map first
+  □ Does relative order matter?            → DON'T sort; if not, sort unlocks pointer tricks
+```
+
+---
+
 ## 🧠 Mental Model — Arrays Have Two Spaces: Index and Value
 
 > **The single biggest unlock for array problems:** an array is two interlocking spaces — the **index space** (positions `0..n-1`) and the **value space** (the data). Most clever array tricks come from **using one space to encode information about the other**.
@@ -1670,142 +1744,270 @@ Two equations, two unknowns. Solve.
 
 ## 🔬 Worked Walkthroughs
 
-Five fully-traced problems showing patterns in action. Each walkthrough follows English-steps-first.
+Ten canonical problems — one per structurally unique shape. Every walkthrough follows the 5-part format: Problem → Brute Force → Intuition Bridge → Steps + Code → Transfers To.
 
-### Walkthrough 1: LC 53 — Maximum Subarray (Kadane's, Pattern 8)
+> **Note:** LC 31 Next Permutation and LC 152 Maximum Product Subarray were in earlier versions of this section. LC 31 is fully covered as **Special Topic 1** in this file. LC 152 is a Kadane's variant — see the Transfers-to table of WW-1 below.
 
-> **Problem:** Given an integer array `nums`, find the contiguous subarray (containing at least one number) with the **largest sum**, and return its sum.
+---
 
-Example: `nums = [-2, 1, -3, 4, -1, 2, 1, -5, 4]` → output `6` (subarray `[4, -1, 2, 1]`).
+### WW-1 — LC 53 Maximum Subarray
+
+> **Problem:** Given `nums`, find the contiguous subarray with the largest sum and return its sum. At least one element must be in the subarray.
+
+**Brute force:** Try every pair `(i, j)` as subarray boundaries, sum each, track the max. That's O(n²) pairs × O(n) sum per pair = O(n³). With prefix sums, O(n²).
+> **Time:** O(n²) with prefix sum | **Space:** O(1)
+
+**Intuition bridge — what cracks it open:** At every index, the best subarray ending *here* is either the current element alone (fresh start) or the current element appended to whatever was best ending at the previous index. We never need to remember more than one number — "the best sum ending at `i-1`" — to decide. That single observation collapses a two-index scan into one pass.
 
 **Steps in plain English:**
 
-1. **Initialize** `current = nums[0]` and `best = nums[0]`.
-2. **For each `i` from 1 to n - 1:** decide whether to extend or restart.
-3. **Extend or restart:** `current = max(nums[i], current + nums[i])`.
-4. **Update best:** `best = max(best, current)`.
-5. **Return `best`.**
+1. **Seed** `current` and `best` both to `nums[0]` (subarray must be non-empty).
+2. **Scan from index 1:** at each position, extend or restart — whichever is larger.
+3. **Update `best`** if `current` just beat it.
+4. **Return `best`.**
 
 ```java
 public int maxSubArray(int[] nums) {
-    // Step 1
+    // Step 1 — seed with first element; handles all-negative arrays correctly
     int current = nums[0];
     int best = nums[0];
 
     // Step 2
     for (int i = 1; i < nums.length; i++) {
-        // Step 3 — restart if previous was dragging us negative
+        // extend if previous sum helps; restart if it drags us negative
         current = Math.max(nums[i], current + nums[i]);
-        // Step 4
+        // Step 3
         best = Math.max(best, current);
     }
-    // Step 5
+    // Step 4
     return best;
 }
 ```
 
-**Trace on the example:**
+**Time:** O(n) | **Space:** O(1)
+
+### 🎨 Visual — Kadane's extend-or-restart decision at each index
 
 ```
-i:        0    1    2    3    4    5    6    7    8
 nums:    -2    1   -3    4   -1    2    1   -5    4
+         ↓     ↓    ↓    ↓    ↓    ↓    ↓    ↓    ↓
 current: -2    1   -2    4    3    5    6    1    5
-best:    -2    1    1    4    4    5    6    6    6
-                                              ↑
-                                          answer = 6
+              ↑         ↑              ↑
+         restart    restart        best = 6
+
+KEY INVARIANT:
+  current[i] = max(nums[i], current[i-1] + nums[i])
+  — either extend (previous helped) or restart (previous hurt).
+  best tracks the global max across all restarts.
 ```
 
-**Why this works:** at each index, either the previous "best ending here" is positive (worth keeping) or negative (worth discarding). Kadane's makes that choice greedily and provably optimally.
+**Transfers to:**
 
-> 🧩 **Try these (after this walkthrough):**
-> - ✅ **LC 121** Best Time to Buy and Sell Stock — track running min instead of running sum
-> - 🟡 **LC 152** Maximum Product Subarray — see Walkthrough 5 for the min/max-tracking variant
-> - 🟡 **LC 918** Maximum Sum Circular Subarray — Kadane's twice (max + min-inversion)
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 121 Best Time to Buy and Sell Stock | One-pass "track running best" | Track running **min** seen so far instead of running sum | `minPrice = Math.min(minPrice, prices[i])` |
+| LC 152 Maximum Product Subarray | Extend or restart at each index | Negatives flip min↔max — must track both `curMax` and `curMin` | `curMax = Math.max(x, Math.max(curMax * x, curMin * x))` |
+| LC 918 Maximum Sum Circular Subarray | Kadane's for the non-wrapping case | Wrapping case = total sum − minimum subarray (Kadane's on negated array) | `return Math.max(normalMax, totalSum - minSum)` |
 
 ---
 
-### Walkthrough 2: LC 31 — Next Permutation
+### WW-2 — LC 121 Best Time to Buy and Sell Stock
 
-> **Problem:** rearrange the array to be the lexicographically next greater permutation. Modify in place; if the array is the largest permutation, rearrange to the smallest (ascending).
+> **Problem:** Given `prices[i]` = price on day `i`, find the maximum profit from one buy and one sell (buy before sell). Return 0 if no profit is possible.
 
-Example: `nums = [1, 2, 3]` → `[1, 3, 2]`. · `nums = [3, 2, 1]` → `[1, 2, 3]`.
+**Brute force:** Try every pair of days `(i, j)` where `i < j`, compute `prices[j] - prices[i]`, track the max. O(n²) comparisons.
+> **Time:** O(n²) | **Space:** O(1)
 
-Already covered as **Special Topic 1**. Re-read that section — the 4-step algorithm, the visualization, and the code.
+**Intuition bridge — what cracks it open:** To maximize profit on any sell day `j`, you want to have bought at the cheapest price seen on any earlier day. One left-to-right scan can track the cheapest price seen so far — and for each day compute today's profit without looking back. No pair enumeration needed.
 
-**Trace on `[1, 3, 5, 4, 2]`:**
+**Steps in plain English:**
+
+1. **Seed** `minPrice = prices[0]`, `maxProfit = 0`.
+2. **Scan from index 1:** update `minPrice` if today is cheaper.
+3. **Compute today's profit** = `prices[i] - minPrice`; update `maxProfit` if it's better.
+4. **Return `maxProfit`.**
+
+```java
+public int maxProfit(int[] prices) {
+    // Step 1
+    int minPrice = prices[0];
+    int maxProfit = 0;
+
+    for (int i = 1; i < prices.length; i++) {
+        // Step 2 — cheapest buy price seen so far
+        minPrice = Math.min(minPrice, prices[i]);
+        // Step 3 — profit if we sell today
+        maxProfit = Math.max(maxProfit, prices[i] - minPrice);
+    }
+    // Step 4
+    return maxProfit;
+}
+```
+
+**Time:** O(n) | **Space:** O(1)
+
+### 🎨 Visual — running minimum tracks the best buy day
 
 ```
-Step 1: pivot search from right →
-   nums[3]=4 ≥ nums[4]=2 → skip
-   nums[2]=5 ≥ nums[3]=4 → skip
-   nums[1]=3 < nums[2]=5 → pivot i = 1
+prices:    7    1    5    3    6    4
+minPrice:  7    1    1    1    1    1
+profit:    0    0    4    2    5    3
+                          ↑
+                      maxProfit = 5  (buy day 1 at price 1, sell day 4 at price 6)
 
-Step 2: swap-partner search from right →
-   nums[4]=2 ≤ nums[1]=3 → skip
-   nums[3]=4 > nums[1]=3 → j = 3
-
-Step 3: swap nums[1] and nums[3] → [1, 4, 5, 3, 2]
-
-Step 4: reverse nums[2..4] → [1, 4, 2, 3, 5]
-                                          ↑
-                                  the answer
+KEY INVARIANT:
+  At every sell day i, profit[i] = prices[i] - minPrice-so-far.
+  minPrice is monotonically non-increasing — it never goes up.
 ```
 
-> 🧩 **Try these (after this walkthrough):**
-> - ✅ **LC 31** Next Permutation — code it from scratch without re-reading
-> - 🔴 **LC 46** Permutations — different problem (backtracking, all permutations); covered in `DSA/DeepDive/backtracking-fundamentals.md`
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 53 Maximum Subarray | One-pass running state | Track running sum, not running min | `current = Math.max(nums[i], current + nums[i])` |
+| LC 122 Best Time to Buy and Sell Stock II | Same price array | Unlimited transactions — greedily add every positive day-to-day gain | `if (prices[i] > prices[i-1]) profit += prices[i] - prices[i-1]` |
+| LC 123 Best Time to Buy and Sell Stock III | Same greedy spirit | At most 2 transactions — track 4 states (buy1, sell1, buy2, sell2) | `sell2 = Math.max(sell2, buy2 + prices[i])` |
 
 ---
 
-### Walkthrough 3: LC 128 — Longest Consecutive Sequence
+### WW-3 — LC 238 Product of Array Except Self
 
-> **Problem:** given an unsorted array, return the length of the longest sequence of consecutive integers. O(n) time required.
+> **Problem:** Given `nums`, return an array `output` where `output[i]` = product of all elements except `nums[i]`. No division allowed. O(n) time.
 
-Example: `nums = [100, 4, 200, 1, 3, 2]` → `4` (sequence `1, 2, 3, 4`).
+**Brute force:** For each index `i`, multiply all other elements together. O(n) per index × n indices = O(n²).
+> **Time:** O(n²) | **Space:** O(1) output excluded
 
-Already covered as **Special Topic 3**. Re-read that section.
+**Intuition bridge — what cracks it open:** `output[i]` = (product of everything to the LEFT of i) × (product of everything to the RIGHT of i). We can compute both halves in separate O(n) passes — left-to-right builds the prefix products, right-to-left builds the suffix products and combines them in place. Two passes, no division.
 
-**Trace on `[100, 4, 200, 1, 3, 2]`:**
+**Steps in plain English:**
+
+1. **Left pass:** fill `output[i]` with the product of all elements to the left of `i`. `output[0] = 1` (nothing to the left).
+2. **Right pass:** scan right-to-left with a running `right` product; multiply `output[i]` by `right`, then update `right`.
+3. **Return `output`.**
+
+```java
+public int[] productExceptSelf(int[] nums) {
+    int n = nums.length;
+    int[] output = new int[n];
+
+    // Step 1 — left-product pass
+    // output[i] = product of nums[0..i-1]
+    output[0] = 1;
+    for (int i = 1; i < n; i++) {
+        output[i] = output[i - 1] * nums[i - 1];
+    }
+
+    // Step 2 — right-product pass; combine in place
+    int right = 1;
+    for (int i = n - 1; i >= 0; i--) {
+        output[i] *= right;
+        right *= nums[i];
+    }
+    // Step 3
+    return output;
+}
+```
+
+**Time:** O(n) | **Space:** O(1) (output array excluded per problem constraints)
+
+### 🎨 Visual — left pass then right pass on [1, 2, 3, 4]
 
 ```
-Set: {100, 4, 200, 1, 3, 2}
+nums:       1    2    3    4
 
-Iterate over set:
-- 100: is 99 in set? No → run-start. Walk: 100 (1). 101 in set? No → length 1.
--   4: is 3 in set?  Yes → skip.
-- 200: is 199 in set? No → run-start. Length 1.
--   1: is 0 in set? No → run-start. Walk: 1, 2, 3, 4. Length 4. ← BEST
--   3: is 2 in set? Yes → skip.
--   2: is 1 in set? Yes → skip.
+Left pass (prefix products before index i):
+output:     1    1    2    6
 
-Answer: 4
+Right pass (right = running product from the right):
+i=3: output[3] = 6 * 1 = 6;  right = 1 * 4 = 4
+i=2: output[2] = 2 * 4 = 8;  right = 4 * 3 = 12
+i=1: output[1] = 1 * 12 = 12; right = 12 * 2 = 24
+i=0: output[0] = 1 * 24 = 24; right = 24 * 1 = 24
+
+Final output: [24, 12, 8, 6]
+
+KEY INVARIANT:
+  After the left pass, output[i] holds the product of nums[0..i-1].
+  The right pass multiplies in nums[i+1..n-1] without touching the left product.
 ```
 
-> **Each element is touched at most twice:** once as part of a walked run, once as the run-start gatekeeper check. Linear overall.
+**Transfers to:**
 
-> 🧩 **Try these (after this walkthrough):**
-> - ✅ **LC 128** Longest Consecutive Sequence — code from memory
-> - 🟡 **LC 298** Binary Tree Longest Consecutive Sequence — different shape (DFS); after trees doc
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 42 Trapping Rain Water | Two-pass left/right precomputation | Track running max (not product) from each side | `leftMax[i] = Math.max(leftMax[i-1], height[i])` |
+| LC 135 Candy | Two-pass precomputation, combine | Track minimum candy needed from each direction | Two separate pass arrays, take `Math.max` at each position |
+| LC 724 Find Pivot Index | Prefix sum from left + suffix reasoning | One array + running suffix instead of two | `total - prefixSum - nums[i] == prefixSum` |
 
 ---
 
-### Walkthrough 4: LC 56 — Merge Intervals
+### WW-4 — LC 169 Majority Element
 
-> **Problem:** given a list of intervals, merge all overlapping intervals and return the result.
+> **Problem:** Given `nums` of length `n`, find the element that appears more than `n/2` times. Guaranteed to exist. O(n) time, O(1) space.
 
-Example: `[[1,3], [2,6], [8,10], [15,18]]` → `[[1,6], [8,10], [15,18]]`.
+**Brute force:** Count frequency of each element with a HashMap; return the one with count > n/2. O(n) time but O(n) space — fails the space constraint.
+> **Time:** O(n) | **Space:** O(n)
+
+**Intuition bridge — what cracks it open:** Because the majority element appears more than n/2 times, it outnumbers ALL other elements combined. Imagine each non-majority element "canceling" one majority occurrence — the majority element still has uncanceled occurrences left at the end. We can simulate this cancellation with a running `count` and a `candidate` variable: increment when we see the candidate, decrement otherwise, reset candidate when count hits zero.
+
+**Steps in plain English:**
+
+1. **Seed** `candidate = nums[0]`, `count = 1`.
+2. **Scan from index 1:** if `nums[i] == candidate`, increment `count`; else decrement `count`. If `count` hits 0, set `candidate = nums[i]` and reset `count = 1`.
+3. **Return `candidate`** — the last surviving candidate is the majority element.
+
+```java
+public int majorityElement(int[] nums) {
+    // Step 1
+    int candidate = nums[0];
+    int count = 1;
+
+    // Step 2
+    for (int i = 1; i < nums.length; i++) {
+        if (count == 0) {
+            // reset — previous candidate was fully canceled
+            candidate = nums[i];
+            count = 1;
+        } else if (nums[i] == candidate) {
+            count++;
+        } else {
+            count--;
+        }
+    }
+    // Step 3 — guaranteed to be majority, no verification pass needed
+    return candidate;
+}
+```
+
+**Time:** O(n) | **Space:** O(1)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 229 Majority Element II | Same Boyer-Moore voting | Find elements appearing > n/3 times — track TWO candidates | `if (nums[i] == c1) c1Count++; else if (nums[i] == c2) c2Count++; else ...` |
+| LC 1287 Element Appearing More Than 25% In Sorted Array | Majority concept | Sorted array — check every 3rd element as a candidate | `if (nums[i] == nums[i + n/4]) return nums[i]` |
+
+---
+
+### WW-5 — LC 56 Merge Intervals
+
+> **Problem:** Given an array of intervals `[start, end]`, merge all overlapping intervals and return the result.
+
+**Brute force:** For each interval, check all other intervals to see if they overlap; if so, merge and repeat until stable. O(n²) comparisons, tricky to implement correctly.
+> **Time:** O(n²) | **Space:** O(n)
+
+**Intuition bridge — what cracks it open:** After sorting by start time, any interval that overlaps with the previous one must have a start ≤ previous end. We never need to look back more than one step — just compare each interval to the last merged result. Sorting makes the problem local.
 
 **Steps in plain English:**
 
 1. **Sort intervals by start time.**
-2. **Initialize result with the first interval.**
-3. **For each subsequent interval:** if it overlaps with the last result entry, extend the last entry's end. Otherwise, append.
+2. **Seed result** with the first interval.
+3. **For each subsequent interval:** if its start ≤ last result's end, extend the last result's end (take the max). Otherwise, it doesn't overlap — append it.
+4. **Return result.**
 
 ```java
 public int[][] merge(int[][] intervals) {
-    if (intervals.length == 0) {
-        return new int[0][];
-    }
     // Step 1
     Arrays.sort(intervals, (a, b) -> Integer.compare(a[0], b[0]));
 
@@ -1818,100 +2020,325 @@ public int[][] merge(int[][] intervals) {
         int[] last = merged.get(merged.size() - 1);
         int[] curr = intervals[i];
         if (curr[0] <= last[1]) {
+            // overlapping — extend end; DON'T just assign curr[1], take max
             last[1] = Math.max(last[1], curr[1]);
         } else {
             merged.add(curr);
         }
     }
+    // Step 4
     return merged.toArray(new int[merged.size()][]);
 }
 ```
 
-**Trace:**
+**Time:** O(n log n) | **Space:** O(n)
 
-```
-Sorted: [[1,3], [2,6], [8,10], [15,18]]
+**Transfers to:**
 
-merged = [[1,3]]
-i=1: curr=[2,6], last=[1,3]. 2 <= 3 → extend last to [1, max(3,6)] = [1,6]
-                                          merged = [[1,6]]
-i=2: curr=[8,10], last=[1,6]. 8 > 6 → append.
-                                          merged = [[1,6], [8,10]]
-i=3: curr=[15,18], last=[8,10]. 15 > 10 → append.
-                                          merged = [[1,6], [8,10], [15,18]]
-
-Answer: [[1,6], [8,10], [15,18]]
-```
-
-> **The off-by-one trap:** when extending, `last[1] = Math.max(last[1], curr[1])` — DON'T just write `last[1] = curr[1]`. The current interval might end *before* the last one (e.g., `[1, 10]` merged with `[2, 5]` is `[1, 10]`, not `[1, 5]`).
-
-> 🧩 **Try these (after this walkthrough):**
-> - ✅ **LC 56** Merge Intervals — code from memory
-> - ✅ **LC 57** Insert Interval — similar shape; insert one new interval into a sorted list
-> - 🟡 **LC 435** Non-overlapping Intervals — greedy after sorting; classic interview question
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 57 Insert Interval | Sort + scan + merge | New interval given separately; scan to find where it fits | Three phases: copy left, merge overlapping, copy right |
+| LC 435 Non-overlapping Intervals | Sort by end (greedy variant) | Count intervals to remove so none overlap | Greedy: keep interval with earliest end; skip overlapper |
+| LC 452 Minimum Number of Arrows to Burst Balloons | Sort + greedy scan | "Overlap" means arrows pass through — count restarts | `if (curr[0] > arrowPos) arrows++; arrowPos = curr[1]` |
 
 ---
 
-### Walkthrough 5: LC 152 — Maximum Product Subarray [Striver V-28]
+### WW-6 — LC 560 Subarray Sum Equals K
 
-> **Problem:** find the contiguous subarray with the largest **product**.
+> **Problem:** Given `nums` and integer `k`, return the total number of subarrays whose sum equals `k`.
 
-Example: `[2, 3, -2, 4]` → `6` (subarray `[2, 3]`).
+**Brute force:** Try every pair `(i, j)` as subarray bounds, compute the sum, check if it equals `k`. O(n²) pairs with O(1) sum using prefix sums.
+> **Time:** O(n²) | **Space:** O(1)
 
-**The trap:** plain Kadane's doesn't work for products. A negative element makes a small (negative) running max become small (positive) — but a negative element makes a small (negative) running **min** become a large (positive). So at each step, **multiplying by a negative can flip min and max**.
+**Intuition bridge — what cracks it open:** If `prefixSum[j] - prefixSum[i] == k`, then subarray `[i+1..j]` sums to `k`. Rewrite: we need `prefixSum[i] == prefixSum[j] - k`. As we scan left-to-right computing `prefixSum[j]`, we just need to know *how many times* `(prefixSum[j] - k)` has appeared as a prefix sum earlier — that's a HashMap lookup. One pass, O(1) per step.
 
 **Steps in plain English:**
 
-1. **Track both** `currentMax` and `currentMin` (the largest and smallest products ending at the current index).
-2. **At each index:** the new max could be `nums[i]`, `currentMax * nums[i]`, or `currentMin * nums[i]`. Same three candidates for the new min.
-3. **If `nums[i]` is negative, swap** `currentMax` and `currentMin` before applying — equivalently, compute both fresh from all three candidates.
-4. **Track the global best** as you go.
+1. **Seed** `freq = {0: 1}` (prefix sum of 0 has been seen once — the empty prefix before index 0).
+2. **Scan left-to-right**, maintaining running `sum`.
+3. **At each index:** count how many earlier prefix sums equal `sum - k`; add that to `count`. Then record `sum` in `freq`.
+4. **Return `count`.**
 
 ```java
-public int maxProduct(int[] nums) {
+public int subarraySum(int[] nums, int k) {
+    // Step 1 — seed: prefix sum = 0 has occurred once (the empty prefix)
+    Map<Integer, Integer> freq = new HashMap<>();
+    freq.put(0, 1);
+
+    int sum = 0;
+    int count = 0;
+
+    // Step 2
+    for (int x : nums) {
+        sum += x;
+        // Step 3 — how many earlier prefixes make a valid [i+1..j] subarray?
+        count += freq.getOrDefault(sum - k, 0);
+        freq.merge(sum, 1, Integer::sum);
+    }
+    // Step 4
+    return count;
+}
+```
+
+**Time:** O(n) | **Space:** O(n)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 525 Contiguous Array | Prefix sum + HashMap | Find longest (not count) subarray with equal 0s and 1s; remap 0→-1 | `maxLen = Math.max(maxLen, i - firstSeen.get(sum))` |
+| LC 1248 Count Number of Nice Subarrays | Same prefix count template | Count subarrays with exactly k odd numbers; treat odd=1, even=0 | Prefix sum of parity; same `freq.getOrDefault(sum - k, 0)` |
+| LC 974 Subarray Sums Divisible by K | Same prefix + HashMap | Divisible by K → store `sum % K`; handle negative mods | `int mod = ((sum % k) + k) % k` |
+
+---
+
+### WW-7 — LC 75 Sort Colors
+
+> **Problem:** Given `nums` containing only `0`, `1`, `2`, sort it in-place in one pass without using a library sort.
+
+**Brute force:** Count occurrences of 0, 1, 2; overwrite the array with the counts. Two passes, O(n) time, O(1) space — but the problem explicitly asks for one pass.
+> **Time:** O(n) 2-pass | **Space:** O(1)
+
+**Intuition bridge — what cracks it open:** Use three pointers that maintain an invariant: everything before `lo` is 0, everything after `hi` is 2, everything between `lo` and `mid` is 1, and `[mid..hi]` is unexplored. Scan `mid` through the array — swapping 0s to the left region and 2s to the right region — until `mid` crosses `hi`.
+
+**Steps in plain English:**
+
+1. **Three pointers:** `lo = 0` (next slot for 0), `mid = 0` (current), `hi = n-1` (next slot for 2).
+2. **While `mid <= hi`:**
+   - If `nums[mid] == 0`: swap `nums[lo]` and `nums[mid]`, advance both `lo` and `mid`.
+   - If `nums[mid] == 1`: advance `mid` only.
+   - If `nums[mid] == 2`: swap `nums[mid]` and `nums[hi]`, decrement `hi`. Do NOT advance `mid` (the swapped-in element is unexamined).
+
+```java
+public void sortColors(int[] nums) {
     // Step 1
-    int currentMax = nums[0];
-    int currentMin = nums[0];
-    int best = nums[0];
+    int lo = 0;
+    int mid = 0;
+    int hi = nums.length - 1;
 
-    for (int i = 1; i < nums.length; i++) {
-        int x = nums[i];
+    // Step 2
+    while (mid <= hi) {
+        if (nums[mid] == 0) {
+            // swap into the 0-region; both pointers advance
+            int tmp = nums[lo];
+            nums[lo] = nums[mid];
+            nums[mid] = tmp;
+            lo++;
+            mid++;
+        } else if (nums[mid] == 1) {
+            mid++;
+        } else {
+            // swap into the 2-region; only hi shrinks — mid stays to re-examine
+            int tmp = nums[mid];
+            nums[mid] = nums[hi];
+            nums[hi] = tmp;
+            hi--;
+        }
+    }
+}
+```
 
-        // Step 2, 3 — three candidates for both new max and new min
-        int candidate1 = currentMax * x;
-        int candidate2 = currentMin * x;
-        int newMax = Math.max(x, Math.max(candidate1, candidate2));
-        int newMin = Math.min(x, Math.min(candidate1, candidate2));
+**Time:** O(n) | **Space:** O(1)
 
-        currentMax = newMax;
-        currentMin = newMin;
+### 🎨 Visual — three-pointer invariant on [2, 0, 2, 1, 1, 0]
 
+```
+Initial:  [2, 0, 2, 1, 1, 0]
+           lo=0, mid=0, hi=5
+
+Step: nums[mid]=2 → swap mid↔hi, hi--
+          [0, 0, 2, 1, 1, 2]   lo=0, mid=0, hi=4
+
+Step: nums[mid]=0 → swap lo↔mid, lo++, mid++
+          [0, 0, 2, 1, 1, 2]   lo=1, mid=1, hi=4
+
+Step: nums[mid]=0 → swap lo↔mid, lo++, mid++
+          [0, 0, 2, 1, 1, 2]   lo=2, mid=2, hi=4
+
+Step: nums[mid]=2 → swap mid↔hi, hi--
+          [0, 0, 1, 1, 2, 2]   lo=2, mid=2, hi=3
+
+Step: nums[mid]=1 → mid++        lo=2, mid=3, hi=3
+Step: nums[mid]=1 → mid++        lo=2, mid=4, hi=3  → mid > hi → DONE
+
+Result: [0, 0, 1, 1, 2, 2] ✓
+
+KEY INVARIANT:
+  [0..lo-1] = all 0s   [lo..mid-1] = all 1s   [hi+1..n-1] = all 2s
+  [mid..hi] = unexplored.
+  When swapping a 2 to hi, mid does NOT advance — the element that
+  came back from hi is unexamined and might be 0 or 1.
+```
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 283 Move Zeroes | Two-pointer in-place partition | Two values (0 vs non-zero), not three | `if (nums[i] != 0) nums[write++] = nums[i]`; zero-fill tail |
+| LC 905 Sort Array By Parity | Two-pointer partition | Two groups (even vs odd) | Swap `nums[lo]` and `nums[hi]`; advance lo/hi toward center |
+| LC 2149 Rearrange Array Elements by Sign | Partition into two groups | Interleave positives and negatives from two separate lists | Two write pointers: one at 0 (even), one at 1 (odd) |
+
+---
+
+### WW-8 — LC 448 Find All Disappeared Numbers
+
+> **Problem:** Given `nums` of length `n` containing integers in `[1, n]` (some appear twice, some not at all), find all integers in `[1, n]` that do not appear in `nums`. O(n) time, O(1) extra space.
+
+**Brute force:** Put all elements in a HashSet; scan `1..n` to find which are missing. O(n) time but O(n) space.
+> **Time:** O(n) | **Space:** O(n)
+
+**Intuition bridge — what cracks it open:** The array itself is our hash table — value `v` maps to index `v-1`. If we negate `nums[v-1]` whenever we see value `v`, indices that are still positive at the end correspond to values that never appeared. We use the sign bit as a "visited" flag without any extra space.
+
+**Steps in plain English:**
+
+1. **Mark pass:** for each value `v = abs(nums[i])`, negate `nums[v-1]` if it isn't already negative.
+2. **Collect pass:** scan indices; any index `i` where `nums[i] > 0` means value `i+1` was never seen — add it to results.
+3. **Return results.**
+
+```java
+public List<Integer> findDisappearedNumbers(int[] nums) {
+    // Step 1 — mark: use index (v-1) as the "slot" for value v
+    for (int i = 0; i < nums.length; i++) {
+        int v = Math.abs(nums[i]) - 1;
+        if (nums[v] > 0) {
+            nums[v] = -nums[v];
+        }
+    }
+
+    // Step 2 — collect: positive index → value never appeared
+    List<Integer> result = new ArrayList<>();
+    for (int i = 0; i < nums.length; i++) {
+        if (nums[i] > 0) {
+            result.add(i + 1);
+        }
+    }
+    // Step 3
+    return result;
+}
+```
+
+**Time:** O(n) | **Space:** O(1) (result list excluded)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 41 First Missing Positive | Same negate-at-index pattern | Values can be out of range — filter first; find first positive index | See WW-9 below — harder variant of the same idea |
+| LC 287 Find the Duplicate Number | Array as implicit hash map | Find one duplicate (not all missing) via Floyd's cycle detection | Treat `nums[i]` as "next pointer": `slow = nums[slow]` |
+| LC 442 Find All Duplicates in Array | Same negation trick | Collect indices where `nums[v-1]` is already negative (seen twice) | `if (nums[v] < 0) result.add(v + 1)` |
+
+---
+
+### WW-9 — LC 41 First Missing Positive
+
+> **Problem:** Given an unsorted integer array, find the smallest missing positive integer. O(n) time, O(1) space.
+
+**Brute force:** Try `1, 2, 3, ...` and check if each is in a HashSet built from `nums`. O(n) space.
+> **Time:** O(n) | **Space:** O(n)
+
+**Intuition bridge — what cracks it open:** The answer must be in `[1, n+1]` — if all of `1..n` are present, the answer is `n+1`. So we only care about values in `[1, n]`; everything else is noise. We can place value `v` at index `v-1` using swaps (cyclic sort style), then scan for the first index where `nums[i] != i+1`.
+
+**Steps in plain English:**
+
+1. **Cyclic sort pass:** for each position `i`, while `nums[i]` is in range `[1, n]` AND `nums[i] != i+1` AND `nums[nums[i]-1] != nums[i]` (to avoid infinite swap on duplicates): swap `nums[i]` into its correct slot.
+2. **Scan pass:** find the first `i` where `nums[i] != i+1`. Return `i+1`.
+3. **If all positions are correct,** return `n+1`.
+
+```java
+public int firstMissingPositive(int[] nums) {
+    int n = nums.length;
+
+    // Step 1 — cyclic sort: put value v at index v-1
+    for (int i = 0; i < n; i++) {
+        while (
+            nums[i] >= 1 &&
+            nums[i] <= n &&
+            nums[nums[i] - 1] != nums[i]
+        ) {
+            int correct = nums[i] - 1;
+            int tmp = nums[correct];
+            nums[correct] = nums[i];
+            nums[i] = tmp;
+        }
+    }
+
+    // Step 2 — find first slot that doesn't hold its expected value
+    for (int i = 0; i < n; i++) {
+        if (nums[i] != i + 1) {
+            return i + 1;
+        }
+    }
+    // Step 3 — 1..n all present
+    return n + 1;
+}
+```
+
+**Time:** O(n) | **Space:** O(1)
+
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 448 Find All Disappeared Numbers | Array-as-hash-map, in-place marking | Easier: values guaranteed in `[1,n]`, collect ALL missing | Use negation trick instead of swap (see WW-8) |
+| LC 268 Missing Number | Find one missing value in `[0, n]` | Simple: use math (`n*(n+1)/2 - actualSum`) or XOR | `return n * (n + 1) / 2 - Arrays.stream(nums).sum()` |
+| LC 442 Find All Duplicates | Same cyclic-sort placement | Collect values at wrong positions (they're the duplicates) | Collect `nums[i]` where `nums[i] != i+1` after the sort pass |
+
+---
+
+### WW-10 — LC 128 Longest Consecutive Sequence
+
+> **Problem:** Given an unsorted integer array, return the length of the longest sequence of consecutive integers. O(n) time required.
+
+**Brute force:** Sort the array and scan for runs. O(n log n) — fails the O(n) constraint.
+> **Time:** O(n log n) | **Space:** O(1)
+
+**Intuition bridge — what cracks it open:** Sorting costs O(n log n) because we compare all pairs. But we only need to know "is `x+1` in the array?" — a HashSet answers that in O(1). The key gate: only *start* counting a sequence at values where `x-1` is NOT in the set. This ensures each number is visited at most twice (once as a gatekeeper, once as part of a run).
+
+**Steps in plain English:**
+
+1. **Build a HashSet** from `nums`.
+2. **Scan every number:** if `num - 1` is in the set, skip (it's the middle of a run, not a start).
+3. **If it IS a start,** walk forward: `num+1, num+2, ...` until the set runs out. Record the run length.
+4. **Return the max run length.**
+
+```java
+public int longestConsecutive(int[] nums) {
+    // Step 1
+    Set<Integer> set = new HashSet<>();
+    for (int x : nums) {
+        set.add(x);
+    }
+
+    int best = 0;
+
+    // Step 2
+    for (int num : set) {
+        if (set.contains(num - 1)) {
+            continue;
+        }
+        // Step 3 — num is a run-start; walk forward
+        int current = num;
+        int length = 1;
+        while (set.contains(current + 1)) {
+            current++;
+            length++;
+        }
         // Step 4
-        best = Math.max(best, currentMax);
+        best = Math.max(best, length);
     }
     return best;
 }
 ```
 
-**Trace on `[2, 3, -2, 4]`:**
+**Time:** O(n) | **Space:** O(n)
 
-```
-i:           0    1    2    3
-nums:        2    3   -2    4
-currentMax:  2    6   -2    4
-currentMin:  2    3  -12   -48
-best:        2    6    6    6
-                              ↑
-                          answer = 6
-```
+**Transfers to:**
 
-At `i = 2` (the `-2`), notice how `currentMin` becomes the most extreme negative: `-12 = 6 * -2`. If `i = 3` had been `-5` instead of `4`, `currentMax` would have become `-12 * -5 = 60`, beating everything before. That's why we track min.
-
-> **Why must we evaluate `x` itself in the max?** Because a zero in `nums` resets the chain — at that point the best subarray ending here is just `x` (a fresh start), not the product-through-zero (which is 0).
-
-> 🧩 **Try these (after this walkthrough):**
-> - ✅ **LC 152** Maximum Product Subarray — code from memory
-> - 🟡 **LC 1567** Maximum Length of Subarray With Positive Product — same flavor; track lengths of positive/negative running runs
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC 298 Binary Tree Longest Consecutive Sequence | Count run of consecutive values | Tree structure — DFS instead of HashSet scan | `if (node.val == parent.val + 1) length++; else length = 1` |
+| LC 674 Longest Continuous Increasing Subsequence | Walk consecutive run | Array is sorted-ish; just scan linearly for `nums[i] > nums[i-1]` | No HashSet needed — direct array comparison |
+| LC 1048 Longest String Chain | "Can I reach the next" via O(1) lookup | Strings instead of ints; "next" = add one char anywhere | HashMap from word → longest chain ending here |
 
 ---
 

@@ -48,6 +48,22 @@ Shows timeline: which service took how long
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Trace ID** | globally unique ID assigned to ONE request; same value propagated across all services it touches | `traceId: "abc123"` appears in every service's log for that single request |
+| **Span** | one unit of work within a single service, recorded with start time + duration | `order-service.create` span: 500ms; `db.query` span: 150ms |
+| **Parent Span** | span that triggered child spans in downstream services; forms a tree hierarchy | API Gateway span is parent; Order Service span and Payment span are children |
+| **OpenTelemetry** | vendor-neutral standard for emitting traces, metrics, and logs; replaces Zipkin/Jaeger SDKs | instrument once with OpenTelemetry; export to Jaeger, Datadog, or Honeycomb |
+| **Jaeger / Zipkin** | open-source backends that store and visualize trace data | Jaeger UI: waterfall diagram showing all spans for trace `abc123` |
+| **Sampling** | only trace N% of requests to avoid overwhelming the tracing backend | 1% sampling = trace 1 in 100 requests; head sampling vs tail sampling |
+| **W3C traceparent** | standard HTTP header for passing trace context between services | `traceparent: 00-abc123-spanid-01` — propagated automatically by OpenTelemetry |
+| **Waterfall View** | trace visualization showing each span as a horizontal bar aligned on a timeline | gaps = idle wait time; overlapping bars = parallel calls |
+| **Baggage** | key-value metadata attached to a trace and propagated with every span downstream | `user_id=42` in baggage → available in every downstream service without explicit passing |
+
+---
+
 ## 🧠 The Mental Model
 
 Imagine a parcel traveling through shipping hubs:

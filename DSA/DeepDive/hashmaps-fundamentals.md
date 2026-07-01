@@ -317,6 +317,81 @@ return count;
 
 ---
 
+## 🔨 Setup — Phase 1 Before the HashMap Loop
+
+> **The Phase 1 question for hashmaps:** *Before I write the main loop, which map type do I need, and how do I construct or seed it from the raw input?* Picking the wrong type (HashMap when you need TreeMap) costs you O(log n) per operation silently. Forgetting to seed the map before the loop (e.g. `prefixCount.put(0, 1)`) causes an off-by-one that makes subarrays starting at index 0 invisible.
+
+### Map Type Decision Table
+
+| Map type | Characteristic | When to reach for it | When NOT to use it |
+| --- | --- | --- | --- |
+| **HashMap** | Unordered, O(1) get/put | Frequency counting, complement lookup, grouping, prefix-sum counting | When you need sorted keys or `floor`/`ceiling` range queries |
+| **LinkedHashMap** | Insertion-order iteration, O(1) | Need to iterate keys in insertion order; LRU eviction with `accessOrder=true` | Simple membership — overhead is not justified |
+| **TreeMap** | Sorted keys, O(log n) | `floorKey`, `ceilingKey`, smallest/largest key queries, time-based stores | Pure membership or frequency counting — TreeMap pays O(log n) for no benefit |
+
+### Phase 1 Code Stubs — Paste Before the Algorithm
+
+**Frequency map (count occurrences):**
+
+```java
+// Phase 1 — count occurrences of each element
+Map<Integer, Integer> freq = new HashMap<>();
+for (int x : arr) {
+    freq.merge(x, 1, Integer::sum);
+}
+```
+
+**Prefix sum + count map (subarray / path sum problems):**
+
+```java
+// Phase 1 — seed with 0→1 BEFORE reading any element
+// without this seed, subarrays starting at index 0 are invisible
+Map<Integer, Integer> prefixCount = new HashMap<>();
+prefixCount.put(0, 1);
+int runningSum = 0;
+```
+
+**Complement map (Two Sum style — check BEFORE put):**
+
+```java
+// Phase 1 — nothing to pre-build; map grows as you scan
+// IMPORTANT: check containsKey BEFORE put — otherwise same index matches itself
+Map<Integer, Integer> seen = new HashMap<>();
+// inside loop: if (seen.containsKey(target - nums[i])) return answer; seen.put(nums[i], i);
+```
+
+**TreeMap for sorted-key range queries:**
+
+```java
+// Phase 1 — sorted keys; use floorKey/ceilingKey for range lookups
+TreeMap<Integer, String> treeMap = new TreeMap<>();
+// treeMap.floorKey(t)    → largest key <= t  (null if none)
+// treeMap.ceilingKey(t)  → smallest key >= t (null if none)
+```
+
+**Key normalization for grouping:**
+
+```java
+// Phase 1 — canonical key: sort characters to group anagrams
+char[] chars = s.toCharArray();
+Arrays.sort(chars);
+String key = new String(chars);
+// rule: key must be immutable after insertion — never use a mutable object (array, list) as a map key
+```
+
+### Pre-Flight Checklist
+
+```
+Before writing the main loop, answer:
+  □ Do I need sorted keys / range queries?   → TreeMap (floorKey / ceilingKey)
+  □ Do I need insertion-order iteration?     → LinkedHashMap
+  □ Am I counting subarrays or tree paths?   → seed prefixCount.put(0, 1) BEFORE the loop
+  □ Is my map key mutable (array, list)?     → freeze it: new String(chars) or Arrays.toString()
+  □ Complement lookup — check before put?    → YES: check containsKey BEFORE put or you match the same index
+```
+
+---
+
 ## 🧭 Patterns — 6 Core HashMap Techniques
 
 ---
@@ -678,178 +753,474 @@ Use sliding window + frequency map. Maintain pattern frequency, slide window, co
 
 ---
 
-## 🔬 Worked Walkthroughs (Deep Dives)
+## 🔬 Worked Walkthroughs
 
----
+### WW-1 — LC 1 Two Sum
 
-### Walkthrough 1: Two Sum (LC 1)
+**Problem statement:** Given an integer array and a target, return the indices of the two numbers that add up to the target.
 
-> **Problem:** Given an array of integers and a target integer, return the indices of the two numbers that add up to target. You may assume each input has exactly one solution, and you cannot use the same element twice.
+**Brute force:** Try all pairs (i, j) with i < j and check if `nums[i] + nums[j] == target` — O(n²) time, O(1) extra space.
+
+**Intuition bridge:** For each `nums[i]`, its required partner is `target - nums[i]`. A HashMap stores previously seen values → index, so checking whether the partner exists costs O(1) — one pass is enough.
 
 **Steps in plain English:**
 
-1. Create a HashMap to store `value → index`.
-2. Iterate through the array.
-3. For each number, compute the complement: `target - current`.
-4. Check if complement exists in the map.
-5. If yes, return both indices. If no, store current value and continue.
+1. **Initialize** an empty `Map<Integer, Integer>` (value → index).
+2. **For each index `i`:** compute `complement = target - nums[i]`. If the complement is in the map, return `[map.get(complement), i]`. Otherwise, store `nums[i] → i`.
 
 ```java
 class Solution {
     public int[] twoSum(int[] nums, int target) {
-        // Step 1 — initialize map
+        // Step 1 — value → index map
         Map<Integer, Integer> map = new HashMap<>();
-
-        // Step 2-5 — iterate and lookup
         for (int i = 0; i < nums.length; i++) {
             int complement = target - nums[i];
-
-            // Step 4 — check if complement was seen
+            // Step 2 — check if partner was seen earlier
             if (map.containsKey(complement)) {
                 return new int[]{ map.get(complement), i };
             }
-
-            // Step 5 — store current value with index
+            // Step 2 — store current value for future lookups
             map.put(nums[i], i);
         }
-
-        // No solution found (shouldn't happen per problem)
-        return new int[]{-1, -1};
+        return new int[]{ -1, -1 };
     }
 }
 ```
 
-**Why this works:** By storing numbers as you go, you check if each number's complement was already seen. This is O(n) instead of O(n²).
+**Complexity:** Time O(n), Space O(n).
 
-**Trace (nums = [2, 7, 11, 15], target = 9):**
+**Transfers to:**
 
-```
-i=0: nums[0]=2, complement=9-2=7
-     map is empty, store {2 → 0}
-     
-i=1: nums[1]=7, complement=9-7=2
-     map contains 2 → return [0, 1]
-```
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 167 Two Sum II | Array is sorted — use converging pointers instead of a map | `while (left < right) { if (sum == target) return; else if (sum < target) left++; else right--; }` |
+| LC 15 3Sum | Outer loop fixes one element; inner two-pointer / map finds the pair | `for (int i = 0; i < n; i++) { twoSum(nums, i + 1, -nums[i]); }` |
+| LC 454 4Sum II | Four arrays — count complement pairs across two maps | `map.getOrDefault(-(c + d), 0)` |
 
 ---
 
-### Walkthrough 2: Group Anagrams (LC 49)
+### WW-2 — LC 242 Valid Anagram
 
-> **Problem:** Given an array of strings, group together all anagrams. Return the groups.
+**Problem statement:** Return `true` if string `t` is an anagram of string `s` (same characters, same frequencies, any order).
+
+**Brute force:** Sort both strings and compare — O(n log n) time, O(n) space for the sorted copies.
+
+**Intuition bridge:** Two strings are anagrams iff they have identical character-frequency distributions. Count chars of `s` (increment), then process `t` (decrement) — the first count that goes negative proves a mismatch.
 
 **Steps in plain English:**
 
-1. Create a HashMap to store `canonical_form → list_of_anagrams`.
-2. For each string, compute its canonical form (sort characters).
-3. Add the string to the list under the canonical form.
-4. Return all lists.
+1. **Early exit** if lengths differ.
+2. **`int[26] counts`** array (one slot per lowercase letter).
+3. **For each char in `s`:** `counts[c - 'a']++`.
+4. **For each char in `t`:** decrement `counts[c - 'a']`; if it drops below 0, return false immediately.
+5. **Return true** (all counts balanced to zero).
+
+```java
+class Solution {
+    public boolean isAnagram(String s, String t) {
+        // Step 1 — lengths must match
+        if (s.length() != t.length()) {
+            return false;
+        }
+        // Step 2 — frequency array for 26 lowercase letters
+        int[] counts = new int[26];
+        // Step 3 — count characters in s
+        for (char c : s.toCharArray()) {
+            counts[c - 'a']++;
+        }
+        // Step 4 — decrement for t; negative means t has a char s doesn't
+        for (char c : t.toCharArray()) {
+            counts[c - 'a']--;
+            if (counts[c - 'a'] < 0) {
+                return false;
+            }
+        }
+        // Step 5 — all counts balanced
+        return true;
+    }
+}
+```
+
+**Complexity:** Time O(n), Space O(1) (fixed 26-element array).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 49 Group Anagrams | Canonical key for grouping instead of pairwise compare | Sort chars → `String key = new String(sorted);` as map key |
+| LC 383 Ransom Note | Magazine must cover ransom note — counts must be ≥ not equal | Decrement magazine counts; return false if any < 0 when processing note |
+| LC 567 Permutation in String | Fixed sliding window of size `s.length()` on `s2` — reuse frequency array | Slide window: `counts[enter]--; counts[exit]++;` check all-zero |
+
+---
+
+### WW-3 — LC 49 Group Anagrams
+
+**Problem statement:** Given an array of strings, group all anagrams together and return the groups in any order.
+
+**Brute force:** For every pair of strings, check if they are anagrams (O(k log k) each) — O(n² · k log k) total.
+
+**Intuition bridge:** All anagrams of a word share the same sorted-character sequence. Mapping that canonical key → list of strings groups everything in one pass.
+
+**Steps in plain English:**
+
+1. **`Map<String, List<String>> groups`**.
+2. **For each string `s`:** sort its characters to form key `k`.
+3. **`groups.computeIfAbsent(k, x -> new ArrayList<>()).add(s)`**.
+4. **Return** `new ArrayList<>(groups.values())`.
 
 ```java
 class Solution {
     public List<List<String>> groupAnagrams(String[] strs) {
-        // Step 1 — initialize map
+        // Step 1 — canonical key → list of anagrams
         Map<String, List<String>> groups = new HashMap<>();
-
-        // Step 2-3 — process each string
         for (String s : strs) {
-            // Compute canonical form (sorted characters)
-            char[] c = s.toCharArray();
-            Arrays.sort(c);
-            String key = new String(c);
-
-            // Add string to the list under canonical form
+            // Step 2 — sorted characters as the shared key
+            char[] chars = s.toCharArray();
+            Arrays.sort(chars);
+            String key = new String(chars);
+            // Step 3 — append to existing group or create new one
             groups.computeIfAbsent(key, k -> new ArrayList<>()).add(s);
         }
-
-        // Step 4 — return all lists
+        // Step 4 — return all groups
         return new ArrayList<>(groups.values());
     }
 }
 ```
 
-**Why this works:** Anagrams have identical sorted character sequences. By grouping on sorted form, you avoid comparing every pair.
+**Complexity:** Time O(n · k log k) where k = max string length, Space O(n · k).
 
-**Trace (strs = ["listen", "silent", "hello"]):**
+**Transfers to:**
 
-```
-"listen": sort → "eilnst", store under key "eilnst"
-"silent": sort → "eilnst", store under key "eilnst" (same key, anagrams grouped!)
-"hello":  sort → "ehllo",  store under key "ehllo"
-
-Result: {
-  "eilnst" → ["listen", "silent"],
-  "ehllo"  → ["hello"]
-}
-```
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 249 Group Shifted Strings | Shift-normalize instead of sort — subtract first char from all chars mod 26 | `key = chars shifted so chars[0] == 0` |
+| LC 438 Find All Anagrams in a String | Sliding fixed window on `s`; check if window frequency matches `p` frequency | Slide window: update counts array; check all-zero after each slide |
+| LC 242 Valid Anagram | Compare two strings instead of grouping many | Return `key(s).equals(key(t))` |
 
 ---
 
-### Walkthrough 3: Subarray Sum Equals K (LC 560)
+### WW-4 — LC 347 Top K Frequent Elements
 
-> **Problem:** Given an array of integers and an integer k, return the total number of continuous subarrays whose sum equals k.
+**Problem statement:** Given an integer array, return the `k` most frequent elements (any order).
+
+**Brute force:** Build a frequency map, sort entries by frequency descending, take the first `k` — O(n log n).
+
+**Intuition bridge:** Frequencies range from 1 to n, so bucket sort by frequency in an `n+1`-slot array. Scanning buckets from right (highest frequency) to left collects the top-k in O(n) without sorting.
 
 **Steps in plain English:**
 
-1. Seed the HashMap with `(0 → 1)` representing the empty prefix.
-2. Iterate the array, maintaining running sum.
-3. For each position, check if `(current_sum - k)` was seen before.
-4. If yes, add the count (those prefix sums complete subarrays summing to k).
-5. Record the current prefix sum in the map.
+1. **Frequency map** `num → count`.
+2. **Bucket array** `List<Integer>[] buckets` of size `n + 1`; `buckets[freq]` holds all numbers with that frequency.
+3. **Scan buckets** from index `n` down to 0; collect elements into result until `result.size() == k`.
+
+```java
+class Solution {
+    public int[] topKFrequent(int[] nums, int k) {
+        int n = nums.length;
+        // Step 1 — frequency map
+        Map<Integer, Integer> freq = new HashMap<>();
+        for (int num : nums) {
+            freq.put(num, freq.getOrDefault(num, 0) + 1);
+        }
+        // Step 2 — bucket array indexed by frequency
+        @SuppressWarnings("unchecked")
+        List<Integer>[] buckets = new List[n + 1];
+        for (Map.Entry<Integer, Integer> entry : freq.entrySet()) {
+            int f = entry.getValue();
+            if (buckets[f] == null) {
+                buckets[f] = new ArrayList<>();
+            }
+            buckets[f].add(entry.getKey());
+        }
+        // Step 3 — collect top-k from highest frequency downward
+        int[] result = new int[k];
+        int idx = 0;
+        for (int f = n; f >= 1 && idx < k; f--) {
+            if (buckets[f] != null) {
+                for (int num : buckets[f]) {
+                    result[idx++] = num;
+                    if (idx == k) {
+                        break;
+                    }
+                }
+            }
+        }
+        return result;
+    }
+}
+```
+
+**Complexity:** Time O(n), Space O(n).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 692 Top K Frequent Words | Sort by frequency then alphabetically (ties broken by string order) | Replace bucket scan with `PriorityQueue` sorted by `(freq desc, alpha asc)` |
+| LC 451 Sort Characters By Frequency | Output all characters sorted by freq (not just top k) | Bucket sort then build result string by repeating each char its freq count |
+| LC 973 K Closest Points to Origin | Top-k by distance instead of frequency | Min-heap or QuickSelect on `dist²`; same "top k" skeleton |
+
+---
+
+### WW-5 — LC 560 Subarray Sum Equals K
+
+**Problem statement:** Given an integer array and integer `k`, return the total number of contiguous subarrays whose sum equals `k`.
+
+**Brute force:** For each pair (i, j), compute the subarray sum — O(n²) with prefix sums, O(n³) naively.
+
+**Intuition bridge:** `sum(i..j) = prefix[j+1] - prefix[i]`. To count subarrays ending at `j+1` with sum `k`, count how many earlier prefix sums equal `prefix[j+1] - k`. A map stores the frequency of each prefix sum seen so far, including a seed of `{0 → 1}` for the empty prefix.
+
+**Steps in plain English:**
+
+1. **`Map<Integer, Integer> prefixCount`** seeded with `{0 → 1}`.
+2. **Running `sum = 0`, `count = 0`**.
+3. **For each number:** `sum += num`; `count += prefixCount.getOrDefault(sum - k, 0)`; then `prefixCount.merge(sum, 1, Integer::sum)`.
+4. **Return `count`**.
 
 ```java
 class Solution {
     public int subarraySum(int[] nums, int k) {
-        // Step 1 — seed with empty prefix
-        Map<Integer, Integer> prefix = new HashMap<>();
-        prefix.put(0, 1);
-
+        // Step 1 — seed: empty prefix has sum 0, seen once
+        Map<Integer, Integer> prefixCount = new HashMap<>();
+        prefixCount.put(0, 1);
         int sum = 0;
         int count = 0;
-
-        // Step 2-5 — iterate and count
-        for (int n : nums) {
-            sum += n;
-
-            // Step 3-4 — check if complement was seen
-            count += prefix.getOrDefault(sum - k, 0);
-
-            // Step 5 — record current prefix
-            prefix.put(sum, prefix.getOrDefault(sum, 0) + 1);
+        for (int num : nums) {
+            // Step 3 — extend running prefix sum
+            sum += num;
+            // Step 3 — count subarrays ending here with sum == k
+            count += prefixCount.getOrDefault(sum - k, 0);
+            // Step 3 — record this prefix sum
+            prefixCount.merge(sum, 1, Integer::sum);
         }
-
+        // Step 4 — total count
         return count;
     }
 }
 ```
 
-**Why this works:** Instead of checking all subarrays (O(n²)), you use the identity: `subarray_sum[i..j] = prefix[j] - prefix[i]`. Rearranging: `prefix[i] = prefix[j] - k`. You store all prefix sums and count matches in O(n).
+**Complexity:** Time O(n), Space O(n).
 
-**Trace (nums = [1, 2, 1], k = 3):**
+**Transfers to:**
 
-```
-Initial: prefix = {0 → 1}, sum = 0, count = 0
-
-i=0: n=1
-  sum = 0 + 1 = 1
-  check: sum - k = 1 - 3 = -2 (not in map, count += 0)
-  record: prefix = {0 → 1, 1 → 1}
-
-i=1: n=2
-  sum = 1 + 2 = 3
-  check: sum - k = 3 - 3 = 0 (in map with count 1, count += 1)
-    → found subarray [1, 2] (indices 0-1)
-  record: prefix = {0 → 1, 1 → 1, 3 → 1}
-
-i=2: n=1
-  sum = 3 + 1 = 4
-  check: sum - k = 4 - 3 = 1 (in map with count 1, count += 1)
-    → found subarray [2, 1] (indices 1-2)
-  record: prefix = {0 → 1, 1 → 1, 3 → 1, 4 → 1}
-
-Return count = 2
-```
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 974 Subarray Sums Divisible by K | Count subarrays where sum divisible by k — store `prefix % k` in the map | `count += prefixCount.getOrDefault(((sum % k) + k) % k, 0);` |
+| LC 325 Maximum Size Subarray Sum Equals K | Maximize length instead of count — store first occurrence index not frequency | `if (!firstOccurrence.containsKey(sum)) firstOccurrence.put(sum, i); else ans = Math.max(ans, i - firstOccurrence.get(sum - k));` |
+| LC 437 Path Sum III | Same prefix-sum trick, but on tree paths — DFS carries the running path sum | DFS with `Map<Long, Integer>` passed by reference; undo on backtrack |
 
 ---
+
+### WW-6 — LC 454 4Sum II
+
+**Problem statement:** Given four integer arrays each of length `n`, count the number of tuples `(i, j, k, l)` such that `nums1[i] + nums2[j] + nums3[k] + nums4[l] == 0`.
+
+**Brute force:** Four nested loops — O(n⁴) time.
+
+**Intuition bridge:** Split into two pairs: enumerate all `a + b` sums from (nums1, nums2) and store their counts in a map. Then for each `c + d` sum from (nums3, nums4), look up `-(c + d)` in the map — each match contributes its count to the answer.
+
+**Steps in plain English:**
+
+1. **Map `sum → count`** for all pairs `(a, b)` from nums1 × nums2.
+2. **For each pair `(c, d)`** from nums3 × nums4: `count += map.getOrDefault(-(c + d), 0)`.
+3. **Return `count`**.
+
+```java
+class Solution {
+    public int fourSumCount(int[] nums1, int[] nums2, int[] nums3, int[] nums4) {
+        // Step 1 — count all a+b sums from nums1 × nums2
+        Map<Integer, Integer> abCount = new HashMap<>();
+        for (int a : nums1) {
+            for (int b : nums2) {
+                abCount.merge(a + b, 1, Integer::sum);
+            }
+        }
+        // Step 2 — for each c+d, look up its complement -(c+d)
+        int count = 0;
+        for (int c : nums3) {
+            for (int d : nums4) {
+                count += abCount.getOrDefault(-(c + d), 0);
+            }
+        }
+        // Step 3 — total tuples
+        return count;
+    }
+}
+```
+
+**Complexity:** Time O(n²), Space O(n²).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 1 Two Sum | One pair (single array) — map seen values, look up complement | `map.getOrDefault(target - nums[i], 0)` |
+| LC 18 4Sum | One array, return unique quadruplets — sort + dedup required | Sort; outer two loops fix `a` and `b`; inner two-pointer for `c + d` |
+| LC 1679 Max Number of K-Sum Pairs | Pair counts within one array summing to k | Same map approach; decrement count on each match used |
+
+---
+
+### WW-7 — LC 380 Insert Delete GetRandom O(1)
+
+**Problem statement:** Design a data structure supporting `insert(val)`, `remove(val)`, and `getRandom()` — each in average O(1) time.
+
+**Brute force:** ArrayList alone gives O(1) insert and getRandom but O(n) remove. HashMap alone gives O(1) insert and remove but no O(1) random access by position.
+
+**Intuition bridge:** Combine both: HashMap stores `value → list index` for O(1) lookup; ArrayList stores values for O(1) random access. The O(1) remove trick: swap the target element with the last element, update the swapped element's index in the map, then pop the last.
+
+**Steps in plain English:**
+
+1. **`List<Integer> list`** + **`Map<Integer, Integer> map`** (value → index in list).
+2. **insert:** if key absent, add to end of list, store `val → list.size()-1`.
+3. **remove:** get idx; swap `list.get(idx)` with `list.get(last)`; update map for the swapped value to `idx`; pop last; remove `val` from map.
+4. **getRandom:** return `list.get(random.nextInt(list.size()))`.
+
+```java
+class RandomizedSet {
+    // Step 1 — list for O(1) random access; map for O(1) index lookup
+    List<Integer> list = new ArrayList<>();
+    Map<Integer, Integer> map = new HashMap<>();
+    Random random = new Random();
+
+    public boolean insert(int val) {
+        if (map.containsKey(val)) {
+            return false;
+        }
+        // Step 2 — append to end; record index
+        list.add(val);
+        map.put(val, list.size() - 1);
+        return true;
+    }
+
+    public boolean remove(int val) {
+        if (!map.containsKey(val)) {
+            return false;
+        }
+        // Step 3 — swap with last, update swapped element's index, pop last
+        int idx = map.get(val);
+        int last = list.get(list.size() - 1);
+        list.set(idx, last);
+        map.put(last, idx);
+        list.remove(list.size() - 1);
+        map.remove(val);
+        return true;
+    }
+
+    public int getRandom() {
+        // Step 4 — uniform random pick from the list
+        return list.get(random.nextInt(list.size()));
+    }
+}
+```
+
+**Complexity:** All operations O(1) amortized, Space O(n).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 381 Insert Delete GetRandom O(1) — Duplicates Allowed | Values may repeat — map `value → Set<Integer>` of all its indices | `map.get(val)` returns a set; pick any index to swap with last |
+| LC 710 Random Pick with Blacklist | Map blacklist indices to valid indices so random int in `[0, N-k)` always lands on a valid one | Build remapping: `blacklist[i] → valid replacement index` |
+| LC 1756 Design Most Recently Used Queue | MRU ordering + fetch — same swap trick with a Fenwick tree for rank queries | Replace list with order-statistic structure |
+
+---
+
+### WW-8 — LC 146 LRU Cache
+
+**Problem statement:** Implement an LRU (Least Recently Used) cache with capacity `cap`; `get` and `put` must both run in O(1) time.
+
+**Brute force:** Keep a list ordered by recency (most recently used at front). On access, find the node and move it to the front — O(n) find per operation.
+
+**Intuition bridge:** A doubly linked list maintains recency order in O(1) if you can jump directly to any node. A HashMap maps `key → node` for that O(1) jump. Together: get/put are O(1) unlink + O(1) reinsert at head.
+
+**Steps in plain English:**
+
+1. **`DLinkedNode`** with `key`, `val`, `prev`, `next`. Sentinel `head` (most recent) and `tail` (least recent, eviction target).
+2. **`Map<Integer, DLinkedNode> map`**.
+3. **get:** if key missing return -1; else `moveToHead(node)`; return `node.val`.
+4. **put:** if key present, update val and `moveToHead`; else create node, `addToHead`, put in map; if `map.size() > cap`, remove `tail.prev` and delete from map.
+
+```java
+class LRUCache {
+    // Step 1 — doubly linked node
+    private static class Node {
+        int key;
+        int val;
+        Node prev;
+        Node next;
+        Node(int key, int val) { this.key = key; this.val = val; }
+    }
+    private final int cap;
+    // Step 2 — key → node map
+    private final Map<Integer, Node> map = new HashMap<>();
+    // Step 1 — sentinel head (most recent) and tail (LRU)
+    private final Node head = new Node(0, 0);
+    private final Node tail = new Node(0, 0);
+
+    public LRUCache(int capacity) {
+        this.cap = capacity;
+        head.next = tail;
+        tail.prev = head;
+    }
+
+    public int get(int key) {
+        // Step 3 — miss or hit
+        if (!map.containsKey(key)) {
+            return -1;
+        }
+        Node node = map.get(key);
+        moveToHead(node);
+        return node.val;
+    }
+
+    public void put(int key, int value) {
+        if (map.containsKey(key)) {
+            // Step 4 — update existing
+            Node node = map.get(key);
+            node.val = value;
+            moveToHead(node);
+        } else {
+            // Step 4 — insert new
+            Node node = new Node(key, value);
+            map.put(key, node);
+            addToHead(node);
+            // Step 4 — evict LRU if over capacity
+            if (map.size() > cap) {
+                Node lru = tail.prev;
+                remove(lru);
+                map.remove(lru.key);
+            }
+        }
+    }
+
+    private void addToHead(Node node) {
+        node.prev = head;
+        node.next = head.next;
+        head.next.prev = node;
+        head.next = node;
+    }
+
+    private void remove(Node node) {
+        node.prev.next = node.next;
+        node.next.prev = node.prev;
+    }
+
+    private void moveToHead(Node node) {
+        remove(node);
+        addToHead(node);
+    }
+}
+```
+
+**Complexity:** get and put O(1), Space O(capacity).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 460 LFU Cache | Evict least frequently (then least recently) used — two maps: `key→freq` and `freq→LinkedHashSet<key>` | Track `minFreq`; on access increment freq, move key to `freq+1` bucket |
+| LC 432 All O(1) Data Structure | Increment/decrement key counts, get max/min key — doubly linked list of count-groups + map | Each node holds a group of keys with the same count |
+| LC 1396 Design Underground System | Accumulate trip times by (startStation, endStation) for average query | `Map<String, int[]>` for (sum, count) per route key |
 
 ## 🎯 Pattern Application Gallery
 

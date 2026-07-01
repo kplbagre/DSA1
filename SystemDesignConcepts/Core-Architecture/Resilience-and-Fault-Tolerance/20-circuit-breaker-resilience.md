@@ -25,6 +25,22 @@ Your payment service calls the fraud detection service. Fraud service is down. Y
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Closed State** | circuit is healthy; requests pass through to downstream service normally | Service B returning 200s → circuit stays closed, all calls go through |
+| **Open State** | circuit is tripped; all requests fail immediately without reaching the downstream service | 6 of last 10 calls failed → circuit opens; next 1000 calls return 503 instantly |
+| **Half-Open State** | test mode after a timeout; a few requests let through to check if the service recovered | after 30s open, 3 test requests sent → all succeed → circuit closes |
+| **Sliding Window** | failure rate measured over last N requests or last N seconds — not all-time history | 10-request window: 5 of last 10 failed (50%) → threshold met → open |
+| **Failure Threshold** | the failure rate percentage that triggers the circuit to open | `failureRateThreshold = 50` → trip when ≥50% of sliding window requests fail |
+| **Cascading Failure** | downstream failure propagates upstream; one crashed service brings down callers | Payment → Fraud → Inventory: Fraud down → Payment threads hang → Payment down |
+| **Bulkhead Isolation** | separate thread pools per downstream dependency so one slow service can't exhaust all threads | 20 threads for Service B calls; if B hangs, Service C's 10 threads still work |
+| **Fallback Method** | pre-defined response returned when circuit is open, instead of propagating an error | `getProductRatings()` fallback: return cached ratings or empty list |
+| **Resilience4j** | Java library implementing circuit breaker, retry, rate limiter, and bulkhead patterns | `@CircuitBreaker(name = "fraudService", fallbackMethod = "defaultFraud")` |
+
+---
+
 ## 🎨 Visual — System Topology: Circuit Breaker in Architecture
 
 ```

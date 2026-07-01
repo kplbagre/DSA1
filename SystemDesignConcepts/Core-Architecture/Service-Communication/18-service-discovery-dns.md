@@ -20,6 +20,21 @@ In a monolith, your app talks to one database at localhost:5432. In a microservi
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Service Registry** | central database mapping service name → healthy instance IPs; the phone directory for microservices | Consul: `order-service` → `[10.0.0.2:8080, 10.0.0.3:8080]` |
+| **Health Check** | periodic probe to verify a service instance is alive; failing instances are removed from the registry | HTTP `GET /health` every 10s; 3 consecutive timeouts → deregister instance |
+| **Dynamic Deregistration** | automatic removal of crashed or stopped instances — no manual cleanup needed | service crashes → misses 3 heartbeats → registry removes its IP |
+| **Client-Side Discovery** | the calling service queries the registry itself and picks an instance to call | Order Service queries Consul, load-balances across 3 User Service IPs directly |
+| **Server-Side Discovery** | a proxy (load balancer) queries the registry on behalf of the caller; caller hits one stable URL | AWS ALB + ECS: caller sends to `order-service.internal`, LB resolves dynamically |
+| **DNS SRV Record** | DNS record that includes port as well as IP — enables service-level routing without extra registry | `_order._tcp.example.com → 10.0.0.2:8080` |
+| **Consul / Eureka / Zookeeper** | popular service registries with health-check, watch, and leader-election APIs | Consul: K8s-adjacent stacks; Eureka: Spring Cloud default |
+| **Quorum** | registry nodes require majority agreement before updating state; prevents split-brain during network partition | 3-node Consul cluster: 2 nodes must agree before any service entry is added/removed |
+
+---
+
 ## 🎨 Visual — System Topology: Service Discovery in Architecture
 
 ```

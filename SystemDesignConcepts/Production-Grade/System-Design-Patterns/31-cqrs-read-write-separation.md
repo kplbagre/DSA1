@@ -25,6 +25,21 @@ CQRS does: One database for writes (Commands), another for reads (Queries)
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Command** | write operation that changes state; routed to the write model | `CreateOrder`, `UpdateInventory`, `CancelBooking` |
+| **Query** | read operation that returns data without changing state; routed to the read model | `GetOrdersByUser`, `SearchProducts`, `GetDashboardMetrics` |
+| **Write Model** | normalized, ACID-compliant database optimized for fast inserts and updates | Postgres orders table: normalized, indexed for writes, 1K writes/sec |
+| **Read Model (Projection)** | denormalized database or view optimized for fast reads; shaped for the query, not for storage efficiency | Elasticsearch index or Redis hash: precomputed `{user_id → order list}` for instant lookup |
+| **Eventual Consistency** | read model is not updated synchronously; after a write, the read model catches up within milliseconds to seconds | order placed at T=0; search index updated at T=200ms; gap is eventual consistency |
+| **Denormalization** | intentionally duplicating data in the read model to avoid JOINs at query time | read model stores `{order_id, user_name, product_name}` — data repeated but no JOIN needed |
+| **Event Synchronization** | write model publishes events; read model consumes them to stay in sync | `OrderCreated` event → read model handler updates search index and cache |
+| **Command Bus** | routes commands to their handler; enforces separation between intent and execution | `commandBus.send(new CreateOrderCommand(...))` → `CreateOrderHandler.handle()` |
+
+---
+
 ## 🧠 The Mental Model
 
 Imagine a restaurant:

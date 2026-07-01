@@ -24,6 +24,22 @@ You receive an order. You need to: send confirmation email, update inventory, ch
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Message Broker** | middleware sitting between producer and consumer; receives, stores, and delivers messages | RabbitMQ, Apache Kafka, AWS SQS |
+| **Producer** | service that publishes messages to the broker | Order Service publishes `OrderCreated` event |
+| **Consumer** | service that reads and processes messages from the broker | Email Service consumes `OrderCreated` to send confirmation |
+| **Queue (RabbitMQ style)** | message consumed by exactly ONE consumer and then deleted; task-distribution model | email job: one consumer processes it, job removed from queue |
+| **Topic (Kafka style)** | message is an immutable log entry; multiple consumers each read it independently at their own pace | `OrderCreated` topic: Email, Inventory, and Warehouse all consume the same event |
+| **Offset** | Kafka consumer's position in a topic partition; consumer tracks its own offset so it can resume after restart | consumer group A at offset 1000; consumer group B at offset 850 |
+| **Consumer Group** | Kafka concept: group of consumers that collectively process a topic; each partition assigned to one consumer in the group | 3 consumers in group → 9 partitions → 3 partitions each; scales horizontally |
+| **At-Least-Once Delivery** | broker guarantees message delivered at least once; consumer may receive duplicates; consumer must be idempotent | message acked after processing; if consumer crashes before ack → redelivered |
+| **Dead Letter Queue (DLQ)** | separate queue for messages that failed processing after N retries; enables manual inspection | payment message fails 3 times → moved to `payment.dlq` for ops team |
+
+---
+
 ## 🎨 Visual — System Topology: Message Queues in Architecture
 
 ```

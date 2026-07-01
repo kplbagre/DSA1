@@ -273,36 +273,67 @@ The universal "why ASCII" rationale + the 5 format conventions live in **master 
 
 ---
 
-## 🔬 Worked Walkthroughs — At Least 3, Showing Pattern Application
+## 🔬 Worked Walkthroughs — Canonical Problems, One Per Structural Shape
 
-Each walkthrough demonstrates one pattern from the doc applied to a real LC problem. **Walkthroughs follow the same English-steps-first rule** — the steps drive the code.
+Each walkthrough demonstrates one structurally unique shape from the doc applied to a real LC problem. **Walkthroughs follow a 5-part format** (below). Each part has a reason — do not skip any.
+
+> **Established July 2026:** the format was upgraded from "steps + code + Try these" to the full 5-part template below. The upgrade was driven by a recurring interview failure: Kapil could recite the optimal algorithm but stalled when asked "what's your brute force?" and "what made you think of that optimization?" The two new parts (Brute Force + Intuition Bridge) directly train those two missing muscles.
 
 ### Format
 
-```markdown
-### Walkthrough N: Problem Name (LC X)
+````markdown
+### WW-N — LC [number] [Problem Name]
 
-> **Plain-English problem statement** (one or two sentences).
+> **Problem:** [one sentence plain-English statement of what's given and what's returned]
+
+**Brute force:** [2-3 sentences — explain the naive approach in plain English, NO code]
+> **Time:** O(?) | **Space:** O(?)
+
+**Intuition bridge — what cracks it open:** [1-2 sentences on the single observation or insight that makes the optimal approach visible. This is the "aha" — the thing that bridges brute force to optimal.]
 
 **Steps in plain English:**
 
-1. ...
-2. ...
+1. **Step name** — what we do and why.
+2. **Step name** — what we do and why.
+3. **Step name** — what we do and why.
 
 ```java
-// code with step-matching comments
+// full optimal solution, complete and runnable, with step-matching comments
 ```
 
-**Why this works:** [1-2 sentence intuition reinforcing the pattern]
+**Time:** O(?) | **Space:** O(?)
 
-> 🧩 **Try these (after this walkthrough):**
-> - ✅ LC X1 ...
-> - 🟡 LC X2 (after Y)
-```
+**Transfers to:**
+
+| Problem | What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- | --- |
+| LC X [Problem Name] | [what carries over verbatim] | [the single structural difference] | `[exact line]` |
+| LC Y [Problem Name] | ... | ... | `...` |
+| LC Z [Problem Name] | ... | ... | `...` |
+````
+
+### Why each part exists
+
+| Part | What it trains |
+| --- | --- |
+| **Brute force** | Every interviewer asks "what's the naive solution?" — and if you can't answer, you look unprepared even if you know the optimal. 2-3 sentences, no code. |
+| **Intuition bridge** | The hardest part to teach. You're not memorizing the algorithm — you're training the *jump*: "I notice X, therefore Y." After 8 walkthroughs you start seeing these jumps on new problems. |
+| **Steps + code** | The algorithm itself. English steps first (universal rule) so the code is annotated, not guessed at. |
+| **Transfers to** | 3-4 problems that share the same skeleton. One pass through these builds a mental "this problem is LC X variant" classifier. |
+
+### Intuition bridge — examples of good vs bad
+
+| ❌ Too vague | ✅ Specific enough to reconstruct |
+| --- | --- |
+| "We use a sliding window because the problem has subarrays." | "We extend because a bigger window can only help; we shrink from the left when the constraint is violated — that's the key asymmetry that makes the O(n) bound hold." |
+| "We use a HashMap for O(1) lookup." | "The complement `target - nums[i]` either exists in the map (done) or we store `nums[i]` for a future complement — so one left-to-right pass is enough." |
+| "We sort first so we can use two pointers." | "Sorting lets us know the direction to move each pointer: if `arr[l] + arr[r] > target`, shrinking from the right strictly decreases the sum — no wasted moves." |
 
 ### How many walkthroughs
 
-Aim for **3-5 walkthroughs** per DeepDive, distributed across the patterns covered. Each walkthrough should reinforce a different pattern.
+Aim for **6-14 walkthroughs** per DeepDive, each covering a **structurally unique shape** — not just a difficulty increment of the same pattern. Ask: *"if I removed this walkthrough, would a reader be missing a shape they haven't seen?"* If no, merge or drop it.
+
+> **Rule (July 2026):** When reviewing a problem list for frequency or coverage gaps, **never remove a problem that teaches a unique structural pattern** — only add. A problem teaching a pattern not covered elsewhere is irreplaceable even if its interview frequency is moderate. Remove only true duplicates (same pattern, same difficulty, no new structural insight).
 
 ### Reference-Only walkthroughs (for advanced problems)
 
@@ -502,7 +533,8 @@ DeepDive-specific:
 - [ ] 📖 Terminology table present
 - [ ] 🧠 Mental Model section explicitly labeled
 - [ ] 🎨 Style Habits split into Universal vs Context-Specific
-- [ ] At least 3 worked walkthroughs covering different patterns
+- [ ] At least 6 worked walkthroughs (target 6-14), each covering a structurally unique shape
+- [ ] Every walkthrough has all 5 parts: Problem statement / Brute force (2-3 sentences + complexity) / Intuition bridge / Steps + code / Transfers-to table
 - [ ] ⚠️ Gotchas section with ❌/✅ wrong-vs-right code per gotcha
 - [ ] 🗺️ Practice Plan in tiers (not weeks); Tier 1 = "Foundational N"
 - [ ] Every problem in the practice plan is tagged

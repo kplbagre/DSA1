@@ -323,6 +323,98 @@ return false;
 
 ---
 
+## 🔨 Setup — Phase 1 Before the Pointer Loop
+
+> **The Phase 1 question for linked lists:** *Before I write the pointer loop, do I need a dummy head? How many pointers? What are their starting positions?* The most common linked-list bugs are not algorithmic — they are setup failures: forgetting `next = curr.next` before flipping an arrow, or not using a dummy when the head itself might be deleted.
+
+### Setup Decision Table
+
+| Setup decision | When to use it | What it unlocks | Common mistake |
+| --- | --- | --- | --- |
+| **Dummy head node** | Inserting or deleting nodes that might be the head; building a new list from scratch | Avoids null-check for the first node; `dummy.next` is always the result head | Not using dummy when head deletion is possible — code needs a fragile special case |
+| **Three pointers: prev / curr / next** | Reversing a list or sublist in-place | O(1)-space reversal of any length | Forgetting `next = curr.next` BEFORE `curr.next = prev` — overwrites the only reference to the rest of the list |
+| **Two pointers: slow / fast** | Finding midpoint, detecting a cycle | Finds mid in one pass; Floyd's cycle detection in O(1) space | Not checking `fast != null && fast.next != null` before advancing — NPE on even-length or cycle-free lists |
+| **Fixed-gap dual pointers** | kth node from end; find the node just before the deletion target | Eliminates the need to know list length | Gap must be `n + 1` (not `n`) for removal — this positions left at the node **before** the target |
+| **Null / single-node guard** | Any algorithm where `head.next` is accessed on the first line | Prevents NPE on empty or single-element input | Checking only `head != null` but calling `head.next.val` — always guard both |
+
+### Phase 1 Code Stubs — Paste Before the Algorithm
+
+**Dummy head (any new list construction or head-deletion risk):**
+
+```java
+// Phase 1 — dummy avoids special-casing the first node
+ListNode dummy = new ListNode(0);
+dummy.next = head;
+ListNode curr = dummy;
+// build output list via curr.next = newNode; curr = curr.next;
+// always return dummy.next, not head
+return dummy.next;
+```
+
+**Three-pointer reversal setup:**
+
+```java
+// Phase 1 — initialize BEFORE any mutation
+ListNode prev = null;
+ListNode curr = head;
+// inside loop — ALWAYS in this order:
+//   ListNode next = curr.next;   ← save before breaking the link
+//   curr.next = prev;            ← flip the arrow
+//   prev = curr;                 ← advance prev
+//   curr = next;                 ← advance curr
+```
+
+**Slow / fast midpoint setup:**
+
+```java
+// Phase 1 — fast one ahead so slow stops at first-half tail on split
+ListNode slow = head;
+ListNode fast = head.next;
+while (fast != null && fast.next != null) {
+    slow = slow.next;
+    fast = fast.next.next;
+}
+// slow is now the midpoint (first-half tail); slow.next is second-half head
+ListNode secondHalf = slow.next;
+slow.next = null;   // split the list
+```
+
+**Fixed-gap kth-from-end setup (n + 1 gap):**
+
+```java
+// Phase 1 — dummy + gap of n+1 leaves left one node BEFORE the target
+ListNode dummy = new ListNode(0);
+dummy.next = head;
+ListNode left = dummy;
+ListNode right = dummy;
+for (int i = 0; i <= n; i++) {
+    right = right.next;
+}
+// advance both until right == null; then left.next is the node to remove
+```
+
+**Null / single-node guard:**
+
+```java
+// Phase 1 — add at the very top of any linked-list method
+if (head == null || head.next == null) {
+    return head;
+}
+```
+
+### Pre-Flight Checklist
+
+```
+Before writing the pointer loop, answer:
+  □ Could head be deleted or replaced?       → use dummy node; return dummy.next
+  □ Am I reversing in-place?                 → prev=null, curr=head; save next BEFORE flipping
+  □ Do I need the midpoint?                  → slow=head, fast=head.next; guard fast≠null && fast.next≠null
+  □ Do I need kth from end?                  → gap = n+1 from dummy; left ends one before the target
+  □ Empty or single-node input possible?     → guard: if (head == null || head.next == null) return head
+```
+
+---
+
 ## 🧭 Patterns — 5 Core Techniques
 
 ### Pattern 1 — Dummy-Head Node Insertion
@@ -1147,13 +1239,19 @@ class Solution {
 
 ## 🔬 Worked Walkthroughs
 
-### Walkthrough 1 — LC 206 Reverse Linked List (Pattern 2)
+### WW-1 — LC 206 Reverse Linked List
 
-**Problem:** Reverse entire linked list.
+**Problem statement:** Reverse a singly linked list in-place and return the new head.
 
-**Example:** `1 -> 2 -> 3 -> null` becomes `3 -> 2 -> 1 -> null`
+**Brute force:** Collect all node values into an array, then overwrite node values in reverse order — O(n) time, O(n) space.
 
-**Code:**
+**Intuition bridge:** Three variables carry everything: `prev` (the growing reversed list), `curr` (current node being processed), and `next` (saved before the link is broken). Each iteration flips one arrow and advances both pointers.
+
+**Steps in plain English:**
+
+1. **`prev = null`, `curr = head`**.
+2. **While `curr ≠ null`:** save `next = curr.next`; flip `curr.next = prev`; advance `prev = curr`; advance `curr = next`.
+3. **Return `prev`** — it is the new head when `curr` reaches null.
 
 ```java
 class Solution {
@@ -1161,132 +1259,421 @@ class Solution {
         ListNode prev = null;
         ListNode curr = head;
         while (curr != null) {
+            // Step 2 — save next before breaking the link
             ListNode next = curr.next;
+            // Step 2 — flip the arrow
             curr.next = prev;
+            // Step 2 — advance both pointers
             prev = curr;
             curr = next;
         }
+        // Step 3 — prev is the new head
         return prev;
     }
 }
 ```
 
-**Trace:**
-
-| Step | prev | curr | next | Action |
-| --- | --- | --- | --- | --- |
-| 0 | null | 1 | null | Start |
-| 1 | null | 1 | 2 | Save next=2 |
-| — | — | — | — | Set 1.next=null |
-| — | 1 | 2 | — | Advance |
-| 2 | 1 | 2 | 3 | Save next=3 |
-| — | — | — | — | Set 2.next=1 |
-| — | 2 | 3 | — | Advance |
-| 3 | 2 | 3 | null | Save next=null |
-| — | — | — | — | Set 3.next=2 |
-| — | 3 | null | — | Advance |
-| Result | prev=3 (new head) | | | Done |
-
-Result: `3 -> 2 -> 1 -> null` ✅
-
 **Complexity:** Time O(n), Space O(1).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 92 Reverse Linked List II | Reverse only positions left..right — insert-at-front for bounded iterations | `for (int i = 0; i < right - left; i++) { pull tail.next to just after conn; }` |
+| LC 25 Reverse Nodes in k-Group | Reverse in chunks of k; leave remaining nodes if < k | Outer loop advances by k; inner reversal identical to LC 206 |
+| LC 234 Palindrome Linked List | Reverse second half in-place, then compare with first half | Steps: find mid → reverse second half → compare → (restore optional) |
 
 ---
 
-### Walkthrough 2 — LC 141 Linked List Cycle (Pattern 3)
+### WW-2 — LC 141 Linked List Cycle
 
-**Problem:** Detect if list has a cycle.
+**Problem statement:** Return `true` if the linked list contains a cycle.
 
-**Example:** `1 -> 2 -> 3 -> 2 (cycle)` → `true`
+**Brute force:** Use a `HashSet<ListNode>` of visited nodes — O(n) time, O(n) extra space.
 
-**Code:**
+**Intuition bridge:** Floyd's tortoise and hare: slow moves 1 step, fast moves 2 steps. If there is a cycle, fast laps slow inside it and they must collide. If there is no cycle, fast reaches `null` first.
+
+**Steps in plain English:**
+
+1. **`slow = head`, `fast = head`**.
+2. **While `fast ≠ null` and `fast.next ≠ null`:** advance `slow` by 1; advance `fast` by 2; if `slow == fast` return `true`.
+3. **Return `false`** — fast fell off the end, no cycle.
 
 ```java
 class Solution {
     public boolean hasCycle(ListNode head) {
-        ListNode slow = head, fast = head;
+        ListNode slow = head;
+        ListNode fast = head;
         while (fast != null && fast.next != null) {
+            // Step 2 — tortoise moves 1, hare moves 2
             slow = slow.next;
             fast = fast.next.next;
+            // Step 2 — collision means cycle exists
             if (slow == fast) {
                 return true;
             }
         }
+        // Step 3 — fast hit null: no cycle
         return false;
     }
 }
 ```
 
-**Trace:**
-
-| Step | slow | fast | Collision? |
-| --- | --- | --- | --- |
-| 0 | 1 | 1 | No |
-| 1 | 2 | 3 | No |
-| 2 | 3 | 2 | No (fast skipped) |
-| 3 | 2 | 3 | No |
-| 4 | 3 | 2 | Yes! |
-
-Result: `true` ✅
-
 **Complexity:** Time O(n), Space O(1).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 142 Linked List Cycle II | After slow==fast, reset one pointer to head; advance both by 1 until they meet — that meeting point is the cycle entry | `slow = head; while (slow != fast) { slow = slow.next; fast = fast.next; }` |
+| LC 876 Middle of Linked List | No cycle — when fast reaches null, slow is at the middle | Remove collision check; just `return slow` when loop ends |
+| LC 287 Find Duplicate Number | Array `nums[0..n]` where `nums[i]` is a "next pointer" — cycle entry is the duplicate | Floyd's on array indices: `slow = nums[slow]; fast = nums[nums[fast]];` |
 
 ---
 
-### Walkthrough 3 — LC 19 Remove Nth Node From End (Pattern 5)
+### WW-3 — LC 19 Remove Nth Node From End
 
-**Problem:** Remove nth node from end without knowing length.
+**Problem statement:** Remove the nth node from the end of the list in a single pass without knowing the length.
 
-**Example:** `1 -> 2 -> 3 -> 4 -> 5`, n=2 → `1 -> 2 -> 3 -> 5`
+**Brute force:** Two passes — first compute length L, then traverse to node at position L − n + 1. O(n) but uses two traversals.
 
-**Code:**
+**Intuition bridge:** Maintain a gap of exactly `n + 1` nodes between two pointers. When the right pointer hits `null`, the left pointer's `next` is the node to delete — skip it.
+
+**Steps in plain English:**
+
+1. **Dummy node** pointing to head; `left = dummy`, `right = dummy`.
+2. **Advance `right` by `n + 1` steps** (creating the gap).
+3. **Advance both** until `right == null`.
+4. **`left.next = left.next.next`** — skip the target node.
+5. **Return `dummy.next`**.
 
 ```java
 class Solution {
     public ListNode removeNthFromEnd(ListNode head, int n) {
-        ListNode dummy = new ListNode(0, head);
-        ListNode left = dummy, right = dummy;
-        
-        // Create gap of n+1
-        for (int i = 0; i <= n && right != null; i++) {
+        // Step 1 — dummy avoids edge case when head itself is deleted
+        ListNode dummy = new ListNode(0);
+        dummy.next = head;
+        ListNode left = dummy;
+        ListNode right = dummy;
+        // Step 2 — advance right by n+1 to create gap
+        for (int i = 0; i <= n; i++) {
             right = right.next;
         }
-        
-        if (right == null) {
-            return dummy.next;
-        }
-        
-        // Advance both until right reaches end
+        // Step 3 — move both until right falls off
         while (right != null) {
             left = left.next;
             right = right.next;
         }
-        
-        // Remove
+        // Step 4 — left.next is the node to remove
         left.next = left.next.next;
+        // Step 5 — dummy.next is the new head
         return dummy.next;
     }
 }
 ```
 
-**Trace:**
+**Complexity:** Time O(n), Space O(1).
 
-| Step | left | right | Gap |
-| --- | --- | --- | --- |
-| 0 (gap) | dummy | dummy | 0 |
-| 1 (gap) | dummy | 1 | 1 |
-| 2 (gap) | dummy | 2 | 2 |
-| 1 (advance) | 1 | 3 | still 2 |
-| 2 (advance) | 2 | 4 | still 2 |
-| 3 (advance) | 3 | 5 | still 2 |
-| 4 (advance) | 4 | null | right is null, stop |
-| Remove | left.next = left.next.next (4.next = 5) | | |
+**Transfers to:**
 
-Result: `1 -> 2 -> 3 -> 5` ✅
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 1721 Swapping Nodes in a Linked List | Find kth from start AND kth from end with one pass — same gap trick | Two gap pointers; swap their values (not nodes) at the end |
+| LC 61 Rotate List | Rotate right by k — equivalent to finding the new tail (length − k from start) | Find length; reconnect tail to head; advance to position `len − k % len` |
+| LC 876 Middle of Linked List | Gap of 0 — slow/fast pointers with no offset; when fast is null, slow is mid | `while (fast != null && fast.next != null) { slow = slow.next; fast = fast.next.next; }` |
+
+---
+
+### WW-4 — LC 21 Merge Two Sorted Lists
+
+**Problem statement:** Merge two sorted linked lists into one sorted linked list and return the head.
+
+**Brute force:** Collect all values from both lists, sort, build a new list — O((m + n) log(m + n)) time, O(m + n) space.
+
+**Intuition bridge:** At each step, the smaller of the two current heads goes next — like merging two sorted decks by always taking from the smaller top card. A dummy head avoids special-casing the first node. After one list is exhausted, append the remaining other directly (already sorted).
+
+**Steps in plain English:**
+
+1. **Dummy head; `curr = dummy`**.
+2. **While both `l1` and `l2` are non-null:** attach the node with the smaller value; advance that pointer.
+3. **`curr.next = l1 != null ? l1 : l2`** — append the remaining tail.
+4. **Return `dummy.next`**.
+
+```java
+class Solution {
+    public ListNode mergeTwoLists(ListNode l1, ListNode l2) {
+        // Step 1 — dummy avoids null-check for first node
+        ListNode dummy = new ListNode(0);
+        ListNode curr = dummy;
+        // Step 2 — pick the smaller head at each step
+        while (l1 != null && l2 != null) {
+            if (l1.val <= l2.val) {
+                curr.next = l1;
+                l1 = l1.next;
+            } else {
+                curr.next = l2;
+                l2 = l2.next;
+            }
+            curr = curr.next;
+        }
+        // Step 3 — append the non-exhausted tail
+        curr.next = (l1 != null) ? l1 : l2;
+        // Step 4 — return merged list
+        return dummy.next;
+    }
+}
+```
+
+**Complexity:** Time O(m + n), Space O(1).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 23 Merge K Sorted Lists | Generalize to k lists — min-heap of (val, node) picks the global minimum each step | `PriorityQueue<ListNode> pq = new PriorityQueue<>(Comparator.comparingInt(n -> n.val));` |
+| LC 148 Sort List | This merge is the last step of merge sort on a linked list | `merge(sortList(left), sortList(right))` |
+| LC 88 Merge Sorted Array | Same two-pointer merge idea but on arrays (merge in-place from the back) | Merge from right to left to avoid overwriting: `nums1[k--] = ...` |
+
+---
+
+### WW-5 — LC 143 Reorder List
+
+**Problem statement:** Reorder list `[0, 1, 2, ..., n−1]` in-place to `[0, n−1, 1, n−2, ...]` — interleave front and back.
+
+**Brute force:** Collect all nodes in an array; use two pointers (front and back) to relink them — O(n) time, O(n) space.
+
+**Intuition bridge:** Three O(n) O(1)-space phases chain together: (1) find the midpoint to split the list into two halves, (2) reverse the second half, (3) interleave-merge one node from each half at a time.
+
+**Steps in plain English:**
+
+1. **Find mid** with slow/fast pointers; split: `slow.next = null`.
+2. **Reverse second half** (LC 206's template).
+3. **Interleave:** while both halves have nodes, take one from first, then one from second.
+
+```java
+class Solution {
+    public void reorderList(ListNode head) {
+        if (head == null || head.next == null) {
+            return;
+        }
+        // Step 1 — find mid and split
+        ListNode slow = head;
+        ListNode fast = head.next;
+        while (fast != null && fast.next != null) {
+            slow = slow.next;
+            fast = fast.next.next;
+        }
+        ListNode second = slow.next;
+        slow.next = null;
+        // Step 2 — reverse second half
+        ListNode prev = null;
+        ListNode curr = second;
+        while (curr != null) {
+            ListNode next = curr.next;
+            curr.next = prev;
+            prev = curr;
+            curr = next;
+        }
+        second = prev;
+        // Step 3 — interleave first and reversed second half
+        ListNode first = head;
+        while (second != null) {
+            ListNode tmp1 = first.next;
+            ListNode tmp2 = second.next;
+            first.next = second;
+            second.next = tmp1;
+            first = tmp1;
+            second = tmp2;
+        }
+    }
+}
+```
 
 **Complexity:** Time O(n), Space O(1).
 
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 234 Palindrome Linked List | Same steps 1 + 2 — compare instead of interleave in step 3 | `while (second != null) { if (first.val != second.val) return false; }` |
+| LC 876 Middle of Linked List | Step 1 alone — return the slow pointer after the loop | `return slow;` |
+| LC 92 Reverse Linked List II | Step 2 generalized to a bounded sublist — four-pointer reconnect | `for (int i = 0; i < right - left; i++) { ... }` |
+
 ---
+
+### WW-6 — LC 92 Reverse Linked List II
+
+**Problem statement:** Reverse the nodes of the list from position `left` to position `right` (1-indexed) in one pass.
+
+**Brute force:** Collect positions `left..right` into an array, reverse values in-place, re-assign to nodes — O(n) time, O(right − left) space.
+
+**Intuition bridge:** Find `conn` (the node just before position `left`) and `tail` (the node at position `left` — it becomes the sublist tail after reversal). Then repeatedly pull `tail.next` to just after `conn` — this is an insert-at-front pattern that reverses the sublist in-place.
+
+**Steps in plain English:**
+
+1. **Dummy → head; `conn = dummy`**. Advance `conn` to position `left − 1`.
+2. **`tail = conn.next`** — this node stays at the tail of the reversed sublist.
+3. **Repeat `right − left` times:** pull `tail.next` to just after `conn` (insert-at-front).
+4. **Return `dummy.next`**.
+
+```java
+class Solution {
+    public ListNode reverseBetween(ListNode head, int left, int right) {
+        // Step 1 — dummy avoids null-check; advance conn to position left-1
+        ListNode dummy = new ListNode(0);
+        dummy.next = head;
+        ListNode conn = dummy;
+        for (int i = 0; i < left - 1; i++) {
+            conn = conn.next;
+        }
+        // Step 2 — tail stays at the end of the reversed segment
+        ListNode tail = conn.next;
+        // Step 3 — insert-at-front: pull tail.next to just after conn
+        for (int i = 0; i < right - left; i++) {
+            ListNode moved = tail.next;
+            tail.next = moved.next;
+            moved.next = conn.next;
+            conn.next = moved;
+        }
+        // Step 4 — dummy.next is the new head
+        return dummy.next;
+    }
+}
+```
+
+**Complexity:** Time O(n), Space O(1).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 206 Reverse Linked List | `left = 1`, `right = n` — full list; no conn setup needed | `prev = null; curr = head; while (curr != null) { ... }` |
+| LC 25 Reverse Nodes in k-Group | Outer loop advances in chunks of k; inner reversal identical | `for (int i = 0; i < k - 1; i++) { pull tail.next to just after groupHead; }` |
+| LC 61 Rotate List | Equivalent to reversing the last `k` nodes to the front | Find length; rotate = `k % len`; reverse suffix and prefix |
+
+---
+
+### WW-7 — LC 2 Add Two Numbers
+
+**Problem statement:** Two non-empty linked lists store digits of non-negative integers in reverse order. Add them and return the sum as a linked list in reverse order.
+
+**Brute force:** Convert both lists to Java `BigInteger`, add, convert back to a reversed list — works but requires O(n) intermediate strings and doesn't scale to the linked-list interview expectation.
+
+**Intuition bridge:** Digits are already in reverse order — convenient for addition, which also proceeds from least-significant to most-significant. Simulate grade-school addition: at each node, sum both digits plus carry; remainder is the output digit; divide by 10 gives the new carry.
+
+**Steps in plain English:**
+
+1. **Dummy head; `curr = dummy`; `carry = 0`**.
+2. **While `l1 ≠ null` or `l2 ≠ null` or `carry ≠ 0`:** `val = (l1 val or 0) + (l2 val or 0) + carry`; `carry = val / 10`; append `new ListNode(val % 10)`; advance `l1`, `l2`, `curr`.
+3. **Return `dummy.next`**.
+
+```java
+class Solution {
+    public ListNode addTwoNumbers(ListNode l1, ListNode l2) {
+        // Step 1 — dummy head; carry starts at 0
+        ListNode dummy = new ListNode(0);
+        ListNode curr = dummy;
+        int carry = 0;
+        // Step 2 — process until both lists are exhausted and carry is 0
+        while (l1 != null || l2 != null || carry != 0) {
+            int val = carry;
+            if (l1 != null) {
+                val += l1.val;
+                l1 = l1.next;
+            }
+            if (l2 != null) {
+                val += l2.val;
+                l2 = l2.next;
+            }
+            carry = val / 10;
+            curr.next = new ListNode(val % 10);
+            curr = curr.next;
+        }
+        // Step 3 — dummy.next is the result head
+        return dummy.next;
+    }
+}
+```
+
+**Complexity:** Time O(max(m, n)), Space O(max(m, n)) for the output list.
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 445 Add Two Numbers II | Digits in forward order — reverse both lists first, then apply LC 2 | `l1 = reverse(l1); l2 = reverse(l2);` before the main loop |
+| LC 415 Add Strings | Same carry logic on digit-character strings (no overflow concerns) | `val = (s1.charAt(i) - '0') + (s2.charAt(j) - '0') + carry;` |
+| LC 67 Add Binary | Binary digits (0/1) — carry at 2 instead of 10 | `carry = val / 2; result = val % 2;` |
+
+---
+
+### WW-8 — LC 148 Sort List
+
+**Problem statement:** Sort a linked list in O(n log n) time. O(1) space is a follow-up goal.
+
+**Brute force:** Extract all values into an array, sort with `Arrays.sort`, rebuild the list — O(n log n) time, O(n) space.
+
+**Intuition bridge:** Merge sort maps naturally to linked lists: finding the midpoint splits the list in O(n) with no extra space, and merging two sorted lists is O(n) with O(1) extra space. Recursion costs O(log n) stack space; bottom-up merge sort achieves true O(1).
+
+**Steps in plain English:**
+
+1. **Base case:** 0 or 1 nodes — return head.
+2. **Find mid** with slow/fast; split (`mid.next = null`).
+3. **Recurse:** `left = sortList(head)`; `right = sortList(mid)`.
+4. **Merge** the two sorted halves (LC 21's merge template).
+5. **Return** merged head.
+
+```java
+class Solution {
+    public ListNode sortList(ListNode head) {
+        // Step 1 — base case: 0 or 1 nodes already sorted
+        if (head == null || head.next == null) {
+            return head;
+        }
+        // Step 2 — find mid and split
+        ListNode slow = head;
+        ListNode fast = head.next;
+        while (fast != null && fast.next != null) {
+            slow = slow.next;
+            fast = fast.next.next;
+        }
+        ListNode mid = slow.next;
+        slow.next = null;
+        // Step 3 — sort each half recursively
+        ListNode left = sortList(head);
+        ListNode right = sortList(mid);
+        // Step 4 — merge two sorted halves
+        return merge(left, right);
+    }
+
+    private ListNode merge(ListNode l1, ListNode l2) {
+        ListNode dummy = new ListNode(0);
+        ListNode curr = dummy;
+        while (l1 != null && l2 != null) {
+            if (l1.val <= l2.val) {
+                curr.next = l1;
+                l1 = l1.next;
+            } else {
+                curr.next = l2;
+                l2 = l2.next;
+            }
+            curr = curr.next;
+        }
+        curr.next = (l1 != null) ? l1 : l2;
+        return dummy.next;
+    }
+}
+```
+
+**Complexity:** Time O(n log n), Space O(log n) for recursion stack.
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 21 Merge Two Sorted Lists | The merge step alone — no recursion needed | Call `mergeTwoLists(l1, l2)` directly |
+| LC 23 Merge K Sorted Lists | K-way merge — use a min-heap seeded with all list heads | `PriorityQueue<ListNode> pq = new PriorityQueue<>(k, Comparator.comparingInt(n -> n.val));` |
+| LC 912 Sort an Array | Same merge sort skeleton on arrays — O(n) extra space for the temp array | `int[] temp = new int[right - left + 1];` during merge |
 
 ## ⚠️ Gotchas — Silent Bug Hall of Fame
 

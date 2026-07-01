@@ -29,6 +29,21 @@ This shows up in the **PS round and System Design round** whenever the problem i
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Optimistic Locking** | no lock acquired; conflict detected after the fact via a version check; retry if conflict | read row (version=7), update → `WHERE version=7`; if version changed → retry |
+| **Pessimistic Locking** | lock acquired BEFORE the read; other transactions wait until the lock is released | `SELECT * FROM seats WHERE id=1 FOR UPDATE` — other writers block |
+| **Version Column** | integer or timestamp column incremented on every write; optimistic lock mechanism | `ALTER TABLE orders ADD COLUMN version INT DEFAULT 0` |
+| **`SELECT FOR UPDATE`** | SQL that reads a row AND places an exclusive lock on it; the pessimistic lock primitive | `SELECT * FROM inventory WHERE id=5 FOR UPDATE` — row locked until `COMMIT` |
+| **Lost Update** | two transactions read same value, both modify it, second write overwrites first | T1 reads balance=100, T2 reads balance=100, T1 writes 90, T2 writes 80 → T1's write lost |
+| **Conflict** | two concurrent transactions tried to modify the same row; one of them must retry or fail | optimistic: update returns 0 rows (version mismatch) → conflict detected → retry |
+| **`@Version` (JPA)** | JPA annotation that auto-manages a version column; framework adds version check to every UPDATE | `@Version Long version;` — Hibernate throws `OptimisticLockException` on stale update |
+| **Stale Read** | optimistic: reading a row that has since been updated by another transaction | T1 reads version=7, T2 commits version=8; T1's update will fail (stale) |
+
+---
+
 ## 🎨 Visual — System Topology: Locking in Database Architecture
 
 ```

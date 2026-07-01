@@ -13,6 +13,21 @@ Every time you write to a database AND publish an event to Kafka (or send an ema
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Dual-Write Problem** | performing two separate writes (DB + Kafka) with no shared transaction; one can fail after the other succeeds | DB commit succeeds, Kafka down → event never published, warehouse never notified |
+| **Outbox Table** | extra DB table inside the same transaction as the business write; stores pending events to be published | `INSERT INTO orders ... ; INSERT INTO outbox (event='OrderCreated', ...) — same transaction |
+| **Outbox Processor (Relay)** | background process that polls the outbox table, publishes events to Kafka, then marks them sent | polls every 100ms; publishes unsent rows; marks `status='SENT'` |
+| **CDC (Change Data Capture)** | reads the database's WAL/transaction log directly instead of polling a table; lower latency, no polling overhead | Debezium reads Postgres WAL → streams every INSERT/UPDATE/DELETE to Kafka |
+| **Debezium** | open-source CDC connector; reads DB transaction logs and streams changes to Kafka as events | Debezium Postgres connector streams every `orders` row change to `orders.cdc` topic |
+| **Idempotent Consumer** | consumer that safely handles duplicate messages — checks if event already processed before acting | consumer checks `processed_event_ids` table before processing; duplicate → skip |
+| **Transaction Log Tailing** | CDC strategy where a dedicated process tails the DB WAL instead of the application writing to an outbox | Debezium tails Postgres WAL; no application code change needed |
+| **At-Least-Once Delivery** | guarantee that each event is delivered at minimum once; duplicates possible; idempotent consumer is the defense | outbox relay retries on Kafka timeout → same event may publish twice |
+
+---
+
 ## 🧠 The Mental Model
 
 Think of a **small business owner with an accounting journal**.

@@ -25,6 +25,21 @@ In distributed systems, every network call can fail in a way that leaves you unc
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Idempotent Operation** | applying the same operation N times produces the same result as applying it once | `PUT /orders/123 {status: "paid"}` — calling 5 times, result same as calling once |
+| **Idempotency Key** | unique client-generated ID sent with every request; server uses it to detect duplicates | `Idempotency-Key: uuid-a3f2...` header; Stripe uses this for payment requests |
+| **Idempotency Table** | server-side store mapping idempotency key → (response, timestamp); duplicate lookup before processing | `SELECT response FROM idempotency_keys WHERE key='uuid-123'` → return cached response |
+| **At-Least-Once Delivery** | guarantee that a message is delivered at minimum once; duplicates are possible; requires idempotent consumer | Kafka default delivery: consumer may receive same event twice on rebalance |
+| **Client-Generated Key (UUID)** | client generates the idempotency key before sending; ensures uniqueness even if request is never received | `UUID.randomUUID().toString()` — generated client-side before each payment attempt |
+| **Safe HTTP Methods** | GET, HEAD, OPTIONS — idempotent and read-only by definition; retrying them is always safe | `GET /orders/123` — can call 100 times; result and state unchanged |
+| **Non-Safe Methods** | POST — not idempotent by default; each call may create a new resource unless you add idempotency key | `POST /payments` without idempotency key → two calls = two charges |
+| **Deduplication Window** | how long an idempotency key is remembered; duplicate requests outside this window treated as new | 24-hour window: if client retries after 25 hours → payment processed again |
+
+---
+
 ## 🎨 Visual — System Topology: Idempotency in Architecture
 
 ```

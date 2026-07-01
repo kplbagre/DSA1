@@ -758,6 +758,106 @@ Min Cost Stairs says "you can start from step 0 **or** step 1" — that's two op
 
 ---
 
+## 🔨 Translating the Problem Into a DP State — Phase 1
+
+> **The Phase 1 question for DP:** *Before I write the recurrence, what does `dp[i]` (or `dp[i][j]`) actually represent, how big is the array, and which cells are the base cases?* Getting this wrong means your recurrence produces values at the wrong indices — a bug that's nearly impossible to spot because the loop structure looks correct.
+
+### Input Format → State Shape Decision Table
+
+| Problem input | State shape | Array size | Base case pattern |
+| --- | --- | --- | --- |
+| **1D array** (pick/skip, house robber, climbing stairs) | `dp[i]` = answer for first `i` elements | `int[n + 1]` | `dp[0]` = empty-set answer; `dp[1]` = single-element answer |
+| **2D grid** `grid[m][n]` (unique paths, min path sum) | `dp[r][c]` = answer to reach `(r,c)` from origin | `int[m][n]` (same size as grid) | `dp[0][0]`; then fill row 0 and col 0 separately before the main loops |
+| **Two strings** `s1` (len m), `s2` (len n) (LCS, Edit Distance) | `dp[i][j]` = answer for `s1[0..i-1]` and `s2[0..j-1]` | `int[m + 1][n + 1]` | `dp[0][j]` and `dp[i][0]` = cost of comparing against the empty string |
+| **Items + capacity** (0/1 Knapsack, Partition Equal Subset Sum) | `dp[i][w]` = answer using first `i` items with capacity `w` | `int[n + 1][W + 1]` | `dp[0][w] = 0` (no items); `dp[i][0] = 0` (zero capacity) — both default to 0 |
+| **Single string interval** (Palindromic Subsequence, MCM) | `dp[i][j]` = answer for `s[i..j]` | `int[n][n]` | `dp[i][i] = 1` (single char); fill by **increasing interval length**, not row-by-row |
+
+### Phase 1 Code Stubs — Paste Before the Recurrence
+
+**1D array — 1-indexed `dp` (most common):**
+
+```java
+// Phase 1 — dp[0] = empty input; dp[1] = single element
+int[] dp = new int[n + 1];
+dp[0] = 0;        // base case: no elements selected
+dp[1] = nums[0];  // base case: only first element available (problem-specific value)
+// fill: for (int i = 2; i <= n; i++) dp[i] = max(dp[i-1], nums[i-1] + dp[i-2]);
+```
+
+**2D grid — same dimensions as grid:**
+
+```java
+// Phase 1 — fill row 0 and col 0 before the main nested loop
+int[][] dp = new int[m][n];
+dp[0][0] = grid[0][0];
+for (int c = 1; c < n; c++) {
+    dp[0][c] = dp[0][c - 1] + grid[0][c];  // only one path to any cell in top row
+}
+for (int r = 1; r < m; r++) {
+    dp[r][0] = dp[r - 1][0] + grid[r][0];  // only one path to any cell in left col
+}
+// fill: for (int r = 1; r < m; r++) for (int c = 1; c < n; c++) dp[r][c] = ...
+```
+
+**Two strings — (m+1) × (n+1) with empty-string base cases:**
+
+```java
+// Phase 1 — row 0 = s1 is empty; col 0 = s2 is empty
+int m = s1.length();
+int n = s2.length();
+int[][] dp = new int[m + 1][n + 1];
+for (int j = 0; j <= n; j++) {
+    dp[0][j] = j;  // edit distance: insert j chars to match s2[0..j-1] from empty s1
+}
+for (int i = 0; i <= m; i++) {
+    dp[i][0] = i;  // edit distance: delete i chars to turn s1[0..i-1] into empty s2
+}
+// for LCS: base cases stay 0 (default) — no setup needed beyond allocation
+// fill: for (int i = 1; i <= m; i++) for (int j = 1; j <= n; j++) dp[i][j] = ...
+```
+
+**Items + capacity — (n+1) × (W+1):**
+
+```java
+// Phase 1 — both row 0 and col 0 default to 0 (int[] already zero-initialized)
+int[][] dp = new int[n + 1][W + 1];
+// dp[0][w] = 0 for all w: no items → zero value
+// dp[i][0] = 0 for all i: zero capacity → zero value
+// fill: for (int i = 1; i <= n; i++) for (int w = 1; w <= W; w++) dp[i][w] = ...
+```
+
+**Single-string interval DP — fill by increasing length:**
+
+```java
+// Phase 1 — base case: every single character is a palindromic subsequence of length 1
+int[][] dp = new int[n][n];
+for (int i = 0; i < n; i++) {
+    dp[i][i] = 1;
+}
+// CRITICAL: fill by increasing interval length — row-by-row fill gives wrong dependencies
+for (int len = 2; len <= n; len++) {
+    for (int i = 0; i <= n - len; i++) {
+        int j = i + len - 1;
+        // dp[i][j] = ... depends on dp[i+1][j-1], dp[i+1][j], dp[i][j-1]
+    }
+}
+```
+
+### Pre-Flight Checklist
+
+```
+Before writing the recurrence, answer:
+  □ 1D array input?          → dp[n+1]; dp[0] = empty answer; dp[1] = single-element answer
+  □ 2D grid input?           → dp[m][n] same size; fill row 0 and col 0 as base cases first
+  □ Two strings?             → dp[m+1][n+1]; row 0 = empty s1 cost; col 0 = empty s2 cost
+  □ Items + capacity?        → dp[n+1][W+1]; row 0 and col 0 both 0 (default)
+  □ Interval DP?             → dp[n][n]; dp[i][i]=1; fill by INCREASING LENGTH, not row-by-row
+  □ Fill direction check:    → left→right top→bottom for most; EXCEPT unbounded knapsack
+                                (inner loop left→right reuses same row — intentional)
+```
+
+---
+
 ## 🚶 Family 1 — 1D Linear DP
 
 > **Striver videos:** DP 2-6 (Climbing Stairs, Frog Jump, Frog Jump K, House Robber I, House Robber II)

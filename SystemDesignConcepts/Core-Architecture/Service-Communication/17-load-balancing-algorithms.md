@@ -20,6 +20,20 @@ You have 10 backend servers. A request arrives. Which one handles it? Pick badly
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Load Balancer** | A proxy server that sits in front of N backend servers and routes each incoming request to one of them. Prevents any single server from being overwhelmed while others sit idle. | 10K req/sec split across 10 servers = 1K req/sec each. Without LB: all 10K hit server 1, which crashes. |
+| **Round Robin** | Routes requests to servers in fixed rotation — server 1, server 2, server 3, back to server 1. Stateless, simple. Has no awareness of how busy each server actually is. | 3 servers, 6 requests: R1→S1, R2→S2, R3→S3, R4→S1, R5→S2, R6→S3. Fair in count, blind to load. |
+| **Least Connections** | Routes each new request to the server with the fewest currently active connections. Dynamically adapts to real load — busy servers get fewer new requests automatically. | S1 has 10 active connections (slow queries), S2 has 2. New request → S2. LB adapts; round robin would still send to S1. |
+| **Sticky Sessions (Session Affinity)** | Routing a specific user's requests **always to the same backend server** for the duration of their session. Required when session state (shopping cart, login context) is stored in the server's memory rather than an external store. If that server crashes, the user's session is lost. | User A logs in → LB always sends A's requests to S3. S3 crashes → A's session gone. Fix: store sessions in Redis, then sessions survive any server going down. |
+| **Health Check** | A periodic probe the load balancer sends to each backend server to verify it is alive and responding correctly. Servers that fail health checks are removed from the rotation until they recover. | LB sends `GET /health` every 10 seconds. S5 stops responding → LB stops routing traffic to it. S5 recovers → LB re-adds it. |
+| **L4 Load Balancer** | Routes based on TCP/IP metadata only (source IP, destination port). Cannot inspect HTTP path, cookies, or body. Fast — no packet parsing — but cannot do path-based routing or cookie stickiness. AWS product: **Network Load Balancer (NLB)**. | All traffic on port 443 → backend pool, regardless of whether the path is `/api/users` or `/api/orders`. |
+| **L7 Load Balancer** | Routes based on HTTP-level semantics — URL path, Host header, cookies, query params. Enables path-based routing, per-user cookie stickiness, and JWT validation at the edge. Slightly slower (parses HTTP headers per request). AWS product: **Application Load Balancer (ALB)**. | `/api/orders` → order-service cluster; `/api/search` → search-service cluster. Same domain, one ALB, two target groups. |
+
+---
+
 ## 🎨 Visual — System Topology: Load Balancing in Architecture
 
 ```
@@ -110,6 +124,81 @@ KEY INVARIANT:
    Health checks remove failing servers from rotation
    Sticky sessions = same request → same server (for stateful apps)
 ```
+
+---
+
+## 🧠 L4 vs L7 Load Balancing
+
+Before choosing an algorithm, you must choose which OSI layer the load balancer operates at. This determines what information it can inspect — and therefore what routing decisions it can make.
+
+| Dimension | L4 — Transport Layer | L7 — Application Layer |
+|---|---|---|
+| **Sees** | IP address + TCP/UDP port only | HTTP path, host header, cookies, query params |
+| **Cannot see** | HTTP method, URL path, cookies, body | Raw TCP/IP packets (already parsed) |
+| **AWS product** | Network Load Balancer (NLB) | Application Load Balancer (ALB) |
+| **Latency** | Lower — no packet inspection | Slightly higher — parses HTTP headers per request |
+| **Sticky sessions** | By client IP (coarse — all users behind a NAT share a server) | By cookie (fine-grained — per individual user session) |
+| **Protocols** | TCP, UDP, TLS passthrough | HTTP, HTTPS, WebSocket, HTTP/2, gRPC |
+| **TLS termination** | Optional passthrough (no inspection) or terminate | Terminates TLS at the LB; routes plain HTTP internally |
+| **Use cases** | Non-HTTP (SMTP, FTP, gaming UDP), ultra-low latency | Microservice routing, A/B testing, JWT auth at edge |
+
+### 🎨 Visual — L4 vs L7 Routing Decision
+
+```
+L4 LOAD BALANCER (AWS NLB)
+───────────────────────────────────────────────
+Client request arrives:
+  TCP SYN to 10.0.0.1:443
+        │
+        ▼
+ ┌─────────────┐
+ │   NLB       │  Knows: source IP 203.0.113.5, dest port 443
+ │ L4 only     │  Does NOT know: HTTP path, cookies, host header
+ └──────┬──────┘
+        │  Routes by: IP hash, round robin, or least connections
+        ▼
+  [ Backend Server Pool ]
+
+L7 LOAD BALANCER (AWS ALB)
+───────────────────────────────────────────────
+Client request arrives:
+  GET /api/orders/123 HTTP/1.1
+  Host: api.mysite.com
+  Cookie: JSESSIONID=abc123
+        │
+        ▼
+ ┌─────────────────────────────────┐
+ │   ALB                           │
+ │ Parses full HTTP request        │
+ │ Checks: path, host, cookie      │
+ └──────┬──────────────┬───────────┘
+        │              │
+        │ path=/api/orders → Order Service cluster
+        │ path=/api/users  → User Service cluster
+        │ path=/api/search → Search Service cluster
+        ▼              ▼
+  [ Order SVC ]    [ User SVC ]
+
+KEY INVARIANT:
+   L4 routes blindly by TCP metadata — fast but dumb.
+   L7 routes by HTTP semantics — slower (by ~1ms) but enables
+   path-based routing, cookie stickiness, and edge auth.
+```
+
+### When to use L4
+
+- **Non-HTTP protocols:** gaming servers (UDP), SMTP, FTP, custom TCP
+- **Ultra-low latency:** high-frequency trading, where even 1ms header parsing matters
+- **Client IP preservation:** NLB passes the real source IP to the backend; ALB replaces it with its own (backends must read `X-Forwarded-For` header to recover the original IP)
+
+### When to use L7
+
+- **Microservices:** route `/api/checkout` → checkout-service, `/api/inventory` → inventory-service — all on the same domain, one load balancer
+- **A/B testing:** route `X-AB-Group: canary` header → new-version cluster, others → stable cluster
+- **JWT validation at edge:** ALB can validate auth tokens before the request reaches the service — offloads auth from every service
+- **WebSocket and HTTP/2:** ALB handles protocol upgrade negotiation, backend servers speak standard HTTP
+
+**Interview phrasing:** *"For our microservices platform we use ALB (L7) as the external edge — it routes by path to each service. Inside the cluster, service-to-service calls go through a sidecar proxy (Envoy/Istio) which is also L7 but handles internal routing. NLB would only make sense if we needed non-HTTP traffic or needed to preserve raw client IPs."*
 
 ---
 
@@ -363,6 +452,10 @@ For sticky sessions at scale (thousands of servers), simple hash-modulo fails: i
 
 > Round robin assigns by request order (deterministic, simple). Consistent hashing assigns by content (request ID or session ID) to the same server. If you add/remove a server, round robin continues; consistent hashing rehashes some requests but not all. Consistent hashing is used for stateful services where you need the same request to land on the same server to preserve cache/state. Round robin is stateless and faster (no hashing). ⭐ **Tier 2 — conceptual**
 
+### Q: "When would you use an L4 load balancer vs an L7 load balancer?" ⭐
+
+> Default to L7 (ALB) for any HTTP/HTTPS microservice — it gives you path-based routing, cookie stickiness, WebSocket support, and JWT validation at the edge. Use L4 (NLB) when: (1) you need non-HTTP protocols (SMTP, gaming UDP), (2) you need the real client IP preserved (ALB replaces it with its own IP), or (3) you need sub-millisecond routing latency and can't afford HTTP header parsing. At Walmart scale: external customer traffic hits an ALB (L7) for routing to specific services; internal services that use gRPC over raw TCP might use NLB to preserve client IP for tracing. ⭐ **Tier 1 — almost always asked**
+
 ### Q: "We use sticky sessions, but sessions are getting lost during deploy. Why?"
 
 > When you deploy new code, servers shut down one by one. Sessions on those servers are lost (they're in-memory). The load balancer tries to rehash to healthy servers, but if the LB doesn't know the session state, recovery is partial. Solution: drain sessions gracefully — before shutting down a server, stop accepting new connections (mark it "draining"), let in-flight requests finish, then shut down. Or use a distributed session store (Redis) instead of in-memory, so sessions survive server restarts. ⭐ **Tier 2 — operational**
@@ -371,7 +464,7 @@ For sticky sessions at scale (thousands of servers), simple hash-modulo fails: i
 
 ## 🧾 TL;DR
 
-> "Load balancing distributes requests fairly across servers to maximize throughput. Round robin is simple for stateless services; least connections adapts to actual load. Use sticky sessions for stateful apps, but accept that you lose failover resilience. Consistent hashing preserves session affinity even when servers change."
+> "Load balancing distributes requests fairly across servers to maximize throughput. Choose L4 (NLB) for non-HTTP or ultra-low-latency; choose L7 (ALB) for microservices — it routes by path, host, and cookie. For the algorithm: round robin is simple for stateless services; least connections adapts to actual load. Use sticky sessions for stateful apps, but accept that you lose failover resilience."
 
 ---
 
@@ -399,3 +492,4 @@ For sticky sessions at scale (thousands of servers), simple hash-modulo fails: i
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 17. Added four algorithms (round robin, least connections, weighted RR, sticky sessions) with code examples and mental model. |
+| July 1, 2026 | Added L4 vs L7 section: NLB vs ALB comparison table, ASCII routing diagram, use-case guidance, and L4/L7 interview Q&A. Updated TL;DR. Added Terminology Table (load balancer, round robin, least connections, sticky sessions/session affinity, health check, L4/L7) — sticky sessions was used in KEY INVARIANT before being defined. |

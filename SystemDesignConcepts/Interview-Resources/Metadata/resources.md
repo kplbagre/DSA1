@@ -424,9 +424,38 @@ From research — topics ranked by how often they appear in actual SDE2/SDE3 int
 
 ---
 
+---
+
+## 🔹 Resources for Gap-Closure Notes 50-51 (Added Jul 2026)
+
+### Database Indexing (for `50-database-indexing.md`)
+
+| Resource | What it covers | Link |
+|---|---|---|
+| **Arpit Bhayani — Database Internals** ⭐ | B-tree structure, why indexes speed up queries, composite index mechanics, EXPLAIN plans — most rigorous free content on DB index internals | YouTube: search "Arpit Bhayani database internals" or "Arpit Bhayani indexing" |
+| **ByteByteGo — "How Database Indexes Work"** ⭐ | Visual walkthrough of B-tree leaf nodes, clustered vs non-clustered, covering index, EXPLAIN output — best free visual | YouTube: search "ByteByteGo database indexes" |
+| **Use The Index, Luke (use-the-index-luke.com)** | The definitive free reference on SQL indexing — composite index column order, selectivity, covering indexes with worked examples across Postgres/MySQL/Oracle | https://use-the-index-luke.com |
+
+**Key concepts this needs to cover:** B-tree structure (sorted leaf nodes, O(log n) lookups), composite index leftmost-prefix rule (index on (A,B,C) helps WHERE A=? and WHERE A=? AND B=? but NOT WHERE B=? alone), covering index (INCLUDE columns so no heap fetch needed), selectivity (high cardinality = good candidate for indexing), EXPLAIN ANALYZE (Seq Scan vs Index Scan vs Index Only Scan), clustered vs non-clustered (heap fetch cost), partial indexes (WHERE clause narrows index to active rows), when NOT to index (high write rate, low selectivity columns like boolean flags).
+
+---
+
+### Geospatial Indexing (for `51-geospatial-indexing.md`)
+
+| Resource | What it covers | Link |
+|---|---|---|
+| **Uber Engineering — H3: Uber's Hexagonal Hierarchical Spatial Index** ⭐ | Primary source — why hexagons, resolution levels, real production usage for surge pricing and ETA computation | Search: "Uber Engineering H3 hexagonal spatial index" or eng.uber.com |
+| **Redis GEO documentation** ⭐ | Exact API contract for GEOADD, GEODIST, GEOSEARCH (BYRADIUS vs BYBOX, ASC/DESC, COUNT, WITHCOORD, WITHCOORD options) | https://redis.io/docs/latest/commands/geosearch |
+| **hellointerview.com — Proximity Service** | Full system design walkthrough of "find nearby drivers/restaurants" — combining Redis GEO with geohash DB, failure modes at scale, data freshness trade-offs | Search: "hellointerview proximity service system design" |
+
+**Key concepts this needs to cover:** Geohash (shared prefix = nearby, precision levels 5-char ≈ 5km vs 7-char ≈ 153m, boundary problem + 9-cell fix using Moore neighbours), quad tree (recursive 4-quadrant split, adaptive depth for non-uniform density, in-memory structure), H3 (hexagonal grid, resolution 0-15, equidistant neighbours = k-ring(1) gives 7 cells not 9, why hexagons beat squares for circular proximity), Redis GEO commands (GEOADD O(log N), GEOSEARCH O(N+log M), member = ID only + separate DB for metadata), R-tree mention (PostGIS uses it for polygon containment, not the go-to for circular proximity queries).
+
+---
+
 ## 🔄 Changelog
 
 | Date | Change |
 |---|---|
 | June 2026 | File created. Research from 5 web searches cross-referenced. |
 | June 25, 2026 | Added resources for concepts 24 (API Gateway), 25 (Monitoring & Observability), 26 (WebSocket). Resources include foundational videos (ByteByteGo), interview-aligned guides (hellointerview.com), and specification docs (OpenTelemetry, MDN). |
+| Jul 1, 2026 | Added resources for concepts 50 (Database Indexing) and 51 (Geospatial Indexing). Gap-closure notes — resources include Arpit Bhayani DB internals, Use The Index Luke reference, Uber Engineering H3 blog, Redis GEO docs, and hellointerview Proximity Service. |

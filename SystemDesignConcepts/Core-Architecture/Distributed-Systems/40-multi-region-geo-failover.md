@@ -12,6 +12,23 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Active-Active** | two or more regions both accept reads AND writes simultaneously; requires conflict resolution | us-east-1 and eu-west-1 both accept orders; continuous cross-region sync runs |
+| **Active-Passive** | one region (primary) accepts writes; standby region takes over only on failure | us-east-1 is primary; eu-west-1 is warm standby — no writes until failover |
+| **GeoDNS** | DNS that returns different IP addresses based on the requester's geographic location | US client → us-east-1 IP; EU client → eu-west-1 IP; same domain name |
+| **Anycast BGP** | same IP address announced from multiple routers worldwide; BGP routes each packet to the nearest | Cloudflare's 1.1.1.1 — same IP reaches different physical servers depending on location |
+| **LWW (Last Write Wins)** | conflict resolution rule: whichever write has the later timestamp survives | user updates profile in US at T=100ms, in EU at T=110ms → EU version is kept |
+| **CRDT (Conflict-free Replicated Data Type)** | data structure that can be merged from two regions without conflict by design | increment counters: US adds 5, EU adds 3 → merge = 8, always mathematically correct |
+| **RPO (Recovery Point Objective)** | maximum acceptable data loss (measured in time) when a region fails | RPO=0 → synchronous cross-region replication required; RPO=1min → async OK |
+| **RTO (Recovery Time Objective)** | maximum acceptable time to restore service after a region failure | RTO=30s → automated DNS failover; RTO=1h → manual flip acceptable |
+| **Cross-Region Replication Lag** | delay between a write committed in one region appearing in another region's replica | us-east-1 writes at T=0; eu-west-1 replica visible at T=80ms → 80ms lag |
+| **Route53 / Cloudflare** | DNS providers with GeoDNS and health-check-based automatic failover | Route53 health check fails on us-east-1 → all traffic redirected to eu-west-1 |
+
+---
+
 ## 🎯 Why This Matters
 
 - **Problem:** A single AWS `us-east-1` deployment means users in India experience 200ms base latency, and a regional failure (AWS outage, natural disaster, network partition) takes down your entire service globally.

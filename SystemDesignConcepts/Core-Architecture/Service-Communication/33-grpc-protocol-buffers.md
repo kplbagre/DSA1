@@ -46,6 +46,23 @@ Server: {id: 123, name: "John", ...}
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Protocol Buffers (Protobuf)** | binary serialization format; encodes data as compact bytes, not human-readable text | `{id: 1, name: "John"}` in JSON = 26 bytes; in Protobuf ≈ 8 bytes |
+| **.proto file** | schema definition file; both client and server generate code from it at build time | `message User { int32 id = 1; string name = 2; }` |
+| **HTTP/2 Multiplexing** | multiple RPCs share one TCP connection simultaneously; no per-call connection setup overhead | 100 concurrent gRPC calls over 1 connection vs 100 separate TCP sockets in REST |
+| **gRPC Stub** | auto-generated client code from `.proto`; caller invokes it like a local method | `UserServiceStub stub = channel.newStub(); stub.getUser(request)` |
+| **Unary RPC** | client sends one request, server sends one response — same semantics as HTTP REST | `GetUser(UserRequest) → UserResponse` |
+| **Server Streaming** | client sends one request, server streams back multiple responses over time | `GetLiveUpdates(req) → stream of OrderEvent` |
+| **Client Streaming** | client streams multiple messages, server sends one final response | `UploadFileChunks(stream of bytes) → UploadResponse` |
+| **Bidirectional Streaming** | both client and server send a stream of messages simultaneously | live chat: both sides stream messages; neither waits for the other to finish |
+| **Field Numbers** | integer tags in `.proto` identifying each field in binary encoding; enable safe schema evolution | old field removed → old clients see zero-value; new field added → old clients ignore it |
+| **varint encoding** | integers encoded in 1–10 bytes based on magnitude; small numbers take fewer bytes | `1` encodes to 1 byte; `300` encodes to 2 bytes — vs JSON `"300"` = 5 chars |
+
+---
+
 ## 🧠 The Mental Model
 
 Imagine two people talking:
@@ -465,6 +482,46 @@ public class GrpcConfig {
 }
 ```
 
+### Proto3 Schema Evolution — What's Safe vs What Breaks
+
+A heavily probed interview topic: "You need to add a field to your proto. What's safe?"
+
+The key rule: **field numbers are the wire identity.** When protobuf serializes a message, field names are not sent — only field numbers. Changing a field number is a breaking change. The name is irrelevant at runtime.
+
+| Change | Safe? | Why |
+|---|---|---|
+| Add a new field with a new field number | ✅ Safe | Old clients ignore unknown field numbers (proto3 default) |
+| Remove an optional field | ✅ Safe (with caution) | Old clients that still send it — new server ignores; new clients — missing field gets zero/empty default |
+| Rename a field (keep same field number) | ✅ Safe | Wire format uses number, not name |
+| Change a field **number** | ❌ Breaking | Old clients encode with old number; new server reads wrong field |
+| Change a field **type** incompatibly (e.g., `int32` → `string`) | ❌ Breaking | Old encoded bytes decoded as wrong type → garbage data |
+| Reuse a deleted field's number | ❌ Breaking | Reserve deleted field numbers to prevent accidental reuse |
+
+**Best practice — reserve deleted field numbers:**
+
+```java
+// proto3 — safe schema evolution example
+// syntax = "proto3";
+
+// message User {
+//   int32 id = 1;
+//   string name = 2;
+//   // Field 3 was "email" but we deleted it
+//   reserved 3;              // prevents reuse of field number 3
+//   reserved "email";        // prevents reuse of field name "email"
+//   int32 age = 4;           // new field — old clients ignore it
+//   string phone_number = 5; // added later — fully backward compatible
+// }
+```
+
+**Forward vs backward compatibility:**
+- **Backward compatible:** New client can read old-format messages (new fields just get default values)
+- **Forward compatible:** Old client can read new-format messages (unknown fields are silently ignored in proto3)
+
+Proto3 is **both** by default — as long as you never reuse field numbers and only add/remove optional fields.
+
+**Interview phrasing:** *"Proto3 is backward and forward compatible by default. Field numbers are the wire identity — as long as I never reuse a deleted field's number and only add new optional fields, old and new clients interoperate seamlessly. I use `reserved` on any deleted field number to prevent future developers from accidentally breaking the contract."*
+
 ### What is Protocol Buffers (Protobuf), and why does it fit here?
 
 Protocol Buffers is **a method for serializing structured data** (from Google). Unlike JSON (text, verbose), Protobuf is binary and compact. You define schema in .proto file; compiler generates language-specific code (Java, Python, Go). In an interview, if asked: *"Protocol Buffers is a binary serialization format that's 10x more compact than JSON and faster to serialize/deserialize. Schema is defined once in .proto files; code is auto-generated. Type-safe and backward-compatible (can add fields without breaking old clients)."*
@@ -497,6 +554,16 @@ HTTP/2 is the **successor to HTTP/1.1** with multiplexing (multiple concurrent s
 
 **The common mistake:** Using gRPC for public APIs. Public APIs should be REST (human-readable, simpler for clients). gRPC shines for internal service communication.
 
+**When REST genuinely wins over gRPC:**
+
+| Scenario | Why REST wins |
+|---|---|
+| **Public / partner APIs** | REST + JSON is universally accessible — any language, any tool, no proto schema needed. gRPC requires clients to have the .proto file and generated stubs. |
+| **Browser-native clients** | Browsers cannot speak raw gRPC over HTTP/2 (gRPC-web is a workaround requiring a proxy; adds complexity). REST works natively in every browser via `fetch`. |
+| **Debugging and inspection** | REST calls are inspectable with cURL, Postman, browser devtools. Binary gRPC frames are not human-readable — you need grpcurl or a dedicated tool. |
+| **Simple request-response, infrequent calls** | gRPC setup overhead (proto compilation, channel management) is overkill for a service that receives 10 RPC calls/day. |
+| **Firewall / proxy environments** | Some corporate proxies and legacy firewalls block HTTP/2 or don't understand gRPC content-type. REST over HTTP/1.1 has universal support. |
+
 ---
 
 ## ⚠️ Trade-offs
@@ -515,6 +582,10 @@ HTTP/2 is the **successor to HTTP/1.1** with multiplexing (multiple concurrent s
 
 > REST: 100K × 200 = 20MB/sec overhead. gRPC: 100K × 50 = 5MB/sec overhead. Saved: 15MB/sec = 1.3TB/day. At cloud rates ($0.10/GB), you save $130/day ≈ $47K/year on bandwidth alone. Doesn't include latency savings (3x faster = more throughput per server). ⭐ **Tier 2 — Quantifying trade-offs**
 
+### Q: "You need to add a new field to a proto message already in production. What's safe and what breaks?" ⭐
+
+> The rule: **field numbers are the wire identity, not names.** Adding a new field with a new field number is always safe — old clients silently ignore unknown field numbers (proto3 default). Changing an existing field's number is a breaking change — old clients encode with the old number, new server reads the wrong slot. Renaming a field is safe (name isn't on the wire). Deleting a field is safe but mark the number as `reserved` to prevent future reuse (`reserved 3; reserved "email";`). Never reuse a deleted field number — if an old client still sends field 3, your new field at position 3 would misinterpret the bytes. ⭐ **Tier 1 — always probed when gRPC comes up**
+
 ### Q: "You define protobuf message with required field. Old client doesn't know about it. What happens?"
 
 > Protobuf3 removed `required` keyword (too strict). All fields are optional. If field missing, default value used (0 for int, empty string for string). Old clients work, new clients get sensible defaults. If you truly need field validation, do it in application logic, not protobuf. ⭐ **Tier 2 — Versioning**
@@ -531,7 +602,7 @@ HTTP/2 is the **successor to HTTP/1.1** with multiplexing (multiple concurrent s
 
 ## 🧾 TL;DR
 
-> "gRPC is RPC over HTTP/2 using Protocol Buffers. Binary encoding (10x smaller than JSON). Multiplexing (concurrent RPCs on one connection). Streaming (unary, server-stream, client-stream, bidirectional). 7x faster than REST. Use internally; REST for public APIs."
+> "gRPC is RPC over HTTP/2 using Protocol Buffers. Binary encoding (10x smaller than JSON). Multiplexing (concurrent RPCs on one connection). Streaming (unary, server-stream, client-stream, bidirectional). 7x faster than REST. Use internally; REST for public APIs (browser-native, debuggable, no proto schema required). Schema evolution: field numbers are the wire identity — add new fields freely, never reuse deleted numbers."
 
 ---
 
@@ -558,3 +629,4 @@ HTTP/2 is the **successor to HTTP/1.1** with multiplexing (multiple concurrent s
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 33. Covered gRPC as high-performance RPC over HTTP/2, Protocol Buffers binary serialization, four streaming types (unary, server-stream, client-stream, bidirectional), multiplexing benefits, backward compatibility, when to use gRPC vs REST. |
+| July 1, 2026 | Added proto3 schema evolution table (safe vs breaking changes, reserved fields), "When REST wins" table, ⭐ schema evolution Q&A. Updated TL;DR. |

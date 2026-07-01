@@ -202,6 +202,52 @@ public class APDataStore {
 
 ---
 
+## 🧭 PACELC — CAP's More Useful Extension
+
+CAP only describes behaviour during a partition. But partitions are rare. **PACELC** (proposed by Daniel Abadi, 2012) extends the model to cover the much more common case — normal operation.
+
+> **P: When there is a Partition** → choose between Availability (A) and Consistency (C)
+> **ELC: Else (no partition) in normal operation** → choose between Latency (L) and Consistency (C)
+
+Every distributed database falls into one of four quadrants:
+
+```
+                        PARTITION behaviour
+                   ┌────────────────┬─────────────────┐
+                   │  PA            │  PC             │
+                   │  (choose A)    │  (choose C)     │
+  NORMAL ops ──────├────────────────┼─────────────────┤
+  trade-off        │  PA/EL         │  PC/EC          │
+  EL = low latency │                │                 │
+  EC = consistency │  Cassandra     │  sync Postgres  │
+                   │  DynamoDB      │  ZooKeeper      │
+                   │  Riak          │  Spanner        │
+                   ├────────────────┼─────────────────┤
+                   │  PA/EC         │  PC/EL          │
+                   │                │                 │
+                   │  MongoDB       │  (rare —        │
+                   │  (majority-    │   uncommon      │
+                   │   write quorum)│   combination)  │
+                   └────────────────┴─────────────────┘
+
+KEY: EL = optimise for Latency during normal ops
+     EC = pay latency cost for Consistency during normal ops
+```
+
+**Reading the quadrants:**
+
+| System | Partition choice | Normal-ops choice | Why |
+|--------|-----------------|-------------------|-----|
+| Cassandra / DynamoDB / Riak | A — stay available | L — low latency | Writes succeed immediately; replicate async; reads from nearest replica are fast but possibly stale |
+| Sync Postgres / ZooKeeper / Spanner | C — reject writes | C — consistency | Quorum required even in normal ops; reads always fresh; latency is higher |
+| MongoDB (majority write concern) | A — stay available | C — consistency | During partition: keep accepting writes. During normal ops: majority-quorum write pays the latency cost for consistency |
+
+**Why PACELC matters for interviews:**
+
+CAP's binary choice (CP or AP) is partition-only — it says nothing about what you pay during the 99.9% of time when no partition is occurring. PACELC captures the real day-to-day trade-off. When a candidate says "we use Cassandra because it's AP," the PACELC follow-up is: "and you're accepting read staleness (EL) even during healthy network operation." When a candidate says "we use synchronous Postgres," the follow-up is: "and you're paying cross-datacenter round-trip latency on every write (EC) even when there's no failure." That's the full picture — not just the disaster scenario.
+
+---
+
 ## 🔬 Interview Q&As
 
 ### Q: "What does CAP theorem actually say? Aren't all systems consistent, available, and partition-tolerant?"
@@ -234,6 +280,18 @@ public class APDataStore {
 
 ---
 
+### Q: "CAP gives us CP vs AP. Real systems seem to fall on a spectrum. What's PACELC?"
+
+> PACELC extends CAP to cover **normal operations**, not just partitions. The full form: "When there's a Partition, choose A or C. **Else** (no partition), choose **Latency or Consistency**." Cassandra is PA/EL — stays available during partition, and in normal ops favours low latency (reads can be stale). ZooKeeper and sync Postgres are PC/EC — reject writes during partition AND require quorum during normal ops, paying latency for consistency. MongoDB with majority write concern is PA/EC — availability during partition, but consistency during normal ops. The practical insight: "CP vs AP" only tells you the failure-mode dimension. PACELC tells you both dimensions — the full cost of your technology choice.
+
+---
+
+### Q: "What is causal consistency, and when is it stronger than eventual consistency?"
+
+> **Causal consistency** guarantees: if operation A causally precedes operation B (B depends on A — for example, B is a reply to A), then any node that has seen B must also have seen A. It is stronger than eventual consistency (which makes no ordering guarantees) but weaker than strong consistency (which requires all reads to see the latest write). **Example:** User posts a comment (operation A), then replies to it (operation B). In an eventually consistent system, a replica might serve the reply before the original post, leaving a confusing gap. In a causally consistent system that is impossible — seeing B implies seeing A. **Implementation:** vector clocks or logical timestamps travel with each write; a reader rejects a read that would violate causal ordering. **When to use it:** comment threads, collaborative editing (Google Docs), chat systems, any domain where "response requires prior write" matters. Available in: MongoDB with session-level causal consistency (`causally consistent session`), CockroachDB, AWS DynamoDB (conditional writes approximate this). Most plain AP databases do NOT offer causal consistency by default.
+
+---
+
 ## 🧾 TL;DR
 
 > "When we partition, we sacrifice either Consistency or Availability — CAP forces the choice. We designed our ledger for Consistency (synchronous replication), so writes can fail temporarily. Our recommendations cache uses Availability (async replication), so slight staleness is acceptable."
@@ -263,3 +321,4 @@ public class APDataStore {
 | Date | Change |
 |---|---|
 | June 25, 2026 | Initial creation. Added CAP fundamentals, CP vs AP system examples, real-world company decisions (DynamoDB, Spanner, PayPal, Netflix, LinkedIn). Two Q&As on multi-region implications. |
+| Jul 1, 2026 | Added PACELC section (Abadi 2012) with 2×2 quadrant grid (PA/EL = Cassandra/DynamoDB, PC/EC = sync Postgres/ZooKeeper/Spanner, PA/EC = MongoDB); added two new Q&As: PACELC explanation and causal consistency with vector clock context. |

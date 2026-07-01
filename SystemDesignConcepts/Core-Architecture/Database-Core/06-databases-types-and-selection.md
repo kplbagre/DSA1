@@ -36,6 +36,8 @@ Every system design question you face (URL shortener, chat system, expense repor
 | **Throughput** | How many operations per second the database can handle. Measured in requests/sec (req/sec) or transactions/sec. | E2 auth: 35K token validation requests/sec; PostgreSQL with single instance maxes out around 10K req/sec. |
 | **Latency** | How long a single operation takes. Measured in milliseconds (ms). | A1 cache hit: 1-5ms (Redis). DB query miss: 10-20ms (PostgreSQL). |
 | **TTL (Time-To-Live)** | Auto-expiry time. Used for caching: after TTL, the entry is deleted. | A1: Redis cache with 1-hour TTL; after 1 hour, the key is gone, forcing a DB query on next access. |
+| **Write Bottleneck** | When the **primary** database receives more write operations than it can process per second. Symptoms: write latency climbs from 5ms → 500ms, CPU maxes out, queries queue up. A single PostgreSQL instance handles roughly 5K–10K writes/sec before hitting this wall. Reads can scale by adding replicas; writes cannot — they must all go through the one primary. | A payment system at 15K writes/sec on a single Postgres: insert latency spikes to seconds. Fix: shard or switch to Cassandra. |
+| **Replication Lag** | The delay between a write landing on the **primary** and that write appearing on a **read replica**. Usually milliseconds, but can reach seconds under load. Causes "read-your-own-writes" bugs. | User updates their username, immediately reads their profile — the read hits a replica that hasn't synced yet, so they see the old username. Fix: route reads to primary for 1–2 seconds after a write (or always route writes + their immediate reads to primary). |
 
 ---
 
@@ -60,15 +62,13 @@ Every system design question you face (URL shortener, chat system, expense repor
                  /        │        \
                 /         │         \
     AVAILABILITY ←────────┼────────→ PARTITION
-    (single point           │        TOLERANCE
-     of failure)      Redis (Cache)   (network split)
-                            │
-                            │
-                      (NOT a database,
-                       but an example)
+    (stays up)              │        TOLERANCE
+               Redis single-node (≈CA)   (network split)
 ```
 
 **KEY INVARIANT:** Every database sits at a point on this triangle. You pick two of three. The position determines how the database behaves under failure (network split), how fresh reads are, and how it scales.
+
+> **Redis in CAP:** Redis single-node ≈ CA — one server means no partition to tolerate; it is consistent and available. Redis Cluster ≈ AP — data is partitioned across nodes; under a network split, Redis Cluster prioritizes availability over strong consistency (reads may briefly return stale values).
 
 ---
 
@@ -172,35 +172,49 @@ Every system design question you face (URL shortener, chat system, expense repor
 
 ### Scaling Strategies
 
+**Why reads scale but writes don't.** When you add a read replica, you create another server that can handle reads — three replicas means three servers serving reads in parallel, tripling read throughput. Writes are different: every write must go to the **primary** (the single source of truth). Replicas receive updates asynchronously after the write lands on the primary. So no matter how many replicas you add, the write ceiling stays at one primary's limit (~5K–10K writes/sec for PostgreSQL). To scale writes, you must split the data across multiple independent primaries — that's **sharding**.
+
+**Identifying the bottleneck:** Read-heavy load (reads swamping the DB, writes fine) → add replicas. Write-heavy load (insert queue growing, write latency spiking) → shard.
+
 ```
-                    Single Postgres Instance
-                    (read-only, ~10K req/sec)
-                             │
-                             ▼
-                    Write Bottleneck?
-                        No  │  Yes
-                            │
-                    ┌───────┴────────┐
-                    ▼                ▼
-            Add Read Replicas    Shard by Key
-            (1 primary +         (hash user_id
-             2-3 read-only        % 10 = 10 shards)
-             replicas)
-                    │                │
-                    │        ┌───────┴────────┐
-                    │        ▼                ▼
-            Reads now  App Layer      Cross-shard
-            hit        Routing        Queries Hard
-            replicas   (which shard?  (JOIN user=alice
-            (parallel              with documents)
-             queries)
+                Single Postgres Instance
+                (~10K writes/sec, ~10K reads/sec)
+                         │
+                         ▼
+               What is the bottleneck?
+      ┌──────────────────────────────────┐
+      │                                  │
+ Read-heavy                         Write-heavy
+ (reads > 10K/sec,                  (writes > 5K/sec,
+  writes are fine)                   insert queue grows)
+      │                                  │
+      ▼                                  ▼
+ Add Read Replicas                  Shard by Key
+ (1 primary +                       (hash user_id % 10
+  2–3 read-only replicas)            = 10 separate primaries)
+      │                                  │
+      ▼                                  ▼
+ Reads now spread                   Each shard handles
+ across replicas                    1/10th of all writes
+ (writes still → primary)
+                                         │
+                              ┌──────────┴──────────┐
+                              ▼                     ▼
+                         App routes             Cross-shard
+                         by hash key            queries need
+                         (fast)                 fan-out (costly)
 
 
 KEY INVARIANT:
-  Replication helps reads (read replicas spread the load).
-  Sharding helps writes (each shard takes a subset of the load).
-  Together: Read replicas + sharding = PostgreSQL at scale.
+  Replication helps reads (replicas spread read load).
+  Sharding helps writes (each shard handles fewer writes).
+  Together: read replicas per shard = PostgreSQL at scale.
+  Cost: sharding makes cross-shard queries expensive.
 ```
+
+> **⚠️ Replication Lag:** Replica writes happen asynchronously — there is a brief delay (usually milliseconds, but up to seconds under load) before a replica reflects what the primary just wrote. This causes **read-your-own-writes** bugs: user writes a new username → immediately reads profile → read hits a stale replica → they see the old name. Fix: route reads to the primary for 1–2 seconds after a write, or use sticky reads (always read from primary within a user's session window immediately after any write).
+
+> **⚠️ Cross-Shard Queries:** Sharding by `user_id` puts all of one user's data on one shard — single-user queries are fast. But "find all documents signed today across all users" requires hitting every shard, collecting results, and merging in the application layer. This **fan-out query** (sending one logical query to multiple shards in parallel and stitching the results) costs N× the resources. Common fixes: (1) denormalize — on every write, also write a copy to a dedicated aggregation table; (2) secondary Elasticsearch index — index events as they happen; admin cross-shard queries go to Elasticsearch instead of sharded Postgres.
 
 ### Example from Our Solutions
 
@@ -660,6 +674,38 @@ KEY INVARIANT:
 
 ---
 
+## 🔬 Interview Q&As
+
+**Q1: How do you know if your PostgreSQL instance has hit a write bottleneck?**
+
+> Three signals: (1) **Write latency spikes** — inserts that normally take 5ms start taking 200ms+. (2) **CPU saturation** — the DB server is pegged at 80–100% even during off-peak hours. (3) **Write queue depth** — connections pile up waiting for the primary; check `pg_stat_activity` for blocked queries. A single PostgreSQL primary handles roughly 5K–10K writes/sec before this wall. At that point, reads can be offloaded to replicas — but if the bottleneck is the writes themselves, you need sharding or a distributed database like Cassandra.
+
+---
+
+**Q2: Why does E2 (Authentication) use PostgreSQL instead of Cassandra, given that Cassandra scales better?**
+
+> Auth requires **strong consistency**. When a user is compromised and we add their token to the revocation list, every API server must see that revocation immediately. Cassandra's eventual consistency means a replica could lag by even 10ms — during that window, a revoked token could still validate on a stale replica. That's a security hole. PostgreSQL with synchronous replication guarantees that once a write commits, every subsequent read sees it. The trade-off is write scalability — but for auth, correctness beats scale. Token validation itself is stateless (JWT signature check), so we never hit the DB per validation; we only hit it on login/logout/revocation, which is far lower volume.
+
+---
+
+**Q3: Your system is sharded by `user_id`. An admin query asks: "show me all documents signed today across all users." How do you handle it?**
+
+> Three options: (1) **Fan-out** — send the query to all shards in parallel, merge results in the app layer. Works, but costs N× resources (N = shard count). (2) **Denormalize** — maintain a separate "recent activity" append-only table on one dedicated shard; write to it on every signing event. Admin queries read from this single table. (3) **Secondary Elasticsearch index** — index all signing events into Elasticsearch as they happen; admin queries go to Elasticsearch, which handles cross-shard search natively. Option 3 is the production pattern. Option 1 is the interview-safe fallback to name when asked about trade-offs.
+
+---
+
+**Q4: A user updates their display name. Two seconds later they reload the page and see the old name. No error was thrown. What happened, and how do you fix it?**
+
+> Classic **replication lag / read-your-own-writes** bug. The write landed on the primary, but the read request was routed to a read replica that hadn't synced yet. The lag is usually milliseconds but can reach seconds under load. Three fixes: (1) **Sticky primary reads** — after any write, route that user's reads to the primary for 1–2 seconds. (2) **Read-after-write routing** — the app tracks "this user wrote in the last N seconds" and forces reads to primary during that window. (3) **Synchronous replication** — configure PostgreSQL to not return from the write until all replicas confirm receipt (safest but adds write latency). Option 2 is the most common production approach.
+
+---
+
+**Q5: What's the difference between a read replica and a shard? When do you need each?**
+
+> A **read replica** holds a **copy of the same data** as the primary — it solves the read scaling problem. The primary is still the single write destination; replicas are read-only mirrors updated asynchronously. Use replicas when reads overwhelm the primary (e.g., 100:1 read-to-write ratio). A **shard** holds a **subset of the data** — user IDs 0–9M on shard 0, 10M–20M on shard 1, etc. Each shard has its own independent primary, distributing writes across N primaries. Use sharding when writes exceed a single primary's capacity (~5K–10K writes/sec for Postgres). The combination — read replicas per shard — is how PostgreSQL handles both problems at scale. The cost: application-layer routing complexity, and cross-shard queries become expensive fan-out operations.
+
+---
+
 ## 🗺️ Practice Plan
 
 ### Tier 1 — Foundation (Read & Understand)
@@ -820,3 +866,4 @@ Question 5: How fast does data change?
 | Date | Change |
 |------|--------|
 | June 24, 2026 | **File created.** Comprehensive database selection guide for system design interviews. Covers CAP theorem, ACID vs BASE, all major database types (SQL, NoSQL Document, Key-Value, Search, Time-Series, OLAP), decision frameworks, and cross-references to our 10 DocuSign solutions (A1, A2, C1-C3, D1-D3, E1, E2). Includes worked examples, gotchas, practice plan, and TL;DR cheat sheet. Designed for long-term retention through mental models, ASCII visuals, and practical scenarios. |
+| July 1, 2026 | **Comprehension gaps fixed.** (1) Terminology table: added Write Bottleneck and Replication Lag definitions. (2) Scaling Strategies: rewrote section — added prose explaining why reads scale but writes don't, replaced ambiguous "Write Bottleneck? No/Yes" diagram with labelled Read-heavy/Write-heavy branches, added ⚠️ Replication Lag callout, added ⚠️ Cross-Shard Queries callout with fan-out definition. (3) Added `## 🔬 Interview Q&As` section (5 Q&As covering bottleneck detection, Postgres vs Cassandra for auth, cross-shard queries, read-your-own-writes, replica vs shard). (4) Fixed CAP triangle: removed incorrect "NOT a database" Redis label; corrected to Redis single-node ≈ CA, Redis Cluster ≈ AP. |

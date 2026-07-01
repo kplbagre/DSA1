@@ -183,6 +183,113 @@ When you read a backtracking problem, scan for these signal phrases. They map di
 
 ---
 
+## 🔨 Setting Up Before You Call `backtrack()` — Phase 1
+
+> **⬛ The choices array in backtracking is usually the raw input itself** — no adjacency-list or TreeNode construction needed. What trips interviewees is forgetting to initialize **auxiliary state** (the `used[]` array, the board, constraint sets) before the first `backtrack()` call, and forgetting to sort when duplicates are present.
+
+---
+
+### Consolidated Setup — What to Initialize Per Sub-Pattern
+
+| Sub-pattern | Initialize before calling `backtrack()` | Sort input first? |
+| --- | --- | --- |
+| **1. Take / Not-Take** | `results = new ArrayList<>()`, `path = new ArrayList<>()` | No |
+| **2. For-loop Pick-Next** | `results`, `path` | Only if duplicates present (LC 40) |
+| **3. Permutations** | `results`, `path`, `boolean[] used = new boolean[n]` | Only if duplicates present (LC 47) |
+| **4. Constraint-Driven** | `results`, `char[][] board` (init to `'.'`), constraint `Set<Integer>` per dimension | No |
+| **5. Grid / 2D** | Grid is the raw input; add `boolean[][] visited` or mark cells in-place | No |
+| **6. Cut-points** | `results`, `path` (for partition slices or substrings) | No |
+
+---
+
+### The Wrapper Pattern — Public Sets Up, Private Recurses
+
+Every backtracking problem should use this two-method structure: the **public method owns Phase 1**, the **private method owns Phase 2**.
+
+```java
+public List<List<Integer>> solve(int[] nums) {
+    // Phase 1 — initialize auxiliary state
+    List<List<Integer>> results = new ArrayList<>();
+    List<Integer> path = new ArrayList<>();
+    // Phase 1 — sort if input has duplicates or pruning requires ordered candidates
+    Arrays.sort(nums);
+    // Phase 2 — run the algorithm
+    backtrack(nums, 0, path, results);
+    return results;
+}
+
+private void backtrack(int[] nums, int start,
+                       List<Integer> path, List<List<Integer>> results) {
+    // ... recursive logic
+}
+```
+
+> **Why this split matters:** passing `results` and `path` as parameters (not class fields) keeps the function pure and thread-safe. The public method is the only caller that ever creates these lists — the private method only reads and mutates them.
+
+---
+
+### The One Case Where Phase 1 Builds a Real Lookup — LC 17 Letter Combinations
+
+The **only** sub-pattern where Phase 1 constructs a genuine lookup structure is when raw digits must be converted to a letter set (LC 17). The `Map<Character, String>` IS the "choice space" — without it the backtracking loop has nothing to iterate over.
+
+**Steps in plain English:**
+
+1. **Phase 1 — build the phone map** once before any recursion.
+2. **Phase 1 — guard** the empty-digits case.
+3. **Phase 2 — backtrack:** at each digit index, loop over that digit's letters; append, recurse, delete last char (undo).
+
+```java
+public List<String> letterCombinations(String digits) {
+    // Step 1 — Phase 1: build the lookup (the choice space comes from this map)
+    Map<Character, String> phoneMap = new HashMap<>();
+    phoneMap.put('2', "abc");
+    phoneMap.put('3', "def");
+    phoneMap.put('4', "ghi");
+    phoneMap.put('5', "jkl");
+    phoneMap.put('6', "mno");
+    phoneMap.put('7', "pqrs");
+    phoneMap.put('8', "tuv");
+    phoneMap.put('9', "wxyz");
+    List<String> results = new ArrayList<>();
+    // Step 2 — guard
+    if (digits.isEmpty()) {
+        return results;
+    }
+    // Step 3 — Phase 2: run backtracking
+    backtrack(digits, 0, new StringBuilder(), results, phoneMap);
+    return results;
+}
+
+private void backtrack(String digits, int ind, StringBuilder path,
+                       List<String> results, Map<Character, String> phoneMap) {
+    if (ind == digits.length()) {
+        results.add(path.toString());
+        return;
+    }
+    String letters = phoneMap.get(digits.charAt(ind));
+    for (char c : letters.toCharArray()) {
+        // TRY
+        path.append(c);
+        backtrack(digits, ind + 1, path, results, phoneMap);
+        // UNDO — StringBuilder.deleteCharAt is the analogue of List.remove(size-1)
+        path.deleteCharAt(path.length() - 1);
+    }
+}
+```
+
+> **Key observation:** the `for` loop iterates over `phoneMap.get(digit)` — not over `nums[i]`. The map IS the phase-1 construction that enables the for-loop body.
+
+---
+
+> **⬛ Pre-flight: before writing the `backtrack()` call, answer these 4 setup questions:**
+>
+> 1. **Which sub-pattern?** → use the Decision Framework table above; pick the matching row in the setup table.
+> 2. **Duplicates in input?** → `Arrays.sort()` first; add `if (i > start && arr[i] == arr[i-1]) continue;` inside the for-loop.
+> 3. **Need `boolean[] used`?** → permutations only. For-loop with `start` does NOT need one — `start` handles exclusion.
+> 4. **Constraint dimensions?** → for N-Queens and similar, allocate one `Set<Integer>` (or `boolean[]`) per constraint dimension (rows, columns, diagonals) before the first call.
+
+---
+
 ## 🪜 Sub-Pattern 1: Take/Not-Take
 
 > **Already covered in `recursion-fundamentals.md` Pattern 3.1 + 3.2 (Subsequence Trilogy).** This section is a recap + the bridge to the rest of backtracking.
@@ -1374,125 +1481,511 @@ Always: **success base case → fail base case → pruned loop → recurse**. In
 
 ## 🔬 Worked Walkthroughs
 
-### Walkthrough 1: LC 78 Subsets — Two Approaches Side-by-Side
+---
 
-> Show that take/not-take and for-loop both produce all 2^n subsets.
+### WW-1 — LC 78 Subsets
 
-**Approach A — Take/Not-Take:**
+Return all 2^n subsets of an integer array with distinct elements.
 
-```java
-public List<List<Integer>> subsets(int[] nums) {
-    List<List<Integer>> ans = new ArrayList<>();
-    f(0, nums, new ArrayList<>(), ans);
-    return ans;
-}
+**Brute force:** Iterate over all 2^n bitmasks from 0 to 2^n − 1; for each mask, include `nums[i]` wherever bit `i` is set. O(n × 2^n) time — which is also the optimal complexity since you must generate all subsets. Bitmask style requires knowing `n` and uses bit manipulation; recursion generalises more easily.
 
-private void f(int ind, int[] nums, List<Integer> path, List<List<Integer>> ans) {
-    if (ind == nums.length) {
-        ans.add(new ArrayList<>(path));
-        return;
-    }
-    // TAKE
-    path.add(nums[ind]);
-    f(ind + 1, nums, path, ans);
-    path.remove(path.size() - 1);
-    // NOT-TAKE
-    f(ind + 1, nums, path, ans);
-}
-```
+**Intuition bridge:** At each element the only decision is include or exclude. The for-loop style snapshots every prefix of `path` as a valid subset and loops from `start` — one line change (`start` vs 0) is all that separates subsets from permutations.
 
-**Approach B — For-loop with `start`:**
+**Steps in plain English:**
+
+1. **Snapshot on entry** — every state of `path` is a valid subset; record it immediately before branching.
+2. **Loop from `start`** — only consider indices ≥ `start` to avoid revisiting earlier elements.
+3. **TRY** — add `nums[i]` to `path`.
+4. **RECURSE** — call with `i + 1` so inner levels pick strictly later elements.
+5. **UNDO** — remove last element before the next iteration.
 
 ```java
 public List<List<Integer>> subsets(int[] nums) {
-    List<List<Integer>> ans = new ArrayList<>();
-    backtrack(0, nums, new ArrayList<>(), ans);
-    return ans;
+    List<List<Integer>> results = new ArrayList<>();
+    backtrack(nums, 0, new ArrayList<>(), results);
+    return results;
 }
 
-private void backtrack(int start, int[] nums, List<Integer> path, List<List<Integer>> ans) {
-    ans.add(new ArrayList<>(path));   // every state is a valid subset
+private void backtrack(int[] nums, int start, List<Integer> path, List<List<Integer>> results) {
+    // Step 1 — snapshot every prefix as a valid subset
+    results.add(new ArrayList<>(path));
+    // Step 2 — loop from start only
     for (int i = start; i < nums.length; i++) {
+        // Step 3 — TRY
         path.add(nums[i]);
-        backtrack(i + 1, nums, path, ans);
+        // Step 4 — RECURSE with i+1
+        backtrack(nums, i + 1, path, results);
+        // Step 5 — UNDO
         path.remove(path.size() - 1);
     }
 }
 ```
 
-**Both produce the same `2^n` subsets**, just in different order. Master both.
+**Time:** O(n × 2^n). **Space:** O(n) recursion depth.
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 90 Subsets II | Duplicates: sort first, skip when `nums[i] == nums[i-1]` and `i > start` | Add `if (i > start && nums[i] == nums[i - 1]) continue;` inside loop |
+| LC 39 Combination Sum | Elements reusable, target sum prunes | Pass `i` instead of `i+1`; add `remaining` parameter; return when `remaining == 0` |
+| LC 46 Permutations | Order matters — no `start`, loop all, `used[]` tracks current path | Replace `start` with `boolean[] used`; loop from 0; skip `used[i]` |
 
 ---
 
-### Walkthrough 2: LC 46 Permutations — Used[] Approach
+### WW-2 — LC 46 Permutations
 
-> All permutations of `[1, 2, 3]` → 6 results.
+Return all permutations of a distinct integer array.
+
+**Brute force:** Generate all n! arrangements by repeatedly choosing from remaining elements, building new arrays at each level. O(n × n!) time — same asymptotic as optimal. The distinction is in the data structure: building new arrays costs O(n) extra per call vs. mutating one `path` list.
+
+**Intuition bridge:** Unlike combinations, order matters — every unused element is a valid next choice at any depth. A `used[]` boolean array replaces the `start` parameter: instead of restricting which indices are valid, we explicitly skip elements already in the current path.
 
 **Steps in plain English:**
 
-1. **Public entry** — set up `results` and `used` array, kick off recursion.
-2. **Base case** — `path.size() == n` → snapshot.
-3. **Loop ALL indices** (not from `start`).
-4. **Skip used** — `if (used[i]) continue;`
-5. **TRY** — set `used[i] = true`, append `nums[i]`.
-6. **RECURSE**.
-7. **UNDO BOTH** — pop `path`, set `used[i] = false`.
+1. **Base case** — when `path.size() == nums.length` every element is placed; snapshot and return.
+2. **Loop ALL indices** from 0 — no `start`; order is what we're exploring.
+3. **Skip used** — if `used[i]` is true, that element is already in the current path.
+4. **TRY** — set `used[i] = true` and add `nums[i]` to `path`.
+5. **RECURSE**.
+6. **UNDO BOTH** — remove from `path` AND reset `used[i] = false`.
 
 ```java
 public List<List<Integer>> permute(int[] nums) {
-    // Step 1
     List<List<Integer>> results = new ArrayList<>();
     boolean[] used = new boolean[nums.length];
     backtrack(nums, used, new ArrayList<>(), results);
     return results;
 }
 
-private void backtrack(int[] nums, boolean[] used,
-                       List<Integer> path, List<List<Integer>> results) {
-    // Step 2 — base case
+private void backtrack(int[] nums, boolean[] used, List<Integer> path, List<List<Integer>> results) {
+    // Step 1 — base case: all elements placed
     if (path.size() == nums.length) {
         results.add(new ArrayList<>(path));
         return;
     }
-    // Step 3 — loop ALL
+    // Step 2 — loop ALL indices
     for (int i = 0; i < nums.length; i++) {
-        // Step 4 — skip used
+        // Step 3 — skip already-used elements
         if (used[i]) {
             continue;
         }
-        // Step 5 — TRY
+        // Step 4 — TRY: two mutations
         used[i] = true;
         path.add(nums[i]);
-        // Step 6 — RECURSE
+        // Step 5 — RECURSE
         backtrack(nums, used, path, results);
-        // Step 7 — UNDO BOTH
+        // Step 6 — UNDO BOTH mutations
         path.remove(path.size() - 1);
         used[i] = false;
     }
 }
 ```
 
-> **Key takeaway:** the `used[]` array IS the partial state. Two mutations (`used[i] = true` AND `path.add(...)`) must be paired with two undos.
+**Time:** O(n × n!). **Space:** O(n) for `path` + `used` + call stack.
+
+> Two mutations (`used[i] = true` + `path.add(...)`) require two undos — forgetting either creates a silent bug that passes small inputs.
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 47 Permutations II | Duplicates: sort + skip `nums[i] == nums[i-1]` when `!used[i-1]` | Add `if (i > 0 && nums[i] == nums[i-1] && !used[i-1]) continue;` |
+| LC 60 Permutation Sequence | Only the k-th permutation needed — prune by counting subtree size | Use factorial counts to skip entire branches, take one path |
+| LC 784 Letter Case Permutation | Branch on lowercase (toggle case) vs uppercase — same used-less skeleton | At each index: if letter, recurse with both cases; if digit, recurse once |
 
 ---
 
-### Walkthrough 3: LC 51 N-Queens — Full Build-Up
+### WW-3 — LC 39 Combination Sum
 
-> Place `n` queens on an `n×n` board such that no two attack each other.
+Find all combinations of `candidates` (distinct, reusable) that sum exactly to `target`.
 
-**Steps in plain English (final O(1)-validity version):**
+**Brute force:** Recursively try all sequences of candidates summing to target. Without bounding, this explores infinite paths; the target bounds depth but exponential branching remains — O(target^n) in the worst case without proper pruning.
 
-1. **Public entry** — initialize empty board (filled with `'.'`) + 3 boolean arrays for cols / diag1 / diag2.
-2. **Base case** — `row == n`, all queens placed → snapshot the board into `results`.
-3. **Loop columns** for the current `row`.
+**Intuition bridge:** Same for-loop skeleton as WW-1 Subsets — but pass `i` instead of `i+1` to allow re-picking the same element, and carry a `remaining` counter; prune immediately when it goes negative; record a snapshot when it hits zero.
+
+**Steps in plain English:**
+
+1. **Base case — exact match** — when `remaining == 0`, snapshot `path` and return.
+2. **Prune — over-budget** — when `remaining < 0`, return immediately.
+3. **Loop from `start`** — pass `i` (not `i+1`) in the recursive call to allow reuse.
+4. **TRY** — add `candidates[i]` to `path`.
+5. **RECURSE** with `remaining - candidates[i]`.
+6. **UNDO** — remove last element.
+
+```java
+public List<List<Integer>> combinationSum(int[] candidates, int target) {
+    List<List<Integer>> results = new ArrayList<>();
+    Arrays.sort(candidates);
+    backtrack(candidates, 0, target, new ArrayList<>(), results);
+    return results;
+}
+
+private void backtrack(int[] candidates, int start, int remaining,
+                       List<Integer> path, List<List<Integer>> results) {
+    // Step 1 — exact match: snapshot
+    if (remaining == 0) {
+        results.add(new ArrayList<>(path));
+        return;
+    }
+    // Step 2 — over-budget: prune (sort enables early exit)
+    if (remaining < 0) {
+        return;
+    }
+    // Step 3 — loop from start; pass i (not i+1) to allow reuse
+    for (int i = start; i < candidates.length; i++) {
+        // Step 4 — TRY
+        path.add(candidates[i]);
+        // Step 5 — RECURSE: same i for reuse
+        backtrack(candidates, i, remaining - candidates[i], path, results);
+        // Step 6 — UNDO
+        path.remove(path.size() - 1);
+    }
+}
+```
+
+**Time:** O(n^(T/min_c)) where T = target, min_c = smallest candidate. **Space:** O(T/min_c) depth.
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 40 Combination Sum II | Each element usable once; duplicates present — sort + skip `nums[i] == nums[i-1]` | Pass `i+1` (no reuse); add `if (i > start && candidates[i] == candidates[i-1]) continue;` |
+| LC 216 Combination Sum III | Exactly k numbers summing to n, digits 1-9, no reuse | Add `if (path.size() == k && remaining == 0)` as base; fixed candidate set 1..9 |
+| LC 518 Coin Change 2 | Count combinations (not enumerate); DP is O(amount × coins) — far faster | Use `dp[a] += dp[a - coin]` outer-coin/inner-amount loop |
+
+---
+
+### WW-4 — LC 40 Combination Sum II
+
+Find all unique combinations where each number is used once; input may contain duplicates.
+
+**Brute force:** Same backtracking as LC 39 but pass `i+1` (no reuse). Without deduplication, arrays like `[1, 1, 2]` with target 3 produce `[1,2]` twice — once starting from the first 1, once from the second.
+
+**Intuition bridge:** Sort first so duplicates are adjacent. At each loop level, if `candidates[i] == candidates[i-1]` and `i > start`, we are about to make the exact same recursive call we already made in the previous iteration — skip it. The `i > start` guard preserves the first occurrence.
+
+**Steps in plain English:**
+
+1. **Sort the array** — puts duplicates next to each other; enables O(1) skip check.
+2. **Base case** — `remaining == 0` → snapshot and return.
+3. **Loop from `start`** — pass `i+1` (each element used at most once).
+4. **Skip same-value duplicates** — if `i > start && candidates[i] == candidates[i-1]`, `continue`.
+5. **Early exit** — if `candidates[i] > remaining`, sorted order guarantees rest are also too large; break.
+6. **TRY / RECURSE / UNDO** — standard three-step.
+
+```java
+public List<List<Integer>> combinationSum2(int[] candidates, int target) {
+    List<List<Integer>> results = new ArrayList<>();
+    Arrays.sort(candidates);
+    backtrack(candidates, 0, target, new ArrayList<>(), results);
+    return results;
+}
+
+private void backtrack(int[] candidates, int start, int remaining,
+                       List<Integer> path, List<List<Integer>> results) {
+    // Step 2 — base case
+    if (remaining == 0) {
+        results.add(new ArrayList<>(path));
+        return;
+    }
+    for (int i = start; i < candidates.length; i++) {
+        // Step 4 — skip duplicate at same level
+        if (i > start && candidates[i] == candidates[i - 1]) {
+            continue;
+        }
+        // Step 5 — sorted: rest are too large
+        if (candidates[i] > remaining) {
+            break;
+        }
+        // Step 6 — TRY / RECURSE / UNDO
+        path.add(candidates[i]);
+        backtrack(candidates, i + 1, remaining - candidates[i], path, results);
+        path.remove(path.size() - 1);
+    }
+}
+```
+
+**Time:** O(2^n) in the worst case; pruning cuts practical runtime significantly. **Space:** O(n) depth.
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 90 Subsets II | Same sort + skip-duplicate pattern; no target sum | Remove `remaining` tracking; snapshot on entry, not at base |
+| LC 47 Permutations II | Same dedup idea for permutations — sort + skip when `nums[i]==nums[i-1] && !used[i-1]` | Loop from 0 (not start); use `used[]` array; different skip condition |
+| LC 39 Combination Sum | Same skeleton; allow reuse and no duplicates | Pass `i` not `i+1`; remove skip check |
+
+---
+
+### WW-5 — LC 22 Generate Parentheses
+
+Generate all well-formed parenthesis strings using exactly n pairs.
+
+**Brute force:** Generate all 2^(2n) binary strings of length 2n (each position is `(` or `)`); filter valid ones by checking balance. O(2^(2n) × n) — most strings are invalid, so almost all work is wasted.
+
+**Intuition bridge:** Never generate invalid states — add a character only when the balance stays valid. Open count can't exceed `n`; close count can't exceed open count. Every leaf at depth 2n is automatically well-formed, so no post-filtering is needed.
+
+**Steps in plain English:**
+
+1. **Base case** — when `path.length() == 2 * n`, the string is complete and valid; add to results.
+2. **Add `(` when possible** — if `open < n`, recurse with `open + 1`.
+3. **Add `)` when possible** — if `close < open`, recurse with `close + 1`.
+
+```java
+public List<String> generateParenthesis(int n) {
+    List<String> results = new ArrayList<>();
+    backtrack(n, 0, 0, new StringBuilder(), results);
+    return results;
+}
+
+private void backtrack(int n, int open, int close,
+                       StringBuilder path, List<String> results) {
+    // Step 1 — base: string is full and automatically valid
+    if (path.length() == 2 * n) {
+        results.add(path.toString());
+        return;
+    }
+    // Step 2 — add '(' only when open count allows
+    if (open < n) {
+        path.append('(');
+        backtrack(n, open + 1, close, path, results);
+        path.deleteCharAt(path.length() - 1);
+    }
+    // Step 3 — add ')' only when it closes a pending '('
+    if (close < open) {
+        path.append(')');
+        backtrack(n, open, close + 1, path, results);
+        path.deleteCharAt(path.length() - 1);
+    }
+}
+```
+
+**Time:** O(4^n / √n) — the n-th Catalan number counts valid strings. **Space:** O(n) depth.
+
+> This is the canonical example of **validity-gated generation** — the constraint check is done before recursing, not after, so the tree is pruned rather than filtered.
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 1614 Maximum Nesting Depth | Count max open depth at any point — greedily read the string | No backtracking needed; just track `depth` in one pass |
+| LC 32 Longest Valid Parentheses | Find longest valid substring — stack or DP approach | Use stack of indices tracking unmatched `(`; compute gap lengths |
+| LC 20 Valid Parentheses | Check if a given string is valid — stack verifier | Push on `(`; pop on `)` checking match; return stack empty at end |
+
+---
+
+### WW-6 — LC 17 Letter Combinations of a Phone Number
+
+Return all letter combinations a digit string could represent using a standard phone keypad.
+
+**Brute force:** Same as optimal — build the cartesian product of the digit-letter sets. O(4^n × n) where n is the number of digits (digits 7 and 9 map to 4 letters each). No smarter approach exists; you must enumerate all combinations.
+
+**Intuition bridge:** Unlike WW-1 (same candidate set at every level), here the candidate set changes per level — determined by the current digit. Look up the letter set for `digits.charAt(index)`, branch on each letter, then recurse with `index + 1`. No `start` or `used[]` needed because each level picks from a completely different pool.
+
+**Steps in plain English:**
+
+1. **Build phone map** — `String[] map = {"", "", "abc", "def", "ghi", "jkl", "mno", "pqrs", "tuv", "wxyz"}`.
+2. **Base case** — when `index == digits.length()`, `path` is a complete combination; add to results.
+3. **Look up letters** — `String letters = map[digits.charAt(index) - '0']`.
+4. **Loop letters** — for each `ch` in `letters`: TRY, RECURSE with `index + 1`, UNDO.
+
+```java
+public List<String> letterCombinations(String digits) {
+    List<String> results = new ArrayList<>();
+    if (digits.isEmpty()) {
+        return results;
+    }
+    // Step 1 — phone map (indices 0-1 unused)
+    String[] map = {"", "", "abc", "def", "ghi", "jkl", "mno", "pqrs", "tuv", "wxyz"};
+    backtrack(digits, map, 0, new StringBuilder(), results);
+    return results;
+}
+
+private void backtrack(String digits, String[] map, int index,
+                       StringBuilder path, List<String> results) {
+    // Step 2 — base case: all digits consumed
+    if (index == digits.length()) {
+        results.add(path.toString());
+        return;
+    }
+    // Step 3 — look up letters for current digit
+    String letters = map[digits.charAt(index) - '0'];
+    // Step 4 — branch on each letter
+    for (char ch : letters.toCharArray()) {
+        path.append(ch);
+        backtrack(digits, map, index + 1, path, results);
+        path.deleteCharAt(path.length() - 1);
+    }
+}
+```
+
+**Time:** O(4^n × n) worst case. **Space:** O(n) depth.
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 784 Letter Case Permutation | Branch per character: letter → two choices (upper/lower); digit → one choice | No lookup map; branch on `Character.isLetter(c)`, recurse both cases |
+| LC 131 Palindrome Partitioning | Branch on cut positions (where to end the current partition) — same per-level different choices | Check `isPalindrome(s, start, i)` before recursing; TRY/RECURSE/UNDO on substrings |
+| LC 93 Restore IP Addresses | 4-segment structure — at each level pick 1-3 chars; validity gate (0-255, no leading zero) | Loop `end = start+1` to `start+3`; add dot separator; validate segment before recursing |
+
+---
+
+### WW-7 — LC 79 Word Search
+
+Given a 2D character board and a word, return true if the word exists as a connected path (up/down/left/right, no cell reused).
+
+**Brute force:** For every starting cell, try DFS in all directions, tracking visited cells in a separate `boolean[][]`. Mark/unmark as you enter/leave. This IS the optimal algorithm — O(m × n × 4^L) where L = word length. No smarter approach exists for exact string matching on a grid.
+
+**Intuition bridge:** Grid backtracking replaces the `used[]` array with in-place board mutation: temporarily overwrite the cell with a sentinel (`'#'`) to mark it visited, then restore it after the recursive call. One character swap does both mark and unmark.
+
+**Steps in plain English:**
+
+1. **Outer loop** — try starting DFS from every cell `(r, c)` on the board.
+2. **DFS base case** — when `index == word.length()`, all characters matched; return true.
+3. **Bounds and match check** — if `r` or `c` is out of bounds, or `board[r][c] != word.charAt(index)`, return false.
+4. **Mark visited** — overwrite `board[r][c]` with `'#'`.
+5. **Recurse in 4 directions** — try `(r±1, c)` and `(r, c±1)` with `index + 1`.
+6. **Restore** — write `word.charAt(index)` back to `board[r][c]`.
+7. **Return** — true if any direction succeeded.
+
+```java
+public boolean exist(char[][] board, String word) {
+    int m = board.length;
+    int n = board[0].length;
+    // Step 1 — try every starting cell
+    for (int r = 0; r < m; r++) {
+        for (int c = 0; c < n; c++) {
+            if (dfs(board, word, r, c, 0)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+private boolean dfs(char[][] board, String word, int r, int c, int index) {
+    // Step 2 — all characters matched
+    if (index == word.length()) {
+        return true;
+    }
+    // Step 3 — bounds and character check
+    if (r < 0 || r >= board.length || c < 0 || c >= board[0].length
+            || board[r][c] != word.charAt(index)) {
+        return false;
+    }
+    // Step 4 — mark visited with sentinel
+    char saved = board[r][c];
+    board[r][c] = '#';
+    // Step 5 — recurse 4 directions
+    boolean found = dfs(board, word, r + 1, c, index + 1)
+            || dfs(board, word, r - 1, c, index + 1)
+            || dfs(board, word, r, c + 1, index + 1)
+            || dfs(board, word, r, c - 1, index + 1);
+    // Step 6 — restore
+    board[r][c] = saved;
+    // Step 7 — return result
+    return found;
+}
+```
+
+**Time:** O(m × n × 4^L). **Space:** O(L) call stack depth.
+
+> Short-circuit evaluation (`||`) means DFS stops as soon as one direction returns true — no need to explore further.
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 212 Word Search II | Search for multiple words simultaneously — Trie prunes dead paths early | Build Trie from word list; DFS checks `trie.children[board[r][c]-'a']` |
+| LC 200 Number of Islands | Connected-component flood fill — same mark/restore (or separate `visited[]`) | No target string; flood-fill all '1's, count connected groups |
+| LC 490 The Maze | Ball rolls until hitting a wall — DFS with distance tracking | Loop in each direction until wall; mark stopped positions visited |
+
+---
+
+### WW-8 — LC 51 N-Queens
+
+Place n queens on an n×n board so no two queens attack each other; return all valid board configurations.
+
+**Brute force:** Try all n^n column placements (one queen per row, any column); after placing all n queens, scan the entire board for conflicts. O(n^n × n²) — hopelessly slow even for n = 10.
+
+**Intuition bridge:** Place exactly one queen per row (rows are never in conflict). Three boolean arrays give O(1) conflict detection: `cols[c]` for columns, `diag1[r+c]` for `\` diagonals (sum is constant on each diagonal), `diag2[r−c+n−1]` for `/` diagonals (difference is constant). Setting/clearing these three arrays is the only state management needed.
+
+### 🎨 Visual — Diagonal index encoding for n=4
+
+```
+Board indices (row, col):
+
+(0,0)(0,1)(0,2)(0,3)      diag1 = r+c:   0 1 2 3
+(1,0)(1,1)(1,2)(1,3)                      1 2 3 4
+(2,0)(2,1)(2,2)(2,3)                      2 3 4 5
+(3,0)(3,1)(3,2)(3,3)                      3 4 5 6
+
+diag2 = r-c+n-1:          3 2 1 0
+                           4 3 2 1
+                           5 4 3 2
+                           6 5 4 3
+
+Any cell on the same \ diagonal shares the SAME r+c value.
+Any cell on the same / diagonal shares the SAME r-c+n-1 value.
+
+KEY INVARIANT:
+   cols[], diag1[], diag2[] together give O(1) conflict checks
+   with no board scanning — three array lookups replace O(n) scan.
+```
+
+**Steps in plain English:**
+
+1. **Initialize** — empty board (all `'.'`) + three boolean arrays `cols[n]`, `diag1[2n]`, `diag2[2n]`.
+2. **Base case** — when `row == n`, all queens placed; snapshot the board and return.
+3. **Loop columns** for the current row.
 4. **O(1) validity check** — `if (cols[c] || diag1[row+c] || diag2[row-c+n-1]) continue;`
-5. **TRY** — place `'Q'` at `(row, c)` and set the 3 constraint flags.
+5. **TRY** — place `'Q'` at `(row, c)` and set all three flags.
 6. **RECURSE** to `row + 1`.
-7. **UNDO** — clear all 4 mutations.
+7. **UNDO** — restore `'.'` and clear all three flags.
 
-(Full code is in Sub-Pattern 4 above — Iteration 3.)
+```java
+public List<List<String>> solveNQueens(int n) {
+    List<List<String>> results = new ArrayList<>();
+    // Step 1 — empty board + constraint arrays
+    char[][] board = new char[n][n];
+    for (char[] row : board) {
+        Arrays.fill(row, '.');
+    }
+    boolean[] cols = new boolean[n];
+    boolean[] diag1 = new boolean[2 * n];
+    boolean[] diag2 = new boolean[2 * n];
+    backtrack(board, 0, n, cols, diag1, diag2, results);
+    return results;
+}
 
-**Key insight:** the **constraint sets** are the entire state of the partial solution beyond the board itself. Setting/clearing them is what makes pruning O(1).
+private void backtrack(char[][] board, int row, int n,
+                       boolean[] cols, boolean[] diag1, boolean[] diag2,
+                       List<List<String>> results) {
+    // Step 2 — base case: all rows filled
+    if (row == n) {
+        List<String> snapshot = new ArrayList<>();
+        for (char[] r : board) {
+            snapshot.add(new String(r));
+        }
+        results.add(snapshot);
+        return;
+    }
+    // Step 3 — try every column in current row
+    for (int c = 0; c < n; c++) {
+        // Step 4 — O(1) conflict check
+        if (cols[c] || diag1[row + c] || diag2[row - c + n - 1]) {
+            continue;
+        }
+        // Step 5 — TRY: place queen + set 3 flags
+        board[row][c] = 'Q';
+        cols[c] = true;
+        diag1[row + c] = true;
+        diag2[row - c + n - 1] = true;
+        // Step 6 — RECURSE to next row
+        backtrack(board, row + 1, n, cols, diag1, diag2, results);
+        // Step 7 — UNDO: 4 mutations, 4 restores
+        board[row][c] = '.';
+        cols[c] = false;
+        diag1[row + c] = false;
+        diag2[row - c + n - 1] = false;
+    }
+}
+```
+
+**Time:** O(n!) with constraint pruning (much faster in practice). **Space:** O(n) depth + O(n²) board.
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 52 N-Queens II | Count solutions only — no board needed, just increment a counter at base case | Replace `List<List<String>> results` with `int count`; `count++` at base |
+| LC 37 Sudoku Solver | Row/col/box constraint sets instead of diagonal sets; nested row/col scan | Replace diagonal arrays with `rows[r][d]`, `cols[c][d]`, `boxes[b][d]` for digits 1-9 |
+| LC 1001 Grid Illumination | Lamp constraints stored in HashSets — same "set/clear on try/undo" idea | Mark lamp row/col/diag in HashSets on place; clear on remove |
 
 ---
 

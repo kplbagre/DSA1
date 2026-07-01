@@ -12,6 +12,22 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Feature Flag (Toggle)** | runtime on/off switch for a code path; no redeployment needed to enable/disable | `if (flagService.isEnabled("new-checkout", userId)) { ... }` |
+| **A/B Test (Experiment Flag)** | two variants run simultaneously for different user buckets; metrics decide the winner | 50% users see green CTA button; 50% see blue; measure which has higher conversion |
+| **Sticky Assignment** | same user always sees the same variant for the duration of an experiment; no mid-experiment switching | user_id=12345 assigned to variant A on day 1 → always gets variant A until experiment ends |
+| **Deterministic Bucketing** | variant assignment computed by hashing user_id + flag_key → percentage; same input → same output | `hash("user123" + "checkout-test") % 100 < 50` → variant A; no stored state needed |
+| **Dark Launch** | code deployed to production but flag off for all users; test infrastructure before enabling anyone | new payment processor code deployed; flag=off; QA team manually turns on for test users |
+| **Gradual Rollout (Canary)** | enable flag for 1% → 5% → 25% → 100% of users; monitor error rate at each step | 1% rollout of new search algorithm; error rate 0.1% at 1% → expand to 10% |
+| **Kill Switch (Ops Flag)** | permanent flag that can disable an expensive feature under load; never removed | `enable-real-time-recommendations=false` during Black Friday traffic spike → serve cached |
+| **Zombie Flag** | feature flag whose feature shipped to 100% but the flag code was never cleaned up | flag `new-checkout-2022` still in codebase 2 years later; no one knows if safe to remove |
+| **LaunchDarkly / GrowthBook** | managed feature flag services; provide SDKs, dashboards, and flag evaluation APIs | Walmart: GrowthBook for internal A/B tests; LaunchDarkly in many enterprise SaaS shops |
+
+---
+
 ## 🎯 Why This Matters
 
 **The problem:**
@@ -302,6 +318,35 @@ public class VariantAllocation {
 }
 ```
 
+**Flag config JSON schema — what a `FlagRule` looks like at rest in the config service:**
+
+```json
+{
+  "flagKey": "new-checkout-v3-test",
+  "enabled": true,
+  "defaultVariant": "control",
+  "userOverrides": {
+    "userId-qa-engineer-1": "new-checkout"
+  },
+  "segmentRules": [
+    {
+      "attribute": "country",
+      "operator": "EQ",
+      "value": "IN",
+      "variant": "new-checkout"
+    }
+  ],
+  "variantAllocations": [
+    { "variant": "control",      "upperBound": 50  },
+    { "variant": "new-checkout", "upperBound": 100 }
+  ],
+  "owner": "checkout-team",
+  "expiresAt": "2026-09-01"
+}
+```
+
+The `expiresAt` field drives zombie flag detection — see the lifecycle section below.
+
 ### 4c — Metric Consistency: Ensuring Users Don't Switch Variants Mid-Experiment
 
 **How it works, step by step:**
@@ -338,6 +383,40 @@ A zombie flag is a feature flag whose controlling feature was fully launched mon
 Zombie flags accumulate technical debt in several ways: the code has permanent if/else branches that can never execute the "off" path; engineers reading the code don't know if the feature is experimental or permanent; the flag config service carries hundreds of dead rules; and new engineers fear removing the flag code because they can't be sure it's truly dead.
 
 In an interview, if asked about flag lifecycle: "Flag lifecycle management means every flag has a planned removal date — typically within one sprint after the experiment concludes or after the feature ships to 100% of users. The flag config should track owner and expiry date; a lint rule or CI check can warn when a flag's expiry date has passed and the flag code still exists."
+
+**Zombie flag CI check — annotation-based expiry enforcement:**
+
+```java
+// Tag every flag evaluation call site with the expected removal date
+@FeatureFlag(key = "new-checkout-v3-test", expiresBy = "2026-09-01")
+public boolean isNewCheckoutEnabled(String userId) {
+    return flagEvaluator.evaluate("new-checkout-v3-test", userId, Map.of()).equals("new-checkout");
+}
+```
+
+```java
+// Annotation processor runs at compile time — CI fails the build if expiry date has passed
+public class FeatureFlagExpiryChecker extends AbstractProcessor {
+
+    @Override
+    public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment env) {
+        LocalDate today = LocalDate.now();
+        for (Element el : env.getElementsAnnotatedWith(FeatureFlag.class)) {
+            FeatureFlag ff = el.getAnnotation(FeatureFlag.class);
+            LocalDate expiry = LocalDate.parse(ff.expiresBy());
+            if (today.isAfter(expiry)) {
+                processingEnv.getMessager().printMessage(
+                    Diagnostic.Kind.ERROR,
+                    "Flag '" + ff.key() + "' expired on " + ff.expiresBy() + " — remove this flag code."
+                );
+            }
+        }
+        return true;
+    }
+}
+```
+
+The build fails until the flag code (and the `if/else` branch it controls) is deleted. Forces cleanup before technical debt accumulates.
 
 ---
 
@@ -410,6 +489,36 @@ In an interview, if asked about flag lifecycle: "Flag lifecycle management means
 
 > Two mechanisms, in increasing responsiveness order. Option 1: Tag ops flags (kill switches) separately from experiment flags and set their refresh interval to 5 seconds — acceptable because kill switches change infrequently but must propagate fast when they do. Option 2 (preferred for sub-second propagation): implement a pub-sub invalidation channel. When a flag rule is updated in the config service, it publishes a `flag_changed:{flagKey}` event to a Redis pub-sub channel or an internal event bus. Each service pod subscribes to this channel on startup. On receiving the event, the pod immediately fetches only the changed flag rule from the config service and updates its local cache entry. This gives near-instant propagation (< 1 second) without polling every second for the entire flag set. LaunchDarkly's SDK uses this exact pattern with Server-Sent Events (SSE) — each SDK instance opens a persistent SSE connection to the LaunchDarkly streaming endpoint and receives flag change events in real time without polling.
 
+```java
+// SSE-based instant flag invalidation — SDK opens one persistent connection per pod
+// Flag change event arrives within milliseconds of admin flipping the kill switch
+
+EventSource eventSource = new EventSource.Builder(
+    new EventHandler() {
+        @Override
+        public void onMessage(String event, MessageEvent messageEvent) {
+            // Payload: {"flagKey": "ops-kill-realtime-recs", "action": "updated"}
+            FlagChangedEvent change = parse(messageEvent.getData());
+            // Fetch only the changed rule — not the entire flag set
+            FlagRule updatedRule = configClient.fetchRule(change.getFlagKey());
+            flagCache.put(change.getFlagKey(), updatedRule);
+            log.info("Flag {} updated via SSE — cache refreshed in < 1s", change.getFlagKey());
+        }
+
+        @Override
+        public void onError(Throwable t) {
+            // SSE connection dropped — fall back to 5-second polling until reconnect
+            log.warn("SSE stream lost, falling back to polling: {}", t.getMessage());
+        }
+    },
+    URI.create("https://flag-config-service/flags/stream")
+).build();
+
+eventSource.start();
+```
+
+**Why SSE over WebSocket for this use case:** Flag updates are server-push only — no client sends. SSE is unidirectional, simpler to implement and load-balance than WebSocket, and reconnects automatically on drop. For a read-only broadcast channel like flag config updates, SSE is the right tool.
+
 ---
 
 ## 🧾 TL;DR — One Interviewer-Ready Line
@@ -434,3 +543,11 @@ In an interview, if asked about flag lifecycle: "Flag lifecycle management means
 | **"Feature Toggles (aka Feature Flags)" — Martin Fowler** | Taxonomy of flag types (release, ops, experiment, permission), lifecycle management, zombie flag risk and remediation strategies | ~15 min read |
 | **GrowthBook Documentation — Sticky Bucketing** | Implementation details for sticky assignment with cross-device support; covers hash-based vs stored bucketing trade-offs | ~10 min read |
 | **"Overlapping Experiments Infrastructure" — Google KDD 2010** | Google's original paper on running thousands of simultaneous A/B tests without interference — foundational reading for large-scale experimentation infrastructure | ~20 min read |
+
+---
+
+## 🔄 Changelog
+
+| Date | Change |
+|---|---|
+| Jul 1, 2026 | Added FlagRule JSON schema (with `owner` and `expiresAt` fields); added zombie flag CI check with `@FeatureFlag` annotation processor that fails the build when expiry date has passed; added SSE-based kill-switch propagation code to Q5 (EventSource client with onMessage/onError handlers, plus SSE-vs-WebSocket rationale). |

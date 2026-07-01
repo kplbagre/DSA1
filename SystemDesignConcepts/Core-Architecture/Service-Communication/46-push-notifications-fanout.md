@@ -348,6 +348,54 @@ APNs (Apple Push Notification Service) is Apple's cloud service that maintains p
 
 ---
 
+### 4d — Deduplication: Preventing Duplicate Pushes
+
+Kafka's at-least-once delivery guarantee means a fan-out worker can receive the same `NotificationEvent` more than once — when a worker crashes and restarts, Kafka redelivers all uncommitted offsets from the last checkpoint. Without deduplication, the same user receives the same push twice.
+
+**Two-layer defence:**
+
+**Layer 1 — idempotency table** (catches duplicates at the worker level before any APNs/FCM call):
+
+```java
+// Attempt to claim this event — only one worker wins the INSERT for a given event_id
+// ON CONFLICT DO NOTHING: if another worker already inserted this event_id, this insert silently no-ops
+int rowsInserted = jdbcTemplate.update(
+    "INSERT INTO processed_notifications (event_id, processed_at) VALUES (?, NOW()) ON CONFLICT (event_id) DO NOTHING",
+    event.getEventId()
+);
+
+if (rowsInserted == 0) {
+    // Already processed — skip to avoid duplicate push
+    log.info("Duplicate event {} — skipping", event.getEventId());
+    return;
+}
+// This worker owns the event — safe to call APNs/FCM
+deliverToDevices(event);
+```
+
+**Layer 2 — APNs/FCM collapse key** (catches duplicates that escape the DB check, e.g., during DB network partition):
+
+```java
+// APNs: apns-collapse-id header — if two pushes with the same collapse key arrive
+// at Apple before the device comes online, APNs coalesces them into one delivery
+apnsRequest.setCollapseId(event.getEventId());
+
+// FCM equivalent
+fcmMessage.setCollapseKey(event.getEventId());
+```
+
+**Batch sizing — align to APNs/FCM API limits:**
+
+| Recipient count | Page size | Rationale |
+|---|---|---|
+| < 10K (targeted push) | 100–500 | Low overhead; small memory footprint |
+| 10K – 1M (segment push) | 1,000 | APNs HTTP/2 allows 1K concurrent streams per connection — batch at this boundary |
+| > 1M (celebrity fanout) | 1,000 per worker + horizontal scale | Keep page size at API max; add workers to increase aggregate throughput |
+
+APNs HTTP/2 multiplexing supports up to 1,000 concurrent push streams per connection. Batching at 1,000 tokens maximises throughput per APNs connection.
+
+---
+
 ## 🏢 Real World — Where Companies Use This
 
 - **Instagram** (celebrity fanout): When Virat Kohli posts, ~200M followers may have push notifications enabled. Instagram uses pre-computed "fan-out on write" — follower lists are stored in Cassandra, paginated by user_id range, and workers process in parallel at approximately 10K tokens/sec each. Write amplification is accepted because read latency matters more.
@@ -435,3 +483,11 @@ APNs (Apple Push Notification Service) is Apple's cloud service that maintains p
 | **"Scaling Push Notifications at Facebook"** — Meta Engineering Blog | Real architecture decisions for billions of pushes daily — adds production scale perspective and infrastructure choices beyond what this note covers | ~15 min read |
 | **APNs Provider API — Apple Developer Docs** | Exact HTTP/2 API spec for APNs, collapse keys, priority levels (immediate vs conserve-power), and token-based authentication with `.p8` keys | ~20 min read |
 | **"Fan-out on write vs read"** — High Scalability Blog | Deep dive on the write amplification trade-off; Instagram's hybrid strategy for handling celebrities vs ordinary users | ~10 min read |
+
+---
+
+## 🔄 Changelog
+
+| Date | Change |
+|---|---|
+| Jul 1, 2026 | Added Section 4d — Deduplication as a first-class section (idempotency table with `ON CONFLICT DO NOTHING` + APNs/FCM collapse key as second layer); added batch sizing table aligned to APNs HTTP/2 1K stream limit. |

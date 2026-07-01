@@ -12,6 +12,21 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Hot Partition** | one shard receives disproportionately more traffic than others; becomes a bottleneck | Shard 3 handles 80% of writes; shards 1,2,4,5 are idle; Shard 3 CPU at 100% |
+| **Shard Key** | the column used to route data to a shard; poor choice causes hotspots | `user_id` (good — uniform); `country_code` (bad — India = 40% of traffic) |
+| **Celebrity Key Problem** | one specific key value generates far more traffic than average | `user_id=ViratKohli` → 1M reads/sec on his shard; all other users share normal load |
+| **Sequential Key Problem** | sharding by monotonically increasing key (timestamp, autoincrement) sends all new writes to latest shard | Cassandra partitioned by `date` → today's shard gets all inserts; yesterday's is cold |
+| **Low-Cardinality Key Problem** | shard key has few distinct values; one value may dominate | `country_code`: only ~250 values; `IN` shard gets 40% of global traffic |
+| **Write Salting** | append a random suffix to the shard key to spread a hot key across multiple shards | `user:ViratKohli_0`, `user:ViratKohli_1`, ..., `user:ViratKohli_9` → 10 shards |
+| **Hot-Key Caching** | cache the celebrity key's result in Redis/Memcached to absorb reads before they hit the hot shard | `GET virat_kohli_profile` → L1 Redis cache → shard never sees 99% of reads |
+| **Partition Lag Monitoring** | watching per-shard queue depth or CPU to detect emerging hotspots before they cascade | Kafka consumer lag per partition; DynamoDB per-partition consumed capacity metrics |
+
+---
+
 ## 🎯 Why This Matters
 
 - **Problem:** Adding more shards does not help if the shard key is wrong. One overloaded partition causes CPU spikes, queue backlog, OOM errors, and latency spikes on just that one machine — while all other shards are underutilised.

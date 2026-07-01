@@ -338,6 +338,33 @@ for (int i = 0; i < nums.length; i++) {
 
 ---
 
+## 🔨 Choosing the Right Variant — Before Writing the Loop
+
+> **The Phase 1 question for stacks and queues:** *Which variant do I reach for?* The wrong choice forces you to rewrite the whole loop. Match keywords in the problem to the table below before writing a single line.
+
+| Problem keywords | Variant | Java declaration |
+| --- | --- | --- |
+| Bracket matching, DFS traversal, expression evaluation, undo/redo | **Stack** (LIFO) | `Deque<T> stack = new ArrayDeque<>()` |
+| BFS, level-order, task scheduling, sliding window (fixed) | **Queue** (FIFO) | `Queue<T> queue = new ArrayDeque<>()` |
+| Next greater element, daily temperatures, largest rectangle, trapped water | **Monotonic Stack** (indices, not values) | `Deque<Integer> stack = new ArrayDeque<>()` |
+| Max (or min) in each sliding window of size K | **Monotonic Deque** (indices, evict from both ends) | `Deque<Integer> deque = new ArrayDeque<>()` |
+| Kth largest / smallest, merge K sorted lists, heap-based greedy | **PriorityQueue** | `PriorityQueue<T> pq = new PriorityQueue<>()` (min); `Collections.reverseOrder()` for max |
+| getMin() / getMax() in O(1) alongside push/pop | **Dual Stack** | Two `Deque` instances kept in sync |
+
+```
+Before writing the loop, answer:
+  □ Does order matter LIFO or FIFO?
+      LIFO → Stack (ArrayDeque).   FIFO → Queue (ArrayDeque).
+  □ Do I need "next greater / smaller" or "largest rectangle"?
+      → Monotonic Stack — store indices, not values.
+  □ Do I need sliding window max / min?
+      → Monotonic Deque — evict from front (out of window) and back (dominated).
+  □ Do I need Kth or sorted order on the fly?
+      → PriorityQueue.
+```
+
+---
+
 ## 🧭 Patterns — Stack, Queue, Priority Queue
 
 ### Pattern 1 — Bracket Matching (Classic Stack)
@@ -1341,165 +1368,451 @@ class Solution {
 
 ## 🔬 Worked Walkthroughs
 
-### Walkthrough 1 — LC 20 Valid Parentheses (Pattern 1: Bracket Matching)
+### WW-1 — LC 20 Valid Parentheses
 
-**Problem:** Check if brackets are balanced and correctly ordered.
+**Problem statement:** Given a string of `(){}[]` characters, return `true` if every opening bracket is closed by the correct type in the correct order.
 
-**Example:** `"({[]})"` → `true`; `"({[}])"` → `false`
+**Brute force:** Try to enumerate all balanced bracket strings of length n and check membership — O(Catalan(n)) which is exponential. A counter tracking depth can't distinguish type mismatches (`"({)}"` counts as balanced but isn't). There is no simpler-than-stack correct approach.
 
-**Approach:** Stack. Push open brackets, pop and match on close brackets.
+**Intuition bridge:** A stack naturally holds the most recently opened unmatched bracket; when a closing bracket arrives, only the stack top can be its legal match — if it isn't, the string is invalid.
 
-**Code:**
+**Steps in plain English:**
+
+1. **Build a close→open map** so you can look up the expected opening bracket for any closing bracket.
+2. **Scan left to right.** Closing bracket → pop the stack and compare; mismatch or empty stack → return false. Opening bracket → push.
+3. **After the scan** the stack must be empty — any leftover means an unmatched open bracket.
 
 ```java
 class Solution {
     public boolean isValid(String s) {
-        Map<Character, Character> map = Map.of(
-            ')', '(',
-            '}', '{',
-            ']', '['
-        );
+        // Step 1 — closing → expected-open map
+        Map<Character, Character> map = Map.of(')', '(', '}', '{', ']', '[');
         Deque<Character> stack = new ArrayDeque<>();
-        
         for (char c : s.toCharArray()) {
-            if (map.containsKey(c)) {  // closing bracket
-                if (stack.isEmpty() || stack.peek() != map.get(c)) {
+            if (map.containsKey(c)) {
+                // Step 2 — close bracket: pop and match
+                if (stack.isEmpty() || stack.pop() != map.get(c)) {
                     return false;
                 }
-                stack.pop();
-            } else {  // opening bracket
+            } else {
+                // Step 2 — open bracket: push for future match
                 stack.push(c);
             }
         }
-        
+        // Step 3 — all opens must have been matched
         return stack.isEmpty();
     }
 }
 ```
 
-**Trace — `s = "({[]})":`**
-
-| i | c | stack before | action | stack after |
-| --- | --- | --- | --- | --- |
-| 0 | ( | [] | push ( | [(] |
-| 1 | { | [(] | push { | [(, {] |
-| 2 | [ | [(, {] | push [ | [(, {, [] |
-| 3 | ] | [(, {, [] | pop, match [ | [(, {] |
-| 4 | } | [(, {] | pop, match { | [(] |
-| 5 | ) | [(] | pop, match ( | [] |
-| — | — | [] | return true | — |
-
-Result: `true` ✅
-
 **Complexity:** Time O(n), Space O(n).
 
----
+**Transfers to:**
 
-### Walkthrough 2 — LC 239 Sliding Window Maximum (Pattern 4: Monotonic Deque)
-
-**Problem:** Find max in each k-size window.
-
-**Example:** `nums = [1, 3, 1, 2, 0, 5]`, `k = 3` → `[3, 3, 2, 5]`
-
-**Approach:** Monotonic deque storing indices in decreasing order.
-
-**Code:**
-
-```java
-class Solution {
-    public int[] maxSlidingWindow(int[] nums, int k) {
-        Deque<Integer> deque = new ArrayDeque<>();
-        int[] result = new int[nums.length - k + 1];
-        int resultIdx = 0;
-        
-        for (int i = 0; i < nums.length; i++) {
-            // Remove indices outside window
-            if (!deque.isEmpty() && deque.peekFirst() < i - k + 1) {
-                deque.removeFirst();
-            }
-            
-            // Remove indices with values ≤ current
-            while (!deque.isEmpty() && nums[deque.peekLast()] <= nums[i]) {
-                deque.removeLast();
-            }
-            
-            // Add current
-            deque.addLast(i);
-            
-            // Add to result once window is full
-            if (i >= k - 1) {
-                result[resultIdx++] = nums[deque.peekFirst()];
-            }
-        }
-        
-        return result;
-    }
-}
-```
-
-**Trace — `nums = [1, 3, 1, 2, 0, 5]`, `k = 3`:**
-
-| i | num | deque | window | max |
-| --- | --- | --- | --- | --- |
-| 0 | 1 | [0] | [1] | — |
-| 1 | 3 | [1] | [1, 3] | — |
-| 2 | 1 | [1, 2] | [1, 3, 1] | 3 ✓ |
-| 3 | 2 | [3] | [3, 1, 2] | 3 ✓ |
-| 4 | 0 | [3, 4] | [1, 2, 0] | 2 ✓ |
-| 5 | 5 | [5] | [2, 0, 5] | 5 ✓ |
-
-Result: `[3, 3, 2, 5]` ✅
-
-**Complexity:** Time O(n), Space O(k).
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 1614 Maximum Nesting Depth of Parentheses | Only `()`; track depth not match | `if (c == '(') depth++; else if (c == ')') depth--;` |
+| LC 1541 Minimum Insertions to Balance Parentheses | Count needed insertions instead of validate | Track open count; add insertions when close arrives early |
+| LC 856 Score of Parentheses | Push score onto stack instead of bracket chars | `if (c == ')') { int v = stack.pop() == 0 ? 1 : 2 * stack.pop(); stack.push(v); }` |
 
 ---
 
-### Walkthrough 3 — LC 155 Min Stack (Pattern 3: Dual Stack)
+### WW-2 — LC 155 Min Stack
 
-**Problem:** Design stack supporting push, pop, top, getMin in O(1).
+**Problem statement:** Design a stack supporting push, pop, top, and getMin — all in O(1) time.
 
-**Approach:** Parallel min-stack tracks minimum at each depth.
+**Brute force:** A single stack gives push/pop/top in O(1) but getMin requires scanning all elements — O(n) per call. Keeping a global min breaks on pop: when the min is popped, you don't know the next minimum without a full scan.
 
-**Code:**
+**Intuition bridge:** Each element in the stack has a "minimum at this depth" that is fixed at push time and never changes — a parallel min-stack stores exactly that value at each level, so getMin is always a single peek.
+
+**Steps in plain English:**
+
+1. **Two stacks:** `stack` for main values, `minStack` for the running minimum at each depth.
+2. **On push:** push `val` to the main stack; push `min(val, minStack.peek())` to the min-stack (just `val` if it is empty).
+3. **On pop:** pop both stacks in lock-step so they stay in sync.
+4. **getMin** returns `minStack.peek()` — no scan needed.
 
 ```java
 class MinStack {
+    // Step 1 — two parallel stacks
     Deque<Integer> stack = new ArrayDeque<>();
     Deque<Integer> minStack = new ArrayDeque<>();
-    
+
     public void push(int val) {
+        // Step 2 — push val; push current minimum at this depth
         stack.push(val);
-        minStack.push(Math.min(minStack.isEmpty() ? val : minStack.peek(), val));
+        int currentMin = minStack.isEmpty() ? val : Math.min(minStack.peek(), val);
+        minStack.push(currentMin);
     }
-    
+
     public void pop() {
+        // Step 3 — pop both stacks in lock-step
         stack.pop();
         minStack.pop();
     }
-    
+
     public int top() {
         return stack.peek();
     }
-    
+
     public int getMin() {
+        // Step 4 — minimum at current depth is always at minStack top
         return minStack.peek();
     }
 }
 ```
 
-**Trace:**
+**Complexity:** All operations O(1), Space O(n).
 
-| Operation | stack | minStack | getMin |
-| --- | --- | --- | --- |
-| push(3) | [3] | [3] | 3 |
-| push(2) | [3, 2] | [3, 2] | 2 |
-| push(5) | [3, 2, 5] | [3, 2, 2] | 2 |
-| pop() | [3, 2] | [3, 2] | 2 |
-| pop() | [3] | [3] | 3 |
+**Transfers to:**
 
-Result: ✅
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 716 Max Stack | Track maximum instead of minimum; also need `popMax()` | `Math.max(maxStack.peek(), val)` for push; scan for popMax |
+| Max-Min Stack | Track both simultaneously | Two shadow stacks — `minStack` and `maxStack` in parallel |
+| LC 895 Maximum Frequency Stack | Track which element appears most; pop the most-frequent | Frequency map + group map; push `val` into `group[freq[val]]` |
 
-**Complexity:** All operations O(1).
+---
+
+### WW-3 — LC 239 Sliding Window Maximum
+
+**Problem statement:** Given an integer array and window size `k`, return the maximum value in each sliding window of size `k`.
+
+**Brute force:** For each of the n−k+1 windows, scan all k elements to find the max — O(nk) time. With n=10^5 and k=10^4 this times out.
+
+**Intuition bridge:** A smaller element behind a larger one in the same window can never be the answer for any future window — discard it immediately. A monotonically decreasing deque (storing indices) keeps the window maximum at its front at all times.
+
+**Steps in plain English:**
+
+1. **Monotonic deque of indices** (values at those indices are non-increasing from front to back).
+2. **Evict stale front** if its index has fallen outside the window (`< i − k + 1`).
+3. **Evict smaller rear elements** while `nums[rear] ≤ nums[i]` — they are dominated and will never be the max.
+4. **Add `i` to rear.** Once `i ≥ k − 1`, emit `nums[deque.front()]` as the window max.
+
+```java
+class Solution {
+    public int[] maxSlidingWindow(int[] nums, int k) {
+        int n = nums.length;
+        int[] result = new int[n - k + 1];
+        // Step 1 — monotonic deque of indices (decreasing by value)
+        Deque<Integer> deque = new ArrayDeque<>();
+        for (int i = 0; i < n; i++) {
+            // Step 2 — evict stale front (out of window)
+            if (!deque.isEmpty() && deque.peekFirst() < i - k + 1) {
+                deque.pollFirst();
+            }
+            // Step 3 — evict smaller rear elements (dominated, never the max)
+            while (!deque.isEmpty() && nums[deque.peekLast()] <= nums[i]) {
+                deque.pollLast();
+            }
+            deque.offerLast(i);
+            // Step 4 — emit max once window is full
+            if (i >= k - 1) {
+                result[i - k + 1] = nums[deque.peekFirst()];
+            }
+        }
+        return result;
+    }
+}
+```
+
+**Complexity:** Time O(n) amortized (each index enqueued and dequeued at most once), Space O(k).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 862 Shortest Subarray with Sum ≥ K | Monotonic deque on prefix sums; pop front when sum condition met | `while (!deque.isEmpty() && prefix[i] - prefix[deque.peekFirst()] >= k) ans = min(ans, i - deque.pollFirst());` |
+| LC 1499 Max Value of Equation | Sliding window max on `y[i] + x[i]`; evict by absolute x-distance instead of index count | Evict front when `x[i] - x[deque.front()] > k` |
+| LC 2762 Continuous Subarrays | Maintain both min and max deques simultaneously; window valid while `max − min ≤ 2` | Two deques — `maxDeque` and `minDeque`; shrink left when constraint breaks |
+
+---
+
+### WW-4 — LC 739 Daily Temperatures
+
+**Problem statement:** Given an array of daily temperatures, for each day return the number of days until a warmer temperature (0 if none exists).
+
+**Brute force:** For each day `i`, scan every subsequent day `j > i` until `temps[j] > temps[i]` — O(n²) time.
+
+**Intuition bridge:** Process temperatures left to right, keeping a stack of "waiting" days (those that haven't found their warmer day yet). When day `i` is warmer than the day at the stack top, the top day's wait is `i − top` — pop, record, and keep popping until the stack is back in order.
+
+**Steps in plain English:**
+
+1. **Monotonic decreasing stack of indices** — temperatures at stacked indices are non-increasing from bottom to top.
+2. **For each index `i`:** while the stack is non-empty and `temps[i] > temps[stack.peek()]`, pop index `j`, set `ans[j] = i − j`.
+3. **Push `i`** as a new waiting candidate.
+4. **Any indices still on the stack** at the end have no warmer day — `ans[j]` stays 0.
+
+```java
+class Solution {
+    public int[] dailyTemperatures(int[] temperatures) {
+        int n = temperatures.length;
+        int[] ans = new int[n];
+        // Step 1 — monotonic decreasing stack of indices
+        Deque<Integer> stack = new ArrayDeque<>();
+        for (int i = 0; i < n; i++) {
+            // Step 2 — pop all days whose warmer day has arrived
+            while (!stack.isEmpty() && temperatures[i] > temperatures[stack.peek()]) {
+                int j = stack.pop();
+                ans[j] = i - j;
+            }
+            // Step 3 — push current day as a new waiting candidate
+            stack.push(i);
+        }
+        // Step 4 — remaining indices: no warmer day; ans stays 0
+        return ans;
+    }
+}
+```
+
+**Complexity:** Time O(n) amortized (each index pushed and popped at most once), Space O(n).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 496 Next Greater Element I | Same "next greater" pop trigger; answer is the value not the distance | `Map<Integer, Integer> result = new HashMap<>(); result.put(nums2[j], nums2[i]);` after pop |
+| LC 503 Next Greater Element II (circular) | Traverse indices `0..2n−1 mod n` to simulate circular wrap | `int idx = i % n; temperatures[idx] ...` |
+| LC 901 Online Stock Span | Pop when `prices[top] ≤ price` (non-decreasing); accumulate span count instead of distance | `while (!stack.isEmpty() && prices[stack.peek()] <= price) span += spans[stack.pop()];` |
+
+---
+
+### WW-5 — LC 84 Largest Rectangle in Histogram
+
+**Problem statement:** Given an array of bar heights forming a histogram, find the area of the largest rectangle that fits entirely within it.
+
+**Brute force:** For every pair of bars `(i, j)`, the rectangle height is `min(heights[i..j])` and width is `j − i + 1` — check all O(n²) pairs using a running min for O(n²) time.
+
+**Intuition bridge:** A bar can extend left and right only as far as bars of equal or greater height surround it. Keep a monotonic increasing stack; when a shorter bar arrives, the bar at the stack top has found its right boundary — pop it, compute its maximal rectangle using the new stack top as the implicit left boundary.
+
+**Steps in plain English:**
+
+1. **Append a sentinel `0`** to the heights array — forces all remaining bars to be popped at the end of the loop.
+2. **Monotonic increasing stack of indices** (heights non-decreasing from bottom to top).
+3. **For each index `i`:** while `heights[i] < heights[stack.peek()]`, pop `top`; height = `heights[top]`; width = `i` if stack is empty, else `i − stack.peek() − 1`; update `maxArea`.
+4. **Push `i`.**
+
+```java
+class Solution {
+    public int largestRectangleArea(int[] heights) {
+        int n = heights.length;
+        // Step 1 — sentinel forces all bars to be popped at the end
+        int[] h = new int[n + 1];
+        System.arraycopy(heights, 0, h, 0, n);
+        h[n] = 0;
+        int maxArea = 0;
+        // Step 2 — monotonic increasing stack of indices
+        Deque<Integer> stack = new ArrayDeque<>();
+        for (int i = 0; i <= n; i++) {
+            // Step 3 — pop when current bar is shorter than stack top
+            while (!stack.isEmpty() && h[i] < h[stack.peek()]) {
+                int top = stack.pop();
+                int height = h[top];
+                // left boundary: new stack top + 1; right boundary: i - 1
+                int width = stack.isEmpty() ? i : i - stack.peek() - 1;
+                maxArea = Math.max(maxArea, height * width);
+            }
+            // Step 4 — push current index
+            stack.push(i);
+        }
+        return maxArea;
+    }
+}
+```
+
+**Complexity:** Time O(n) amortized, Space O(n).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 85 Maximal Rectangle | Convert each row of a 2D `'0'/'1'` matrix into a histogram; run LC 84 per row | `heights[c] = matrix[r][c] == '1' ? heights[c] + 1 : 0;` then `largestRectangleArea(heights)` |
+| LC 42 Trapping Rain Water | Monotonic stack — pop when taller bar found; accumulate trapped water instead of area | `water += (Math.min(h[i], h[stack.peek()]) - h[top]) * (i - stack.peek() - 1);` |
+| LC 1793 Maximum Score of a Good Subarray | Same "min in range" pop-and-compute; restrict answer to subarrays containing index `k` | Guard update: `if (left <= k && k <= right) ans = Math.max(ans, height * width);` |
+
+---
+
+### WW-6 — LC 394 Decode String
+
+**Problem statement:** Given an encoded string like `"3[a2[c]]"`, decode it so that `k[substring]` means `substring` repeated `k` times — nesting is possible.
+
+**Brute force:** Locate the innermost `[...]` bracket pair, expand it, and repeat until no brackets remain. Each pass is O(n) and there can be O(n) levels of nesting — O(n²) worst case.
+
+**Intuition bridge:** A stack of `(repeatCount, builtString)` pairs mirrors a recursive parser's call stack — push the current context before `[`, expand the inner segment, then pop-and-combine on `]`.
+
+**Steps in plain English:**
+
+1. **Two stacks:** `countStack` for pending repeat counts, `strStack` for the string built before each `[`. Also track `cur` (current segment) and `k` (current number).
+2. **Digit:** accumulate `k = k * 10 + digit` (handles multi-digit numbers like `12`).
+3. **`[`:** push `(k, cur)` onto the stacks; reset `k = 0` and `cur = ""` for the inner segment.
+4. **`]`:** pop `repeatCount` and `prefix`; `cur = prefix + cur.repeat(repeatCount)`.
+5. **Letter:** append to `cur`.
+
+```java
+class Solution {
+    public String decodeString(String s) {
+        // Step 1 — two stacks: pending counts and prefix strings
+        Deque<Integer> countStack = new ArrayDeque<>();
+        Deque<StringBuilder> strStack = new ArrayDeque<>();
+        StringBuilder cur = new StringBuilder();
+        int k = 0;
+        for (char c : s.toCharArray()) {
+            if (Character.isDigit(c)) {
+                // Step 2 — accumulate multi-digit number
+                k = k * 10 + (c - '0');
+            } else if (c == '[') {
+                // Step 3 — save context; reset for inner segment
+                countStack.push(k);
+                strStack.push(cur);
+                k = 0;
+                cur = new StringBuilder();
+            } else if (c == ']') {
+                // Step 4 — pop context; repeat inner segment and append to prefix
+                int repeatCount = countStack.pop();
+                StringBuilder prefix = strStack.pop();
+                String inner = cur.toString();
+                for (int i = 0; i < repeatCount; i++) {
+                    prefix.append(inner);
+                }
+                cur = prefix;
+            } else {
+                // Step 5 — letter: append to current segment
+                cur.append(c);
+            }
+        }
+        return cur.toString();
+    }
+}
+```
+
+**Complexity:** Time O(output length) — each character written once, Space O(nesting depth).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 726 Number of Atoms | `(` / `)` with multiplier; accumulate element frequencies not strings | Push `Map<String, Integer>` per frame; merge maps on `)` |
+| LC 385 Mini Parser (NestedInteger) | `[` / `]` delimit nested integer lists; build a `NestedInteger` tree not a string | `stack.push(new NestedInteger());` on `[`; `stack.peek().add(inner)` on `]` |
+| LC 1003 Check If Word Is Valid After Substitutions | Only `abc` is a valid nested unit; validate rather than build | Check that every popped sequence equals `"abc"` |
+
+---
+
+### WW-7 — LC 150 Evaluate Reverse Polish Notation
+
+**Problem statement:** Evaluate an arithmetic expression in Reverse Polish Notation (postfix) — operands appear before their operator, e.g. `["2","1","+","3","*"]` → 9.
+
+**Brute force:** There is no simpler-than-stack brute force for RPN — it is inherently a left-to-right single-pass evaluation. A tree-based parse would reconstruct the full expression tree first, which is more complex, not less.
+
+**Intuition bridge:** In RPN, when you see an operator, the two most recently seen unevaluated values are its operands. A stack gives you exactly those two with one pop each — push the result back and continue.
+
+**Steps in plain English:**
+
+1. **Scan tokens left to right.**
+2. **Number token:** parse and push onto the stack.
+3. **Operator token:** pop `b` (top), then pop `a` (second); compute `a op b`; push result. Note `b = stack.pop()` first — for `-` and `/`, order matters.
+4. **Single value** remaining on the stack is the answer.
+
+```java
+class Solution {
+    public int evalRPN(String[] tokens) {
+        Deque<Integer> stack = new ArrayDeque<>();
+        for (String token : tokens) {
+            if ("+-*/".indexOf(token) >= 0) {
+                // Step 3 — pop two operands (b is top, a is second); order matters for - and /
+                int b = stack.pop();
+                int a = stack.pop();
+                int result;
+                switch (token) {
+                    case "+": result = a + b; break;
+                    case "-": result = a - b; break;
+                    case "*": result = a * b; break;
+                    default:  result = a / b; break;
+                }
+                stack.push(result);
+            } else {
+                // Step 2 — operand: parse and push
+                stack.push(Integer.parseInt(token));
+            }
+        }
+        // Step 4 — single remaining value is the answer
+        return stack.pop();
+    }
+}
+```
+
+**Complexity:** Time O(n), Space O(n).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 224 Basic Calculator | Infix `+`, `-`, `(`, `)` — push sign on `(`; apply sign on `)` | `stack.push(sign); sign = 1;` on `(`; `sign = stack.pop() * stack.pop();` on `)` |
+| LC 227 Basic Calculator II | Infix `+`, `-`, `*`, `/` — no parens; handle precedence by pushing partial products | Push intermediate value for `*`/`/`; sum the stack at the end |
+| LC 282 Expression Add Operators | Insert `+`, `-`, `*` between digits and evaluate candidates | Recursive DFS carrying `(index, prevVal, currVal, target)`; `currVal` replaces the stack |
+
+---
+
+### WW-8 — LC 232 Implement Queue using Stacks
+
+**Problem statement:** Implement a FIFO queue using only two stacks, supporting push, pop, peek, and empty.
+
+**Brute force:** Transfer all elements to a temp stack before each push (O(n) per push, O(1) pop) or before each pop (O(n) per pop, O(1) push). Either approach is correct but costs O(n) per operation.
+
+**Intuition bridge:** Instead of transferring on every operation, be lazy — only drain the inbox stack into the outbox when the outbox is empty and a pop/peek is needed. Each element crosses from inbox to outbox exactly once, amortizing the cost to O(1) per operation.
+
+**Steps in plain English:**
+
+1. **Two stacks:** `inbox` receives all pushes; `outbox` serves all pops and peeks.
+2. **Push:** always push to `inbox` — O(1).
+3. **Pop/Peek:** if `outbox` is empty, drain all of `inbox` into `outbox` (reversal converts LIFO inbox order to FIFO outbox order); then pop/peek from `outbox`.
+4. **Empty:** true only when both stacks are empty.
+
+```java
+class MyQueue {
+    // Step 1 — inbox receives pushes; outbox serves pops
+    Deque<Integer> inbox = new ArrayDeque<>();
+    Deque<Integer> outbox = new ArrayDeque<>();
+
+    public void push(int x) {
+        // Step 2 — all new elements go to inbox
+        inbox.push(x);
+    }
+
+    public int pop() {
+        // Step 3 — lazy transfer on demand
+        transfer();
+        return outbox.pop();
+    }
+
+    public int peek() {
+        transfer();
+        return outbox.peek();
+    }
+
+    private void transfer() {
+        if (outbox.isEmpty()) {
+            while (!inbox.isEmpty()) {
+                outbox.push(inbox.pop());
+            }
+        }
+    }
+
+    public boolean empty() {
+        // Step 4 — truly empty only when both stacks are empty
+        return inbox.isEmpty() && outbox.isEmpty();
+    }
+}
+```
+
+**Complexity:** Push O(1); pop/peek amortized O(1) — each element is pushed and popped at most once per stack. Space O(n).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 225 Implement Stack using Queues | Reverse problem: LIFO from one queue — rotate the queue after each push | `for (int i = 0; i < queue.size() - 1; i++) queue.offer(queue.poll());` |
+| LC 641 Design Circular Deque | Insert/delete at both ends — circular array instead of two stacks | `int[] buf; int head, tail, size;` with modular arithmetic |
+| LC 933 Number of Recent Calls | Queue as sliding window — evict stale timestamps on each request | `while (!queue.isEmpty() && queue.peek() < t - 3000) queue.poll(); return queue.size();` |
 
 ---
 

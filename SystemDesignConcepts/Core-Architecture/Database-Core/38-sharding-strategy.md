@@ -12,6 +12,22 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Shard** | one independent database node holding a horizontal subset of rows | Users table split: Shard 1 holds user_id 1–10M, Shard 2 holds 10M–20M |
+| **Shard Key** | the column used to decide which shard owns a row | `user_id`, `order_id`, `tenant_id` — choose for write distribution + query locality |
+| **Range Sharding** | rows assigned to shards by numeric or alphabetical range of the shard key | user_id 1–10M → Shard 1; 10M–20M → Shard 2; queries by range are fast |
+| **Hash Sharding** | rows assigned by `hash(shard_key) % N`; random but even distribution | `hash("user123") % 4 = 2` → Shard 2; no range queries, no hotspots |
+| **Directory Sharding** | a lookup table maps each key value to a specific shard; most flexible, adds a lookup round trip | `tenant_id="ACME"` → Shard 7 (looked up in directory DB) |
+| **Scatter-Gather** | queries with no shard key must fan-out to ALL shards and merge results; expensive at scale | `SELECT * FROM orders WHERE status='pending'` — hits all 10 shards |
+| **Celebrity / Hotspot Problem** | one shard key value receives disproportionate traffic, saturating a single shard | `user_id=ElonMusk` gets 100K req/sec; his shard becomes a bottleneck |
+| **Rebalancing** | migrating data from overloaded shards to new shards when capacity grows | Shard 2 at 90% capacity → split into Shard 2a + 2b; migrate half the data |
+| **Virtual Nodes (vnodes)** | each physical shard owns multiple smaller hash-ring positions to smooth uneven key distribution | Shard 1 owns ring positions 10, 45, 210; Shard 2 owns 80, 150, 320 |
+
+---
+
 ## 🎯 Why This Matters
 
 - **Problem:** A single PostgreSQL instance can serve ~10K writes/sec; YouTube receives millions of video metadata writes per minute. No vertical scaling can bridge this gap — only sharding (horizontal split) does.

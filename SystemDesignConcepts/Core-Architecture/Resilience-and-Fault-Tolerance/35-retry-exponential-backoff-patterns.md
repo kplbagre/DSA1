@@ -12,6 +12,22 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Retry** | re-sending a failed request automatically after a delay | HTTP 503 → wait 1s → resend; max 3 attempts |
+| **Exponential Backoff** | retry delay doubles after each failure — 1s, 2s, 4s, 8s, 16s... — giving the downstream service increasing recovery time | attempt 1: wait 1s; attempt 2: wait 2s; attempt 3: wait 4s |
+| **Jitter** | random component added to backoff delay to prevent all retrying clients from hitting the server simultaneously | `delay = random(0, base * 2^attempt)` — spreads retry wave across a time window |
+| **Thundering Herd** | when many clients retry at the same instant (no jitter), overloading the just-recovering server again | 1000 clients all get 503 at T=0 → all retry at T=1s → server gets slammed again |
+| **Max Retries** | upper limit on retry attempts; prevents infinite retry loops | `maxAttempts=3`; after 3 failures → throw exception to caller |
+| **Cap Delay** | maximum backoff delay regardless of exponent; prevents excessively long waits | `min(base * 2^attempt, 30s)` — caps at 30s even for attempt 10+ |
+| **Non-Retryable Error** | client-side errors (4xx) that indicate a bad request — retrying won't help | `400 Bad Request`, `401 Unauthorized`, `404 Not Found` → don't retry |
+| **Retryable Error** | server-side or transient errors that may succeed on retry | `500 Internal Server Error`, `503 Service Unavailable`, network timeout → safe to retry |
+| **Idempotency (prerequisite)** | operation must be idempotent before it's safe to retry; non-idempotent retries cause duplicates | retry `POST /payments` without idempotency key → double charge |
+
+---
+
 ## 🎯 Why This Matters
 
 - **Problem:** Services fail. If every client retries immediately, you turn a brief blip into a systemic collapse.
@@ -156,6 +172,51 @@ public class RetryableClient {
 
 ---
 
+## ⚡ Backoff Formula Quick Reference
+
+**Formula:** `wait = min(MAX_WAIT_MS, BASE_WAIT_MS × 2^attempt) + random(0, wait / 10)`
+
+| Attempt | Formula (BASE=100ms) | Wait (before jitter) | Capped at 32s? |
+|---------|---------------------|---------------------|----------------|
+| 0 | 100 × 2⁰ = 100ms | 100ms | No |
+| 1 | 100 × 2¹ = 200ms | 200ms | No |
+| 2 | 100 × 2² = 400ms | 400ms | No |
+| 3 | 100 × 2³ = 800ms | 800ms | No |
+| 4 | 100 × 2⁴ = 1,600ms | 1.6s | No |
+| 5 | 100 × 2⁵ = 3,200ms | 3.2s | No |
+| 6 | 100 × 2⁶ = 6,400ms | 6.4s | No |
+| 7 | 100 × 2⁷ = 12,800ms | 12.8s | No |
+| 8 | 100 × 2⁸ = 25,600ms | 25.6s | No |
+| 9 | 100 × 2⁹ = 51,200ms → capped | **32s** | Yes |
+
+Total wait across 5 retries ≈ **100 + 200 + 400 + 800 + 1,600 = ~3.1s** (before cap and jitter).
+
+---
+
+## 🧭 Retry Budget — Tune to Your SLA
+
+> **Rule of thumb:** Total retry window ≤ 20% of your caller's SLA. If your endpoint SLA is 5s, your retry window is ≤ 1s — use fewer retries with a lower BASE_WAIT.
+
+| Caller SLA | Max total retry time | Suggested MAX_RETRIES | Suggested BASE_WAIT |
+|-----------|---------------------|----------------------|---------------------|
+| 500ms (real-time) | 100ms | 2 | 30ms |
+| 2s (interactive API) | 400ms | 3 | 50ms |
+| 10s (background job) | 2s | 4 | 100ms |
+| 60s (async processing) | 12s | 5 | 200ms |
+| No SLA (offline batch) | No cap | 8 | 500ms |
+
+**When you exhaust max retries:** don't drop the request — publish it to a dead-letter queue (DLQ) for async reprocessing.
+
+```java
+// On max retries exhausted — publish to DLQ instead of silently dropping
+dlqProducer.send("failed-requests", requestId, failedRequest);
+log.error("Request {} sent to DLQ after {} retries", requestId, MAX_RETRIES);
+```
+
+The DLQ (`failed-requests` Kafka topic) lets an ops team inspect, fix, and replay failed messages without losing them. See **Message Queues (19)** for Kafka DLQ setup.
+
+---
+
 ## 🏢 Real World — Where Companies Use This
 
 - **Uber Driver App (retry on surge pricing service timeouts):** When surge pricing service is temporarily slow, driver app retries with exponential backoff. Without backoff, all drivers would hammer it simultaneously. With backoff, the service recovers naturally.
@@ -254,3 +315,4 @@ public class RetryableClient {
 | Date | Change |
 |---|---|
 | June 25, 2026 | Initial creation. Added exponential backoff vs immediate retry comparison, jitter explanation, code example with Java HttpClient, retryable vs non-retryable error classification. Real-world examples (Uber, Stripe, Netflix, Razorpay, AWS). Seven Q&As covering backoff tuning, error classification, idempotency interaction, dead-letter queues. |
+| Jul 1, 2026 | Added backoff formula quick-reference table (attempts 0–9 with wait times), retry budget table (SLA → max_retries → base_wait), DLQ one-liner snippet with explanation. |

@@ -344,6 +344,82 @@ TreeSet<Person> set = new TreeSet<>((a, b) -> {
 
 ---
 
+## 🔨 Setup — Phase 1 Before the Set Loop
+
+> **The Phase 1 question for sets:** *Before I write the main loop, do I need a HashSet (O(1) membership), a TreeSet (sorted + range queries), or a TreeMap (sorted + associated value)?* Using a HashSet when you need `floor`/`ceiling` costs you a full O(n) scan. Using a TreeSet when you only need membership wastes O(log n) per insert for no reason. The decision takes 5 seconds and changes the entire algorithm.
+
+### Set Type Decision Table
+
+| Type | Characteristic | When to reach for it | When NOT to use it |
+| --- | --- | --- | --- |
+| **HashSet** | Unordered, O(1) amortized | Membership check, deduplication, visited tracking, chain-start detection | When you need sorted order, `floor`, `ceiling`, or range sub-sets |
+| **TreeSet** | Sorted ascending, O(log n) | `ceiling(x)` — smallest ≥ x; `floor(x)` — largest ≤ x; sorted iteration; sliding value-window | Simple membership — O(log n) is a pure tax |
+| **LinkedHashSet** | Insertion-order iteration, O(1) | Need membership AND predictable iteration order (LRU dedup, first-seen ordering) | Random-access by index — LinkedHashSet has no `get(i)` |
+| **TreeMap** (not a Set, but often the real answer) | Sorted keys + associated value, O(log n) | `floorKey(t)` for time-based lookup, `ceilingKey(s)` for interval booking; need both key and value | Pure existence check with no associated value — use TreeSet instead |
+| **Set as visited marker** | Boolean membership only | DFS/BFS visited, chain-start detection (LC 128), duplicate elimination | When you later need frequency — switch to `Map<K, Integer>` from the start |
+
+### Phase 1 Code Stubs — Paste Before the Algorithm
+
+**HashSet membership (most common):**
+
+```java
+// Phase 1 — load all elements for O(1) membership
+Set<Integer> numSet = new HashSet<>();
+for (int x : arr) {
+    numSet.add(x);
+}
+```
+
+**TreeSet for ceiling / floor range queries:**
+
+```java
+// Phase 1 — sorted set; ceiling and floor are O(log n)
+TreeSet<Integer> sorted = new TreeSet<>();
+for (int x : arr) {
+    sorted.add(x);
+}
+// smallest element >= query (null if none):
+Integer next = sorted.ceiling(query);
+// largest element <= query (null if none):
+Integer prev = sorted.floor(query);
+// ALWAYS null-check before using next or prev
+```
+
+**Sliding window HashSet (within-distance-k problems):**
+
+```java
+// Phase 1 — fixed-size window; evict the element that just left the window
+Set<Integer> window = new HashSet<>();
+// inside loop, AFTER adding nums[i]:
+if (window.size() > k) {
+    window.remove(nums[i - k]);
+}
+// evict AFTER add so the window stays at most size k+1 before eviction
+```
+
+**TreeMap when you need sorted key + value (the real answer for many "Set + index" problems):**
+
+```java
+// Phase 1 — sorted key → value; use when ceiling/floor must return an associated value
+TreeMap<Integer, Integer> treeMap = new TreeMap<>();
+// treeMap.floorKey(q)    → largest key <= q  (null if none)
+// treeMap.ceilingKey(q)  → smallest key >= q (null if none)
+// treeMap.floorEntry(q)  → Map.Entry with key and value
+```
+
+### Pre-Flight Checklist
+
+```
+Before writing the set loop, answer:
+  □ Do I need floor / ceiling range queries?  → TreeSet (or TreeMap if you also need a value)
+  □ Do I need insertion-order iteration?      → LinkedHashSet
+  □ Do I need a count, not just presence?     → Map<K, Integer> instead of Set
+  □ Is the ceiling / floor result nullable?   → ALWAYS null-check before using it
+  □ Sliding window? Evict AFTER add:          → if (window.size() > k) window.remove(nums[i - k]);
+```
+
+---
+
 ## 🧭 Patterns — HashSet, TreeSet, LinkedHashSet
 
 ### Pattern 1 — Membership Check (HashSet O(1) vs TreeSet O(log n))
@@ -1078,192 +1154,351 @@ class MajorityChecker {
 
 ## 🔬 Worked Walkthroughs
 
-### Walkthrough 1 — LC 217 Contains Duplicate (Pattern 1: Membership)
+### WW-1 — LC 217 Contains Duplicate
 
-**Problem:** Given an integer array `nums`, return true if any value appears at least twice in the array.
+**Problem statement:** Return `true` if any value appears at least twice in an integer array.
 
-**Example:** `nums = [1, 2, 3, 1]` → `true`
+**Brute force:** Sort the array and check adjacent elements — O(n log n) time, O(1) extra space (in-place sort). Or nested loops comparing every pair — O(n²).
 
-**Approach:**
-- Use a HashSet to track elements seen so far.
-- As you iterate, check if the element is already in the set.
-- If yes, duplicate found. If no, add to set.
+**Intuition bridge:** `HashSet.add()` returns `false` if the element already exists — one line catches the first duplicate. O(n) time, O(n) space.
 
-**English steps:**
+**Steps in plain English:**
 
-1. Create an empty HashSet.
-2. Iterate through the array once.
-3. For each element, try to add it to the set.
-4. If `.add()` returns false (already exists), return true.
-5. If loop completes, return false.
-
-**Code:**
+1. **`Set<Integer> seen = new HashSet<>()`**.
+2. **For each `n`:** if `!seen.add(n)` return `true` (add returned false → already present).
+3. **Return `false`** — no duplicates.
 
 ```java
 class Solution {
     public boolean containsDuplicate(int[] nums) {
-        // Step 1: create empty set
+        // Step 1 — membership set
         Set<Integer> seen = new HashSet<>();
-        
-        // Step 2-5: iterate and check membership
         for (int n : nums) {
-            // Step 3-4: add returns false if already present
+            // Step 2 — add() returns false if already present
             if (!seen.add(n)) {
-                return true;  // Step 4: duplicate found
+                return true;
             }
         }
-        
-        // Step 5: no duplicates
+        // Step 3 — no duplicate found
         return false;
     }
 }
 ```
 
-**Trace — `nums = [1, 2, 3, 1]`:**
+**Complexity:** Time O(n), Space O(n).
 
-| i | nums[i] | seen before | add() result | seen after |
-| --- | --- | --- | --- | --- |
-| 0 | 1 | {} | true | {1} |
-| 1 | 2 | {1} | true | {1, 2} |
-| 2 | 3 | {1, 2} | true | {1, 2, 3} |
-| 3 | 1 | {1, 2, 3} | false ✗ | return true |
+**Transfers to:**
 
-Result: `true` ✅
-
-**Complexity:** Time O(n) (one pass, each `.add()` is O(1) amortized). Space O(n) (set stores at most n unique elements).
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 219 Contains Duplicate II | Duplicate must be within index distance k — sliding window HashSet | `if (seen.size() > k) seen.remove(nums[i - k]);` before checking |
+| LC 220 Contains Duplicate III | Within distance k and value range t — TreeSet for range query | `Long floor = window.floor((long)n + t); if (floor != null && floor >= (long)n - t) return true;` |
+| LC 136 Single Number | All elements appear exactly twice except one — XOR cancels pairs, O(1) space | `int result = 0; for (int n : nums) result ^= n; return result;` |
 
 ---
 
-### Walkthrough 2 — LC 349 Intersection of Two Arrays (Pattern 1: Membership)
+### WW-2 — LC 349 Intersection of Two Arrays
 
-**Problem:** Given two integer arrays `nums1` and `nums2`, return an array of their intersection (unique common elements).
+**Problem statement:** Return an array of the unique elements common to both `nums1` and `nums2`.
 
-**Example:** `nums1 = [1, 2, 2, 1]`, `nums2 = [2, 2]` → `[2]`
+**Brute force:** For each element in `nums1`, scan all of `nums2` — O(m × n) time.
 
-**Approach:**
-- Convert `nums1` to a HashSet for O(1) membership check.
-- Iterate `nums2` and check if each element is in the set.
-- Use a result set to avoid duplicates in the output.
+**Intuition bridge:** Load one array into a HashSet for O(1) membership. Use a second HashSet for the result to deduplicate automatically. One pass through the second array collects all common unique elements.
 
-**English steps:**
+**Steps in plain English:**
 
-1. Convert `nums1` to a HashSet.
-2. Create a result set for unique common elements.
-3. Iterate through `nums2`.
-4. For each element, check if it's in the set from step 1.
-5. If yes, add to the result set.
-6. Convert result set to array and return.
-
-**Code:**
+1. **`set1 = new HashSet<>()`** — add all elements of `nums1`.
+2. **`resultSet = new HashSet<>()`**.
+3. **For each `n` in `nums2`:** if `set1.contains(n)` add to `resultSet`.
+4. **Convert `resultSet`** to an `int[]` and return.
 
 ```java
 class Solution {
     public int[] intersection(int[] nums1, int[] nums2) {
-        // Step 1: convert nums1 to set for O(1) lookup
+        // Step 1 — O(1) membership lookup for nums1
         Set<Integer> set1 = new HashSet<>();
         for (int n : nums1) {
             set1.add(n);
         }
-        
-        // Step 2: create result set
-        Set<Integer> result = new HashSet<>();
-        
-        // Step 3-5: iterate nums2 and find intersection
+        // Step 2 — result set deduplicates automatically
+        Set<Integer> resultSet = new HashSet<>();
+        // Step 3 — filter nums2 through set1
         for (int n : nums2) {
-            // Step 4: check if in both
             if (set1.contains(n)) {
-                // Step 5: add to result (set prevents duplicates)
-                result.add(n);
+                resultSet.add(n);
             }
         }
-        
-        // Step 6: convert to array
-        return result.stream().mapToInt(Integer::intValue).toArray();
-    }
-}
-```
-
-**Trace — `nums1 = [1, 2, 2, 1]`, `nums2 = [2, 2]`:**
-
-| Step | Action | set1 | result |
-| --- | --- | --- | --- |
-| 1 | Convert nums1 | {1, 2} | — |
-| 2 | Create result | {1, 2} | {} |
-| — | Check nums2[0]=2 | {1, 2} | {2} |
-| — | Check nums2[1]=2 | {1, 2} | {2} (no duplicate) |
-| 6 | Convert to array | — | [2] |
-
-Result: `[2]` ✅
-
-**Complexity:** Time O(m + n) where m = nums1.length, n = nums2.length. Space O(m) for set1 + O(k) for result (k = intersection size).
-
----
-
-### Walkthrough 3 — LC 436 Find Right Interval (Pattern 4: Range Queries)
-
-**Problem:** Given intervals, for each interval, find the smallest interval that starts at or after the end of the current interval. Return the index of that interval, or -1 if none.
-
-**Example:** `intervals = [[1,2]]` → `[-1]` (no interval starts ≥ 2)
-
-**Approach:**
-- Store all interval starts in a TreeSet for efficient range queries.
-- For each interval end, use `.ceiling(end)` to find the smallest start ≥ end.
-- Return the index of that interval.
-
-**English steps:**
-
-1. Create a TreeSet to store all interval starts (auto-sorted).
-2. Create a map from each start to its interval index.
-3. For each interval in the input:
-   a. Get the interval's end.
-   b. Use `.ceiling(end)` to find the smallest start ≥ end.
-   c. If found, return the index of that interval; else return -1.
-
-**Code:**
-
-```java
-class Solution {
-    public int[] findRightInterval(int[][] intervals) {
-        // Step 1: store all starts in TreeSet (auto-sorted)
-        TreeSet<Integer> starts = new TreeSet<>();
-        // Step 2: map start to interval index
-        Map<Integer, Integer> startToIdx = new HashMap<>();
-        
-        for (int i = 0; i < intervals.length; i++) {
-            starts.add(intervals[i][0]);
-            startToIdx.put(intervals[i][0], i);
+        // Step 4 — convert to array
+        int[] result = new int[resultSet.size()];
+        int idx = 0;
+        for (int n : resultSet) {
+            result[idx++] = n;
         }
-        
-        // Step 3: process each interval
-        int[] result = new int[intervals.length];
-        for (int i = 0; i < intervals.length; i++) {
-            // Step 3a: get interval end
-            int end = intervals[i][1];
-            // Step 3b: find smallest start >= end using ceiling
-            Integer nextStart = starts.ceiling(end);
-            // Step 3c: return index or -1
-            result[i] = nextStart != null ? startToIdx.get(nextStart) : -1;
-        }
-        
         return result;
     }
 }
 ```
 
-**Trace — `intervals = [[1,2], [2,3], [0,1], [3,4]]`:**
+**Complexity:** Time O(m + n), Space O(m + k) where k is the intersection size.
 
-| i | interval | end | starts | ceiling(end) | result[i] |
-| --- | --- | --- | --- | --- | --- |
-| 0 | [1, 2] | 2 | {0, 1, 2, 3} | 2 | index of [2, 3] = 1 |
-| 1 | [2, 3] | 3 | {0, 1, 2, 3} | 3 | index of [3, 4] = 3 |
-| 2 | [0, 1] | 1 | {0, 1, 2, 3} | 1 | index of [1, 2] = 0 |
-| 3 | [3, 4] | 4 | {0, 1, 2, 3} | null | -1 |
+**Transfers to:**
 
-Result: `[1, 3, 0, -1]` ✅
-
-**Complexity:** Time O(n log n) for building TreeSet + O(n log n) for ceiling lookups = O(n log n). Space O(n) for TreeSet and map.
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 350 Intersection of Two Arrays II | Allow duplicate output — use frequency map not set | `Map<Integer, Integer> freq1 = ...; for n in nums2: if freq1.get(n) > 0 { add n; freq1.merge(n, -1, Integer::sum); }` |
+| LC 2215 Find Difference of Two Arrays | Return two lists: elements in nums1 not in nums2, and vice versa | Build `set1` and `set2`; filter each against the other |
+| LC 1002 Find Common Characters | Chars present in ALL strings — frequency maps per string; take element-wise minimum | `int[] minFreq = ...; for each string: update minFreq[c] = min(minFreq[c], freq[c]);` |
 
 ---
+
+### WW-3 — LC 128 Longest Consecutive Sequence
+
+**Problem statement:** Find the length of the longest sequence of consecutive integers in an unsorted array — in O(n) time.
+
+**Brute force:** Sort and scan for the longest run — O(n log n).
+
+**Intuition bridge:** Only start a chain when the number has no left neighbor (`set.contains(n - 1)` is false). This ensures each number is visited at most once across all chains — total work is O(n) even though inner loops look quadratic.
+
+**Steps in plain English:**
+
+1. **`Set<Integer> numSet = new HashSet<>(all elements)`**.
+2. **For each `n`:** skip if `numSet.contains(n - 1)` (not a chain start).
+3. **Otherwise, count upward:** while `numSet.contains(current + 1)` increment `length` and `current`.
+4. **Update `maxLen`**. Return `maxLen`.
+
+```java
+class Solution {
+    public int longestConsecutive(int[] nums) {
+        // Step 1 — O(1) membership for all values
+        Set<Integer> numSet = new HashSet<>();
+        for (int n : nums) {
+            numSet.add(n);
+        }
+        int maxLen = 0;
+        for (int n : numSet) {
+            // Step 2 — only start from a chain's leftmost element
+            if (!numSet.contains(n - 1)) {
+                int current = n;
+                int length = 1;
+                // Step 3 — extend the chain rightward
+                while (numSet.contains(current + 1)) {
+                    current++;
+                    length++;
+                }
+                // Step 4 — update best
+                maxLen = Math.max(maxLen, length);
+            }
+        }
+        return maxLen;
+    }
+}
+```
+
+**Complexity:** Time O(n) amortized (each element visited at most twice), Space O(n).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 298 Binary Tree Longest Consecutive Sequence | Same "extend chain" logic, but DFS carries the current streak down the tree | `helper(node, node.val, 1);` — pass parent val and current length |
+| LC 219 Contains Duplicate II | HashSet window instead of full set — evict element at distance > k | `if (seen.size() > k) seen.remove(nums[i - k]);` |
+| LC 41 First Missing Positive | Negate-at-index encodes presence — similar "which numbers are present" query without extra space | `for each n: mark nums[n-1] negative if 1<=n<=n; then scan for first positive index` |
+
+---
+
+### WW-4 — LC 436 Find Right Interval
+
+**Problem statement:** Given intervals, for each interval find the index of the interval with the smallest start ≥ the current interval's end; return -1 if none.
+
+**Brute force:** For each interval's end, scan all starts to find the minimum start ≥ end — O(n²).
+
+**Intuition bridge:** Store all interval starts in a `TreeSet` (auto-sorted). For each end, `ceiling(end)` returns the smallest start ≥ end in O(log n). A companion map translates start → index.
+
+**Steps in plain English:**
+
+1. **`TreeSet<Integer> starts`** + **`Map<Integer, Integer> startToIdx`**. Populate from the intervals array.
+2. **For each interval `i`:** `Integer next = starts.ceiling(intervals[i][1])`; `result[i] = next != null ? startToIdx.get(next) : -1`.
+3. **Return `result`**.
+
+```java
+class Solution {
+    public int[] findRightInterval(int[][] intervals) {
+        // Step 1 — sorted starts + index lookup
+        TreeSet<Integer> starts = new TreeSet<>();
+        Map<Integer, Integer> startToIdx = new HashMap<>();
+        for (int i = 0; i < intervals.length; i++) {
+            starts.add(intervals[i][0]);
+            startToIdx.put(intervals[i][0], i);
+        }
+        // Step 2 — for each end, find smallest start >= end
+        int[] result = new int[intervals.length];
+        for (int i = 0; i < intervals.length; i++) {
+            Integer next = starts.ceiling(intervals[i][1]);
+            result[i] = (next != null) ? startToIdx.get(next) : -1;
+        }
+        // Step 3 — return result
+        return result;
+    }
+}
+```
+
+**Complexity:** Time O(n log n), Space O(n).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 729 My Calendar I | Check for overlap before booking — need both floor and ceiling | `Integer prev = booked.floorKey(start); Integer next = booked.ceilingKey(start);` |
+| LC 981 Time Based Key-Value Store | `floorKey(timestamp)` instead of ceiling — find latest at or before a time | `Integer ts = treeMap.floorKey(timestamp);` |
+| LC 220 Contains Duplicate III | Floor and ceiling together define the valid value range window | `Long floor = window.floor((long)n + t); if (floor != null && floor >= (long)n - t) return true;` |
+
+---
+
+### WW-5 — LC 220 Contains Duplicate III
+
+**Problem statement:** Return `true` if there exist indices `i, j` such that `|i − j| ≤ k` and `|nums[i] − nums[j]| ≤ t`.
+
+**Brute force:** For each `i`, check all `j` in the range `[i − k, i]` — O(nk) time.
+
+**Intuition bridge:** Maintain a sliding window `TreeSet` of the last `k` elements. For a new element `x`, ask the TreeSet: "does any value in `[x − t, x + t]` exist?" `floor(x + t)` gives the largest element ≤ `x + t`; if that value is ≥ `x − t`, a valid pair exists.
+
+**Steps in plain English:**
+
+1. **`TreeSet<Long> window`** (use `long` to avoid overflow when `t` is large).
+2. **For each index `i`:** check `window.floor((long)nums[i] + t)` — if non-null and ≥ `(long)nums[i] − t`, return `true`. Add `(long)nums[i]` to window. If `window.size() > k`, remove `(long)nums[i − k]`.
+3. **Return `false`**.
+
+```java
+class Solution {
+    public boolean containsNearbyAlmostDuplicate(int[] nums, int k, int t) {
+        // Step 1 — sliding TreeSet; use long to prevent overflow
+        TreeSet<Long> window = new TreeSet<>();
+        for (int i = 0; i < nums.length; i++) {
+            long x = (long) nums[i];
+            // Step 2 — check if any value in [x-t, x+t] exists
+            Long floor = window.floor(x + t);
+            if (floor != null && floor >= x - t) {
+                return true;
+            }
+            // Step 2 — add current element
+            window.add(x);
+            // Step 2 — evict element that left the k-window
+            if (window.size() > k) {
+                window.remove((long) nums[i - k]);
+            }
+        }
+        // Step 3 — no valid pair found
+        return false;
+    }
+}
+```
+
+**Complexity:** Time O(n log k), Space O(k).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 219 Contains Duplicate II | `t = 0` special case — same set within distance k; use HashSet instead | `if (seen.contains(nums[i])) return true;` |
+| LC 436 Find Right Interval | Ceiling instead of floor — find smallest start ≥ a threshold | `starts.ceiling(end)` |
+| LC 315 Count of Smaller Numbers After Self | TreeSet for order statistics — count elements smaller than current from right to left | Build TreeSet right to left; use `headSet(n).size()` |
+
+---
+
+### WW-6 — LC 729 My Calendar I
+
+**Problem statement:** Book time intervals `[start, end)` one at a time; return `false` and reject the booking if it overlaps any previously accepted booking.
+
+**Brute force:** Store all bookings in a list; on each new booking, scan all existing bookings for overlap — O(n) per booking, O(n²) total.
+
+**Intuition bridge:** Two intervals `[a, b)` and `[s, e)` overlap iff `a < e` and `s < b`. A `TreeMap<start, end>` lets us find in O(log n) the largest existing start ≤ new start (`floorKey`) and the smallest start ≥ new start (`ceilingKey`) — those are the only two candidates that could overlap.
+
+**Steps in plain English:**
+
+1. **`TreeMap<Integer, Integer> booked`** (start → end).
+2. **For each booking `[start, end)`:** find `prev = booked.floorKey(start)` — if `booked.get(prev) > start`, overlap → return `false`. Find `next = booked.ceilingKey(start)` — if `next < end`, overlap → return `false`. Add `booked.put(start, end)`; return `true`.
+
+```java
+class MyCalendar {
+    // Step 1 — sorted map of accepted bookings: start → end
+    TreeMap<Integer, Integer> booked = new TreeMap<>();
+
+    public boolean book(int start, int end) {
+        // Step 2 — check interval ending just before new start
+        Integer prev = booked.floorKey(start);
+        if (prev != null && booked.get(prev) > start) {
+            return false;
+        }
+        // Step 2 — check interval starting before new end
+        Integer next = booked.ceilingKey(start);
+        if (next != null && next < end) {
+            return false;
+        }
+        // Step 2 — no overlap; accept the booking
+        booked.put(start, end);
+        return true;
+    }
+}
+```
+
+**Complexity:** Time O(log n) per booking, Space O(n).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 731 My Calendar II | Allow up to 1 overlap (double-booking) — second TreeMap tracks double-booked ranges; reject triple-booking | Maintain `overlap` map; on each booking add intersection with existing bookings |
+| LC 715 Range Module | Add/remove/query ranges — merge/split intervals in the TreeMap on each operation | `addRange(left, right)`: merge all intervals overlapping `[left, right]` |
+| LC 56 Merge Intervals | Offline version — sort all intervals by start, then greedy merge | `if (intervals[i][0] <= merged.last()[1]) merged.last()[1] = max(...)` |
+
+---
+
+### WW-7 — LC 981 Time Based Key-Value Store
+
+**Problem statement:** Design a store that associates multiple timestamped values with each key and retrieves the value at the latest timestamp ≤ a given query time.
+
+**Brute force:** Store `(timestamp, value)` pairs per key in a list; on get, scan all pairs for the largest timestamp ≤ query time — O(n) per get.
+
+**Intuition bridge:** A `TreeMap<Integer, String>` per key keeps timestamps sorted; `floorKey(timestamp)` returns the largest timestamp ≤ query time in O(log n).
+
+**Steps in plain English:**
+
+1. **`Map<String, TreeMap<Integer, String>> store`**.
+2. **set(key, value, timestamp):** `store.computeIfAbsent(key, k -> new TreeMap<>()).put(timestamp, value)`.
+3. **get(key, timestamp):** get the key's TreeMap; call `floorKey(timestamp)` to find the latest valid timestamp; return the mapped value or `""` if none.
+
+```java
+class TimeMap {
+    // Step 1 — key → sorted timestamp → value
+    private final Map<String, TreeMap<Integer, String>> store = new HashMap<>();
+
+    public void set(String key, String value, int timestamp) {
+        // Step 2 — create TreeMap on first use; add timestamped value
+        store.computeIfAbsent(key, k -> new TreeMap<>()).put(timestamp, value);
+    }
+
+    public String get(String key, int timestamp) {
+        // Step 3 — retrieve TreeMap for key
+        TreeMap<Integer, String> treeMap = store.get(key);
+        if (treeMap == null) {
+            return "";
+        }
+        // Step 3 — largest timestamp <= query time
+        Integer ts = treeMap.floorKey(timestamp);
+        return (ts == null) ? "" : treeMap.get(ts);
+    }
+}
+```
+
+**Complexity:** set O(log n), get O(log n), Space O(total entries).
+
+**Transfers to:**
+
+| What's identical | ONE thing different | Key line that changes |
+| --- | --- | --- |
+| LC 436 Find Right Interval | Ceiling instead of floor — find smallest start ≥ threshold | `starts.ceiling(end)` |
+| LC 732 My Calendar III | Count maximum k-booking at any time — `TreeMap<Integer, Integer>` as difference array; `floorEntry` for prefix sum | `map.merge(start, 1, Integer::sum); map.merge(end, -1, Integer::sum);` |
+| LC 699 Falling Squares | Track height ranges after each square falls — TreeMap of interval heights; `floorKey` for current height at a position | Coordinate compress; update range height in TreeMap |
 
 ## ⚠️ Gotchas — Silent Bug Hall of Fame
 

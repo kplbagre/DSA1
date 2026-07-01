@@ -24,6 +24,21 @@ In distributed systems, the hydrant is your upstream producer (Kafka, an HTTP cl
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|------|----------------------|---------|
+| **Backpressure** | signal from a consumer to its producer saying "slow down — I'm overwhelmed"; prevents unbounded queue growth | consumer returns HTTP 429 → upstream producer slows its send rate |
+| **Bounded Queue** | queue with a fixed maximum size; when full, new items are rejected (fail fast) instead of growing forever | `LinkedBlockingQueue(capacity=1000)`: task 1001 throws `RejectedExecutionException` |
+| **Load Shedding** | deliberately dropping low-priority requests when at capacity, to preserve service for critical ones | search at 100% → drop guest (non-logged-in) requests; serve paying users first |
+| **HTTP 429** | status code "Too Many Requests" — the HTTP-level backpressure signal sent to upstream callers | client sends 1001st request → API gateway returns `429 Too Many Requests` |
+| **Reactive Pull** | consumer explicitly requests the next batch of items only when ready; producer cannot push faster than pull rate | Project Reactor `Flux`: subscriber calls `request(10)` → producer sends exactly 10 |
+| **Thread Pool Saturation** | all threads in a pool are busy; new tasks queue up or are rejected outright | 100-thread pool all blocked on slow DB calls → task 101 → `RejectedExecutionException` |
+| **RejectedExecutionException** | Java exception thrown when a `ThreadPoolExecutor` queue is full and cannot accept new tasks | `AbortPolicy` (default): caller receives exception immediately — the backpressure signal |
+| **Priority-Based Rejection** | when shedding load, drop the lowest-priority work first to protect critical paths | drop telemetry batch jobs and analytics writes first; preserve payment processing |
+
+---
+
 ## 🎨 Visual — Overflow cascade vs backpressure applied
 
 ```
