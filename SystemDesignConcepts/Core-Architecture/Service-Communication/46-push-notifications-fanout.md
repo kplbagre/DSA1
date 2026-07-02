@@ -14,6 +14,21 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| Device Token | A unique opaque string issued by the OS for each device + app installation; used to address pushes | An iOS APNs token: `abc123...` (changes on app reinstall) |
+| APNs | Apple Push Notification Service — Apple's cloud relay that delivers pushes to iOS devices | Server calls APNs HTTP/2 API with device token + payload → iOS device wakes up |
+| FCM | Firebase Cloud Messaging — Google's push relay for Android devices | Server calls FCM with registration token + payload → Android device wakes up |
+| Fanout | Copying and delivering one event to many recipients — decoupling the single write from millions of individual deliveries | Celebrity posts → 1 Kafka event → 50M fan-out worker deliveries |
+| Dead Token | A device token that APNs/FCM marks invalid because the user uninstalled the app or the token expired | APNs returns `BadDeviceToken`; worker must immediately mark token inactive in DB |
+| Thundering Herd (push) | Millions of devices wake up simultaneously and hammer your API for content after receiving a notification | "You have a new post" notification → 50M devices all call `/api/feed` at once; fix by including full payload in push |
+| Batch Push | Sending a single API call with up to 1,000 device tokens instead of one call per token to improve throughput | APNs HTTP/2 supports 1K concurrent streams per connection |
+| Fanout Worker | A Kafka consumer pod that owns a partition and delivers notifications to its slice of subscribers | Worker pod 1 owns partition 0 and delivers to users 0–500K |
+
+---
+
 ## 🎯 Why This Matters
 
 Mobile clients don't poll servers 24/7 — they sleep. Push notifications wake them. But when a Bollywood celebrity posts, 50M followers need a notification within seconds. Naive direct push from the app server to all devices is a blocking bottleneck: the producer thread blocks on every APNs/FCM HTTP call.

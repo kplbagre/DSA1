@@ -29,6 +29,22 @@ A **Certificate Authority** (trusted third party) vouches for you: "I confirm th
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| PKI | Public Key Infrastructure — the system of keys, certificates, and Certificate Authorities that makes "trust a public key you've never seen" possible | HTTPS, DocuSign signatures, JWT RS256 signing all rely on PKI |
+| Private Key | A secret cryptographic key kept only by its owner — used to sign documents and prove identity | RSA 2048-bit key stored in an HSM; never shared |
+| Public Key | The freely shareable counterpart to the private key — used to verify signatures and encrypt messages to the key owner | Published in a TLS certificate or a JWKS endpoint |
+| Certificate Authority | A trusted organization that signs certificates attesting "this public key belongs to this entity" | Let's Encrypt, DigiCert — their root public keys are pre-installed in browsers/OS |
+| Digital Signature | The hash of a document encrypted with the signer's private key — proves both identity and document integrity | `SHA256(document)` encrypted with private key → attached to the PDF |
+| Non-Repudiation | The property that a signer cannot later deny having signed — because only their private key could produce the valid signature | DocuSign's legal admissibility depends on non-repudiation |
+| TLS Handshake | The protocol where client and server use asymmetric crypto to authenticate and exchange a symmetric session key, then switch to fast symmetric encryption | Browser connects to docusign.com → verifies certificate chain → establishes AES session |
+| Hash Function (SHA-256) | A one-way function that converts any input to a fixed 32-byte digest — any change to input changes the digest completely | `SHA-256("hello") = 2cf24dba...` — used to hash documents before signing |
+| X.509 Certificate | The standard format for public key certificates — contains the entity's public key, validity dates, issuer, and the CA's signature | docusign.com's TLS certificate is an X.509 cert signed by an Intermediate CA |
+
+---
+
 ## 🎨 Visual — System Topology: PKI & Security in Architecture
 
 ```

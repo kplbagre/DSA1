@@ -420,6 +420,56 @@ public class ReplicationFailoverManager {
 
 Binlog is **MySQL's WAL (write-ahead log)**. Every transaction is logged before being applied, ensuring durability and enabling replication. Replicas subscribe to the binlog and apply transactions in order. In an interview, if asked: *"Binlog is MySQL's transaction log — every INSERT, UPDATE, DELETE is logged before committing. Replicas read from binlog and apply changes locally. Binlog enables point-in-time recovery (restore database to any moment in time) and replication (fanout to multiple replicas)."*
 
+### How does the binlog actually reach replicas? (The transport mechanism)
+
+There is **no external queue** (no Kafka, no RabbitMQ). MySQL has a built-in streaming protocol:
+
+```
+PRIMARY                                REPLICA
+───────────────────────────────────────────────────────────────
+1. Commits transaction → writes        2. IO Thread opens a persistent
+   binlog event to disk                   TCP connection to primary
+                                          and requests binlog events
+                                          from a given offset
+
+3. Binlog Dump Thread                  4. IO Thread receives events
+   (one per connected replica)            and writes them to the
+   pushes new events as they              RELAY LOG (a local disk file
+   land in the binlog                     on the replica)
+
+                                       5. SQL Thread reads from relay
+                                          log and replays the SQL
+                                          statements on the local DB
+
+                                       6. Replica periodically reports
+                                          its current binlog offset
+                                          back to the primary
+
+KEY INVARIANT:
+   The binlog file on disk IS the durable queue.
+   Replicas can disconnect, reconnect, and resume
+   from any offset — no events are lost as long as
+   the binlog is retained on the primary.
+```
+
+**The two replica threads explained:**
+
+| Thread | Job | What fails if it dies |
+|---|---|---|
+| **IO Thread** | Streams binlog from primary → writes to relay log | Replica stops receiving new events; replication lag grows |
+| **SQL Thread** | Reads relay log → replays SQL locally | Relay log fills up; replica falls behind even with events arriving |
+
+**GTID (Global Transaction ID) — the modern version:**
+
+In older MySQL, replicas tracked a raw `(binlog_file, offset)` pair. If the primary crashed and you promoted a replica, other replicas had to manually recalculate which offset to use on the new primary — error-prone. GTID assigns each transaction a globally unique ID (`server-uuid:transaction-seq`). Replicas track which GTIDs they've applied, not which file+offset. After failover, replicas reconnect to the new primary and say "I've applied GTIDs 1–482, give me 483+." No manual offset arithmetic.
+
+**When Kafka DOES enter the picture:**
+
+If you need to fan changes out to non-MySQL consumers (Elasticsearch, Redis, downstream microservices), you add **Debezium** — it acts as a MySQL replica using the exact same IO Thread protocol, reads the binlog, and publishes each row-change event to a Kafka topic. This is the **CDC + Outbox Pattern** (see `07-cdc-outbox.md`).
+
+> **Interview answer if asked "what transports the binlog to replicas?":**
+> "No external queue — MySQL's own streaming protocol. Each replica's IO Thread opens a persistent TCP connection to the primary and streams binlog events directly into a local relay log. A separate SQL thread replays from the relay log. The binlog file on disk is the durable queue; replicas can reconnect and resume from any offset using their last-applied GTID."
+
 ---
 
 ## 🏢 Real World — Where Companies Use This
@@ -505,3 +555,4 @@ Binlog is **MySQL's WAL (write-ahead log)**. Every transaction is logged before 
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 29. Covered master-slave replication topology, WAL (write-ahead log), sync vs async mechanisms, RPO/RTO trade-offs, automatic failover detection and promotion, replication lag handling. |
+| Jul 2, 2026 | Added binlog transport mechanism section: IO Thread + SQL Thread + Relay Log protocol, GTID-based replication, Binlog Dump Thread, and Debezium/Kafka cross-reference for CDC fanout. Fills the "how does the binlog actually reach replicas?" interview gap. |

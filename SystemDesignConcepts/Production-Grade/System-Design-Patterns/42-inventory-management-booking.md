@@ -17,6 +17,21 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| Oversell | Confirming more orders than available inventory — the core failure mode this pattern prevents | 1,000 users all see "1 item left" and buy; naive system confirms all 1,000 |
+| Soft Reserve (Hold) | Atomically moving a unit from AVAILABLE to SOFT_RESERVED with a TTL before payment is confirmed | Ticketmaster holds your seat for 5 minutes while you enter payment details |
+| TTL-Based Release | Automatic return of a soft-reserved unit to AVAILABLE when the hold timer expires without confirmation | Airbnb's 10-minute hold expires → listing becomes bookable again |
+| Atomic Decrement | A Redis `DECR` or SQL `UPDATE ... SET count = count - 1 WHERE count > 0` that prevents two threads both seeing count=1 | `DECR inventory:item:X` returns 0 to exactly one caller; all others get negative values |
+| Two-Step Commit | The reserve-then-confirm lifecycle: first atomically reserve, then confirm on payment success (or release on failure) | Step 1: SOFT_RESERVED on checkout start; Step 2: CONFIRMED on payment success |
+| Reservation Pattern | The full lifecycle — AVAILABLE → SOFT_RESERVED (on checkout) → CONFIRMED (on payment) or RELEASED (on TTL/cancel) | Used by Airbnb, BookMyShow, airline booking systems |
+| Flash Sale Contention | Extreme concurrent demand for the same item where even a single-key Redis DECR becomes a throughput bottleneck | Walmart Big Billion Day: 50,000 requests/sec on one item; use sharded Redis counters |
+| Idempotency Key (booking) | A client-generated UUID sent in the reservation request to prevent duplicate reservations from API retries | Mobile app retries reservation on network timeout; same idempotency key returns existing reservation ID |
+
+---
+
 ## 🎯 Why This Matters
 
 The overselling problem causes real financial loss and customer trust damage — confirming 1,000 orders for 1 item requires refunds, compensation, and support costs. It appears in **system design rounds** for any booking, ticketing, or e-commerce problem. Senior engineers are expected to propose the reservation pattern, name the specific mechanism (SELECT FOR UPDATE, Redis DECR, optimistic lock), and explain the TTL-based release strategy — not just say "use a transaction."

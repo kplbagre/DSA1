@@ -12,6 +12,21 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| Graceful Degradation | Returning a reduced-quality but still useful response when a dependency fails — instead of an outright error | Recommendations widget shows stale cached list instead of returning HTTP 503 |
+| Fallback | The alternative response or data source used when the primary dependency is unavailable | Tier 1: live data; Tier 2: stale cache; Tier 3: static default |
+| Fallback Hierarchy | An ordered cascade of tiers from highest quality (live) to lowest (static default) — each tier is more available than the one above | Live reco → Redis cache → DB bestsellers → empty list |
+| Stale Cache | Cached data that is past its freshness TTL but still returned because the live source is unavailable | Redis holds last-known recommendations from 5 minutes ago; served during outage |
+| Blast Radius | The scope of users or features affected by a failure — graceful degradation limits blast radius to the specific feature's fallback chain | Recommendations service down → only "Customers also bought" section is empty; checkout unaffected |
+| Timeout | A maximum wait duration for a downstream call — when exceeded, the fallback triggers immediately rather than blocking indefinitely | `CompletableFuture.get(500, TimeUnit.MILLISECONDS)` — after 500ms, use cache |
+| Fail-Open | A fallback strategy that allows requests through even when a safety check (e.g., fraud scoring) is unavailable — trades safety for availability | Fraud service down → allow order and flag for manual review |
+| Fail-Closed | A fallback strategy that denies requests when a safety check is unavailable — trades availability for safety | Auth service down → reject all requests rather than allow unauthenticated access |
+
+---
+
 ## 🎯 Why This Matters
 
 - **Problem solved:** Without fallbacks, a single slow or unavailable downstream service (recommendations, fraud scoring, personalization) causes the entire request to fail — including parts of the page or flow that do not depend on that service at all.

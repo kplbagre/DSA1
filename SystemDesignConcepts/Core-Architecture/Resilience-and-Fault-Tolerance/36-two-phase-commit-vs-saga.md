@@ -12,6 +12,21 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| 2PC | Two-Phase Commit — a distributed transaction protocol where a coordinator drives all participants to PREPARE then COMMIT/ROLLBACK atomically | Bank transfer across two institutions: both must agree before money moves |
+| Prepare Phase | Phase 1 of 2PC: coordinator sends PREPARE to all participants; each locks resources, writes to undo log, and votes YES or NO | Both banks lock accounts and vote YES — money is not yet moved but is reserved |
+| Commit Phase | Phase 2 of 2PC: if ALL voted YES, coordinator broadcasts COMMIT; if ANY voted NO, broadcasts ROLLBACK | All voted YES → coordinator sends COMMIT → both banks finalize the transfer |
+| Coordinator | The Transaction Manager (TM) in 2PC that drives the protocol — its failure is the blocking problem | Atomikos, Bitronix, or application-server TM; crash between phases blocks all participants |
+| Participant | Each service/database that receives PREPARE and votes YES/NO in 2PC | Bank 1 (debit account) and Bank 2 (credit account) are both participants |
+| Blocking Protocol | 2PC is blocking because participants hold locks until the coordinator sends the final COMMIT/ROLLBACK — if coordinator crashes, participants block indefinitely | "2PC's fundamental weakness" — impractical across geo-distributed services |
+| Compensating Transaction | In Saga pattern, a new transaction that reverses a prior step's effects — not a rollback, but a forward-moving correction | `accountService.refund(amount)` compensates the earlier `accountService.deduct(amount)` |
+| Saga vs 2PC | 2PC: locks resources, guarantees atomicity, slow, blocking. Saga: no locks, eventual consistency, fast, requires compensation logic | Use 2PC for same-region strong consistency; use Saga for distributed microservices |
+
+---
+
 ## 🎯 Why This Matters
 
 - **Problem:** Distributed transactions are impossible if you demand traditional ACID guarantees. How do you ship an order without losing money or double-charging?

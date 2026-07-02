@@ -15,6 +15,21 @@ A candidate who designs a correct rate limiter but says nothing about observabil
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| Testability | The property that allows a component to be verified in isolation using test doubles — achieved via constructor injection through interfaces | `SigningService(DocumentRepository repo, AuditLogger logger)` — both are swappable mocks in tests |
+| Usability | The property that an API behaves predictably — right HTTP verbs, consistent error format, correct status codes | Same `{ "error": "CODE", "message": "...", "correlationId": "..." }` on every 4xx and 5xx |
+| Extensibility | The Open-Closed Principle — new behaviours plug in without modifying existing code | Adding `WhatsAppNotificationStrategy` without touching `NotificationService` |
+| Security | Defence in depth — multiple independent layers (authn, authz, input validation, encryption) where each assumes the prior may fail | JWT validation filter → `@PreAuthorize` → payload validation → AES-256 at rest |
+| Availability | The fraction of time the system serves requests successfully — expressed as SLO (internal target) and SLA (customer contract) | SLO 99.9% = 8.7 hrs downtime/year; SLA 99.5% = error budget buffer |
+| Scalability | The ability to increase capacity by addressing the specific bottleneck — not by making everything bigger | Read-heavy: add read replicas + Redis cache. Write-heavy: shard or use async queue |
+| Observability | The ability to reconstruct what happened in any request by combining logs + metrics + traces with a shared trace_id | Query logs by trace_id → see full journey across all 3 services in one view |
+| Traceability | Propagating a shared trace_id across all services so any request can be followed end-to-end in distributed traces | `X-Trace-Id` header passed from service A to B to C; all log under the same ID |
+
+---
+
 ## 🧠 The Mental Models — One Analogy Per Dimension
 
 Each analogy is designed to be retold without any technical vocabulary.

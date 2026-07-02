@@ -12,6 +12,21 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| FSM | Finite State Machine — a model with a fixed set of states and explicit allowed transitions between them | Order FSM: PENDING → PROCESSING → SHIPPED → DELIVERED |
+| State | One of the defined conditions an entity can be in at any moment | PENDING, PROCESSING, SHIPPED, DELIVERED, CANCELLED |
+| Valid Transition | A state change that is explicitly listed in the transition map — anything not listed is rejected | PROCESSING → SHIPPED is valid; DELIVERED → SHIPPED is invalid |
+| Terminal State | A state with no outgoing transitions — the entity's lifecycle is complete | DELIVERED, CANCELLED, REFUNDED — no further transitions allowed |
+| CAS Enforcement (DB) | `UPDATE orders SET status='SHIPPED' WHERE id=? AND status='PROCESSING'` — the WHERE clause atomically guards against invalid transitions | 0 rows affected = concurrent event already changed state; throw ConcurrentTransitionException |
+| Invalid Transition | An attempted state change not in the FSM's transition map — rejected before any DB write | Trying to SHIP a CANCELLED order → IllegalStateTransitionException |
+| Compensating Transition | A state specifically modelling rollback intent (not a generic ERROR) that triggers reversal of prior steps | `FINANCE_REJECTED` state triggers budget release + submitter notification |
+| Orphaned State | An entity stuck in a non-terminal state because the worker processing it died — FSM state drives watchdog recovery | Order stuck in PROCESSING for 30 minutes → background job transitions to FAILED |
+
+---
+
 ## 🎯 Why This Matters
 
 **The problem:** `UPDATE orders SET status = ? WHERE id = ?` run without checking current state leads to invalid transitions. An order CANCELLED but then SHIPPED. A document SIGNED before all signers have signed. Without enforcement, any service can set any status at any time.

@@ -12,6 +12,22 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| Consensus | An algorithm by which multiple nodes agree on a single value despite failures and message delays | All 5 Kafka brokers agree on which broker is the controller |
+| Raft | A consensus algorithm designed for understandability — uses an explicit elected leader to replicate a log to followers | etcd, Consul, Kafka KIP-500 all use Raft |
+| Paxos | An older consensus algorithm without an explicit leader — any node can propose; requires multiple voting rounds | Google Chubby uses Paxos; rarely implemented from scratch due to complexity |
+| Leader (Raft) | The single node in a Raft cluster that accepts all client writes and replicates entries to followers | Node A wins election with majority votes → becomes leader, sends heartbeats |
+| Follower (Raft) | A non-leader node that receives log entries from the leader and appends them — can become Candidate if leader times out | Nodes B, C, D, E in a 5-node cluster while A is leader |
+| Candidate (Raft) | A node that has timed out waiting for leader heartbeats and is requesting votes to become the new leader | Node B's election timer fires → increments term → sends RequestVote to all peers |
+| Log Replication | The process where the Raft leader appends entries to its log and sends them to followers — entry is committed once majority acks | `SET x=42` → leader appends → B and C ack → majority reached → committed |
+| ZAB | ZooKeeper Atomic Broadcast — ZooKeeper's custom consensus protocol, similar to Raft but predates it | ZooKeeper uses ZAB for leader election and state replication across ensemble nodes |
+| BFT | Byzantine Fault Tolerance — consensus variant that handles malicious nodes, not just crashed ones; requires 3f+1 nodes to tolerate f traitors | Used in blockchain networks; not needed for typical datacenter consensus |
+
+---
+
 ## 🎯 Why This Matters
 
 - **Problem:** How do multiple servers agree on who's the leader? How does a database replica know it's safe to take over if the primary fails?

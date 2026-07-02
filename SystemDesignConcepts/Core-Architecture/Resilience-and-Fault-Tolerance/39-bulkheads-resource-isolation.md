@@ -12,6 +12,21 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| Bulkhead | A fixed, separate pool of resources allocated to one downstream service so its saturation cannot starve other services | Fraud service gets its own 20-thread pool; inventory gets its own 30-thread pool |
+| Thread Pool Isolation | Running each downstream service's calls in a dedicated thread pool — the strongest in-process isolation mechanism | Resilience4j `ThreadPoolBulkhead` with `maxThreadPoolSize=20` for fraud service |
+| Semaphore Isolation | Using a semaphore permit counter (not a separate thread pool) to limit concurrent calls — lighter weight than thread pool | Resilience4j `Bulkhead` with `maxConcurrentCalls=30` — caller's own thread does the work |
+| Resource Starvation | When one service consumes all shared resources (threads, connections) leaving none for other services | Fraud service at 8s latency fills all 200 shared threads → payment and inventory calls are blocked |
+| Connection Pool Isolation | Creating a separate HikariCP pool per tenant or per downstream DB so one tenant's burst cannot exhaust another's connections | `tenant-walmart` gets 80 connections; `tenant-startup-x` gets 10 connections — independent pools |
+| Blast Radius | The scope of the failure — bulkheads contain it to the specific pool | Fraud pool saturated (20/20) → only fraud calls rejected; payment and inventory unaffected |
+| Resilience4j Bulkhead | The Java library that provides both `ThreadPoolBulkhead` and semaphore `Bulkhead` implementations | `@Bulkhead(name = "fraudService")` annotation on the method |
+| Bulkhead vs Circuit Breaker | Bulkhead limits concurrent resource consumption (always active); circuit breaker stops calls when failure rate is high (opens on threshold) | Use both: bulkhead for healthy-but-slow services; circuit breaker for failing services |
+
+---
+
 ## 🎯 Why This Matters
 
 - **Problem:** A single shared thread pool means one slow downstream service can starve every other service of threads — a cascading failure where an unrelated service becomes unavailable because it cannot get a thread.

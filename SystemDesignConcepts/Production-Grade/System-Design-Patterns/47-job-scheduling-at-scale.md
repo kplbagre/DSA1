@@ -12,6 +12,21 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| Job Store | The persistent database table (e.g., PostgreSQL `scheduled_jobs`) that holds all jobs with their status, next run time, and claim state | `scheduled_jobs (id, job_type, status, next_run_at, claimed_by, claim_expires_at)` |
+| CAS Claim | Compare-and-swap claim: `UPDATE jobs SET status='CLAIMED', claimed_by=? WHERE id=? AND status='PENDING'` — atomically "wins" a job for exactly one worker | 100 workers race; only the one that gets 1 row affected owns the job |
+| Heartbeat | A periodic update (`claim_expires_at = NOW() + 5 min` every 60s) that proves a worker is still alive and extends its claim TTL | Without heartbeat renewal, the watchdog reclaims the job after TTL expiry |
+| Claim Expiry (TTL) | The `claim_expires_at` timestamp — if a worker dies, its claim expires and the watchdog resets the job to PENDING | `claim_expires_at = NOW() + INTERVAL '5 minutes'` set at claim time |
+| Exactly-Once Semantics | The guarantee that each job runs exactly one time — achieved via CAS claim + idempotency key in the handler | A payment settlement job that runs twice would double-settle; CAS + idempotency prevents this |
+| SKIP LOCKED | PostgreSQL/MySQL query hint that returns only unlocked rows and skips rows already locked — gives each worker a non-overlapping batch | `SELECT id FROM jobs WHERE status='PENDING' LIMIT 10 FOR UPDATE SKIP LOCKED` |
+| Clock Skew | Different machines having slightly different system clocks — critical to use DB server's `NOW()` for all time comparisons, never the worker's local clock | Worker A's clock is 2s ahead of Worker B's; use `NOW()` from DB to avoid false expiry |
+| Quartz/Temporal | Battle-tested job scheduler libraries: Quartz (Java, DB-backed, clustered) and Temporal (durable workflow engine for complex long-running jobs) | Use Quartz for up to ~10K jobs/min; use Temporal when jobs are multi-step sagas |
+
+---
+
 ## 🎯 Why This Matters
 
 **The problem:** OS-level cron (`@Scheduled` in Spring or Unix crontab) runs on one machine. That machine restarts during deployment → the 23:59 payment settlement job never runs. No one notices until 3 AM when the finance team calls.

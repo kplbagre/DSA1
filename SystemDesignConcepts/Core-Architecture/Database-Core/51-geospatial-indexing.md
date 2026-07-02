@@ -14,6 +14,21 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| Proximity Query | A database/index query that finds all records within a given distance of a point | "Find restaurants within 5 km of (19.08, 72.89)" |
+| Haversine Distance | The exact great-circle distance between two lat/lng points on Earth's surface | Distance between Mumbai (19.08, 72.89) and Pune (18.52, 73.85) ≈ 149 km |
+| Geohash | A base-32 alphanumeric string that encodes (lat, lng) where shared prefix ≈ same geographic area | `te7u2qx` encodes a city-block-level area in Mumbai |
+| Geohash Precision | Number of characters in the geohash — more characters = smaller area | Precision 7 ≈ 153 m × 153 m; Precision 5 ≈ 4.9 km × 4.9 km |
+| Quad Tree | An in-memory tree where each node splits its 2D region into 4 quadrants; adapts depth to point density | Dense city center subdivides many times; sparse suburb stays shallow |
+| H3 | Uber's hexagonal hierarchical grid system; all 6 neighbours of each hexagon are equidistant from its centre | Resolution 9 hex ≈ 174 m across; used for surge pricing zones |
+| Redis GEO | A Redis sorted set that stores locations as geohash-encoded scores; supports GEOADD and GEOSEARCH | `GEOADD drivers:locations 72.89 19.08 driver-42` |
+| Neighbor Cell Search | Querying the center cell plus its 8 surrounding cells (geohash) or 6 surrounding hexagons (H3) to avoid boundary misses | A restaurant 15 m away but in an adjacent cell is only found if you query 9 cells |
+
+---
+
 ## 🎯 Why This Matters
 
 - **Problem it solves:** Proximity queries against large coordinate datasets are too slow for a full scan. Spatial indexing prunes the candidate set to ~100 rows before any distance math runs.

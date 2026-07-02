@@ -1,6 +1,6 @@
 # SystemDesignConcepts — Master Index
 
-> **53 tracked concept notes · 4 advanced companions · all ✅ Done**
+> **54 tracked concept notes · 4 advanced companions · all ✅ Done**
 >
 > This file is the single source of truth for what exists. Use `Ctrl+F` / `Cmd+F` to find by keyword.
 > For "where do I start," see `START-HERE.md` (coming next).
@@ -64,6 +64,7 @@
 | 49 | [State Machines in Workflows (FSM transitions, CAS enforcement)](./Production-Grade/System-Design-Patterns/49-state-machines-workflows.md) | Production · Patterns | — |
 | 50 | [Database Indexing (B-tree, composite, covering, selectivity, EXPLAIN)](./Foundations/Data-Fundamentals/50-database-indexing.md) | Foundations · Data | — |
 | 51 | [Geospatial Indexing (geohash, quad tree, H3, Redis GEO)](./Core-Architecture/Database-Core/51-geospatial-indexing.md) | Core · Database | — |
+| 52 | [Numbers to Know & Scale Triggers (2026 hardware baselines, back-of-envelope)](./Foundations/Performance-and-Scale/52-numbers-to-know-scale-triggers.md) | Foundations · Performance | — |
 
 ---
 
@@ -74,3 +75,4 @@
 | Jul 1, 2026 | INDEX.md created. 49 tracked notes + 4 advanced companions catalogued. |
 | Jul 1, 2026 | 2 previously untracked files registered in AGENTS.md and promoted into main table: `06-databases-types-and-selection.md` and `27-jwt-token-storage-reference.md`. Total: 51 tracked notes. |
 | Jul 1, 2026 | 2 new gap-closure notes created: `50-database-indexing.md` (B-tree, composite indexes, covering indexes, EXPLAIN ANALYZE) and `51-geospatial-indexing.md` (geohash, quad tree, H3 hexagonal grid, Redis GEO). Total: 53 tracked notes. |
+| Jul 2, 2026 | 1 new Tier 1 note created: `52-numbers-to-know-scale-triggers.md` (2026 hardware baselines, back-of-envelope formula, scale trigger thresholds, anti-patterns). Total: 54 tracked notes. |

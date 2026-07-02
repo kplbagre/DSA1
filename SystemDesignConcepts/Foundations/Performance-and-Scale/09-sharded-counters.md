@@ -8,6 +8,20 @@ Counting at scale sounds trivial until a single database row becomes the bottlen
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| Sharded Counter | A logical counter split across N physical rows/keys so writes are distributed and lock contention is reduced by factor N | A YouTube view counter split into 10 shard rows in the DB |
+| Lock Contention | Multiple threads competing for the same row-level lock, causing queuing and degraded throughput | 10,000 writes/sec on a single `UPDATE views = views + 1` row |
+| Shard Row | One of N physical rows in the counter table, each holding a partial count for the same logical counter | `counter_shards (counter_id='video:123', shard_id=3, shard_count=512000)` |
+| SUM Aggregation | The read query that adds up all N shard rows to return the total logical counter value | `SELECT SUM(shard_count) WHERE counter_id = 'video:123'` |
+| Redis INCR | An atomic Redis command that increments an integer key by 1 in a single operation with no lock overhead | `INCR video:123:shard:4` returns new value |
+| HyperLogLog | A probabilistic data structure that estimates the count of *distinct* elements with ~2% error in ~12 KB | `PFADD visitors userId42` then `PFCOUNT visitors` ≈ unique viewer count |
+| Eventual Consistency (counters) | The read total may lag slightly behind real-time because shards are written independently and aggregated periodically | YouTube view count jumps from 998 to 1,003 instead of incrementing one at a time |
+
+---
+
 ## 🧠 The Mental Model
 
 Imagine a supermarket on Black Friday with **one cash register**. Every shopper must queue at that single register. As the store fills up, the queue grows so long that shoppers are waiting 45 minutes — even though the cashier is working at full speed. The register is the bottleneck, not the store.

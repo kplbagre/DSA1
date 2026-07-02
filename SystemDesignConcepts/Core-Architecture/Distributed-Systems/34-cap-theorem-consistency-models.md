@@ -12,6 +12,22 @@
 
 ---
 
+## 📖 Terminology Table
+
+| Term | Plain-English Meaning | Example |
+|---|---|---|
+| Consistency (CAP) | All nodes see the same data at the same time — every read returns the most recent write | Both US and EU regions show the same account balance immediately after a write |
+| Availability (CAP) | Every non-failing node responds to requests — no timeouts, no "service unavailable" errors | Both regions keep serving customers even during a network partition |
+| Partition Tolerance | The system continues operating when network communication between nodes is lost | The inter-region link fails for 10 seconds; nodes on each side must still decide what to do |
+| Network Partition | A network failure that splits nodes into isolated groups that cannot communicate | US-East and EU-West regions lose connectivity for 10 seconds |
+| CP System | A system that chooses Consistency over Availability during a partition — writes are rejected to keep all nodes in sync | ZooKeeper, synchronous-replication PostgreSQL — writes fail during partition |
+| AP System | A system that chooses Availability over Consistency during a partition — serves potentially stale data but never goes down | Cassandra, DynamoDB — writes accepted in each region; they diverge and sync later |
+| Eventual Consistency | A guarantee that all replicas will converge to the same value *eventually*, once the partition heals — no guarantee of when | DynamoDB with async replication: EU may be 200ms behind US but will catch up |
+| Strong Consistency | Every read reflects the latest committed write — requires synchronous replication or quorum | `SELECT` on PostgreSQL primary after `COMMIT` always returns the written value |
+| PACELC | Extension of CAP: "When Partition → choose A or C; Else (normal ops) → choose Latency or Consistency" | Cassandra is PA/EL (available during partition, low latency normally); sync Postgres is PC/EC |
+
+---
+
 ## 🎯 Why This Matters
 
 - **Problem:** Distributed systems at scale WILL experience network partitions. Knowing what you lose in that moment separates SDE 2 from SDE 3.

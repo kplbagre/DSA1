@@ -9,7 +9,7 @@
 
 ## 🗺️ Study Path — Four-Week Sequence
 
-> **Week 1:** Tier 1 — know all 10 cold. These appear in every interview regardless of the problem.
+> **Week 1:** Tier 1 — know all 11 cold. These appear in every interview regardless of the problem.
 >
 > **Week 2:** Tier 2 — learn the trigger clusters relevant to your target role. Microservices shop → start there. Data-heavy system → start with Data-Flow cluster.
 >
@@ -21,10 +21,11 @@
 
 ## Tier 1 — Universal
 
-> **Every system design will touch these.** If the interviewer asks you to design anything, you will draw on at least 5 of these 10 concepts before finishing the first whiteboard pass. Know them cold — no "let me think about this" pauses.
+> **Every system design will touch these.** If the interviewer asks you to design anything, you will draw on at least 5 of these 11 concepts before finishing the first whiteboard pass. Know them cold — no "let me think about this" pauses.
 
 | # | Concept | The trigger |
 |---|---|---|
+| 52 | [Numbers to Know & Scale Triggers (2026 baselines, back-of-envelope)](./Foundations/Performance-and-Scale/52-numbers-to-know-scale-triggers.md) | Before every design — do the math before adding infrastructure |
 | 03 | [Caching (5 strategies, eviction, stampede)](./Foundations/Performance-and-Scale/03-caching.md) | Any read-heavy path; first optimization you propose |
 | 06 | [Database Types & Selection (SQL, NoSQL, Redis, Kafka, ES)](./Core-Architecture/Database-Core/06-databases-types-and-selection.md) | You pick a storage layer — justify it |
 | 11 | [API Design (REST, pagination, versioning)](./Foundations/Data-Fundamentals/11-api-design.md) | Every system has an API contract to define |
@@ -40,7 +41,7 @@
 
 ## Tier 2 — Frequent (Know Your Triggers)
 
-> **These 20 concepts are pulled in by a specific design property.** When you see that property in the problem, you reach for the matching cluster. Study the cluster most relevant to your target company type first.
+> **These 21 concepts are pulled in by a specific design property.** When you see that property in the problem, you reach for the matching cluster. Study the cluster most relevant to your target company type first.
 
 ---
 
@@ -67,6 +68,7 @@
 | 05 | [Consistent Hashing (ring, virtual nodes)](./Foundations/Performance-and-Scale/05-consistent-hashing.md) | Distributed cache or any horizontally scaled stateful tier |
 | 40 | [Multi-Region & Geo-Failover](./Core-Architecture/Distributed-Systems/40-multi-region-geo-failover.md) | System must be globally available or survive region failure |
 | 10 | [Backpressure (bounded queues, load shedding)](./Core-Architecture/Resilience-and-Fault-Tolerance/10-backpressure.md) | Producer can outpace consumer; async processing pipeline |
+| 34 | [CAP Theorem & Consistency Models + PACELC](./Core-Architecture/Distributed-Systems/34-cap-theorem-consistency-models.md) | Choosing between SQL/NoSQL, replication strategy, or explaining consistency guarantees — every multi-node data store choice is a CAP decision |
 
 ---
 
@@ -120,6 +122,8 @@
 ## Tier 3 — Problem-Specific Specialists
 
 > **Pull these out when the problem shape matches.** Study them after covering Tier 1 + Tier 2 + Tier 3 ⭐. Each concept below lists the trigger — if you see that trigger in your interview problem, add it to your design.
+>
+> *(14 concepts — CAP Theorem was promoted to Tier 2 Scale Triggers because every database selection and replication decision is a CAP decision, making it a universal trigger rather than a problem-specific one.)*
 
 | # | Concept | When to reach for it |
 |---|---|---|
@@ -134,7 +138,6 @@
 | 44 | [Graceful Degradation & Fallbacks](./Core-Architecture/Resilience-and-Fault-Tolerance/44-graceful-degradation-fallbacks.md) | High-availability design where partial function beats full outage |
 | 39 | [Bulkheads & Resource Isolation](./Core-Architecture/Resilience-and-Fault-Tolerance/39-bulkheads-resource-isolation.md) | Service must isolate failure from one tenant/path to another |
 | 36 | [Two-Phase Commit vs Saga](./Core-Architecture/Resilience-and-Fault-Tolerance/36-two-phase-commit-vs-saga.md) | Distributed transaction depth probe; when Saga (Tier 2) isn't enough |
-| 34 | [CAP Theorem & Consistency Models](./Core-Architecture/Distributed-Systems/34-cap-theorem-consistency-models.md) | "What consistency guarantee does your system provide and why?" |
 | 37 | [Consensus Algorithms — Raft vs Paxos](./Core-Architecture/Distributed-Systems/37-consensus-algorithms-raft-vs-paxos.md) | Deep-dive on Leader Election (Tier 2); principal-engineer level probes |
 | 15 | [System Qualities — 7 Evaluation Dimensions](./Foundations/Data-Fundamentals/15-system-qualities.md) | The evaluation framework; use to structure your interview answer |
 | 27jwt | [JWT Token Storage Reference (localStorage vs httpOnly cookie)](./Production-Grade/Auth-and-Security/27-jwt-token-storage-reference.md) | Companion to Auth/AuthZ (Tier 2); deep-dive on XSS/CSRF trade-offs |
@@ -159,3 +162,5 @@
 | Date | Change |
 |---|---|
 | Jul 1, 2026 | DESIGN-WEIGHT-MAP created. 53 notes assigned across Tier 1 (10), Tier 2 (20 in 4 trigger clusters), Tier 3 ⭐ (8 high-frequency specialists), Tier 3 (15 problem-specific), plus 4 advanced companions. Notes 50 (Database Indexing → Tier 1) and 51 (Geospatial Indexing → Tier 3 problem-specific) included. |
+| Jul 1, 2026 | **CAP Theorem (#34) promoted: Tier 3 Problem-Specific → Tier 2 Scale Triggers.** Rationale: every database selection and replication decision is a CAP/PACELC decision — it's a universal distributed systems trigger, not a problem-specific one. Tier 2 count: 20 → 21. Tier 3 count: 15 → 14. |
+| Jul 2, 2026 | **#52 Numbers to Know & Scale Triggers added to Tier 1.** 2026 hardware baselines, back-of-envelope formula, scale trigger thresholds, and three anti-patterns with worked math. Tier 1 count: 10 → 11. Total tracked notes: 53 → 54. |
