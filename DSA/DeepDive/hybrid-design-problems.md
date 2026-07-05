@@ -12,7 +12,7 @@ In a real interview, "design an LRU Cache" is not a DSA question and not a syste
 2. Design a clean interface with variants (the LLD half)
 3. Handle thread-safety and edge cases (the SDE-3 half)
 
-This doc covers the **4 most frequently asked hybrid problems** at depth, plus cross-references for 3 more. The WEX miss (LRU + TTL) is covered in the most detail.
+This doc covers the **5 most frequently asked hybrid problems** at depth, plus cross-references for 2 more. The WEX miss (LRU + TTL) is covered in the most detail.
 
 > **Lesson learned the hard way (June 2026):** In the WEX hiring manager round, LRU Cache with TTL was asked cold. Remembered PriorityQueue for TTL (correct), but blanked on DoublyLinkedList for LRU eviction — said HashMap only. Missing the second data structure is the most common failure mode on these problems. That's what this doc fixes.
 
@@ -730,13 +730,349 @@ class Leaderboard {
 
 ---
 
-## 🔗 Cross-References (Rate Limiter, Consistent Hashing, Task Scheduler)
+## 🔬 Problem 5 — Rate Limiter
 
-These three are also hybrid problems but **live in SystemDesignConcepts** (they have more system design depth than DSA depth):
+> Design a per-user API rate limiter. Each user is allowed at most `maxRequests` calls within a `windowMs`-millisecond window. Implement `boolean allowRequest(String userId)` — return `true` if the request is allowed, `false` if throttled.
+
+### What it is
+
+The rate limiter is unique among hybrid problems: **there is no single correct data structure**. Four algorithms solve the same problem with different tradeoffs. Interviews test whether you know all four and can pick the one that fits the given constraints. The most common failure mode: defaulting to one algorithm without mentioning the others.
+
+### DS Combo — Algorithm Picker
+
+| Algorithm | Data Structure | When to pick | Burst behavior |
+| --- | --- | --- | --- |
+| **Fixed Window Counter** | `Map<String, long[]>` — {count, windowStart} | "Simplest implementation" | Allows 2× burst at window boundary |
+| **Sliding Window Log** | `Map<String, Deque<Long>>` — timestamps | "Exact correctness required" | Accurate; O(maxRequests) memory per user |
+| **Token Bucket** ⭐ | `Map<String, double[]>` — {tokens, lastRefillMs} | "Real-world default / allow bursts" | Natural burst from accumulated tokens |
+| **Sliding Window Counter** | `Map<String, long[]>` — {prev, curr, winStart} | "O(1) memory, approximate is OK" | Weighted estimate, ~5% error |
+
+> **Interview default:** Start with Token Bucket and explain the tradeoff table. If the interviewer says "exact accuracy" → pivot to Sliding Window Log. If they say "simplest" → Fixed Window Counter.
+
+---
+
+### Algorithm 1 — Fixed Window Counter
+
+**DS:** `Map<String, long[]>` where `entry = [requestCount, windowStartMs]`
+
+Divide time into fixed buckets (e.g., one bucket per minute). Count requests in the current bucket. Reset count when the bucket rolls over.
+
+#### 🎨 Visual — Fixed Window Boundary Burst
+
+```
+Limit: 3 req / 60s. Window starts at t=0, t=60, t=120 ...
+
+  t=58s: [req1, req2, req3] ← window 1, count=3, full
+  t=59s: DENIED
+
+  t=60s: NEW WINDOW → count resets to 0
+  t=60s: [req1, req2, req3] ← window 2, all allowed
+
+PROBLEM: 6 requests between t=58s and t=62s — 2× the limit.
+Each window sees at most 3, so both pass. The boundary is invisible.
+
+         Window 1            Window 2
+  ───────────────────┼──────────────────────
+  count:    3         │count:    3
+  0s                 60s                120s
+
+KEY INVARIANT:
+  If now - windowStart >= windowSize: reset count=0, windowStart=now.
+  If count < maxRequests: count++, allow. Else: deny.
+```
+
+**Steps in plain English:**
+
+1. **Init** — create entry `[0, now]` if absent.
+2. **Roll window** — if `now - windowStart >= windowMs`, reset `count = 0`, update `windowStart = now`.
+3. **Check** — if `count < maxRequests`, increment and allow. Else deny.
+
+```java
+class FixedWindowRateLimiter {
+    // entry = { requestCount, windowStartMs }
+    private final Map<String, long[]> windows = new ConcurrentHashMap<>();
+    private final int maxRequests;
+    private final long windowMs;
+
+    public FixedWindowRateLimiter(int maxRequests, long windowMs) {
+        this.maxRequests = maxRequests;
+        this.windowMs = windowMs;
+    }
+
+    public boolean allowRequest(String userId) {
+        long now = System.currentTimeMillis();
+        // Step 1 — create entry if absent
+        windows.putIfAbsent(userId, new long[]{ 0, now });
+        long[] entry = windows.get(userId);
+        // Step 2 — lock per-user entry (not the whole map — too coarse)
+        synchronized (entry) {
+            // Step 2 — roll window if expired
+            if (now - entry[1] >= windowMs) {
+                entry[0] = 0;
+                entry[1] = now;
+            }
+            // Step 3 — check count and increment
+            if (entry[0] < maxRequests) {
+                entry[0]++;
+                return true;
+            }
+            return false;
+        }
+    }
+}
+```
+
+**Time:** O(1) | **Space:** O(users)
+
+---
+
+### Algorithm 2 — Sliding Window Log
+
+**DS:** `Map<String, Deque<Long>>` — each user's deque stores exact request timestamps.
+
+Store every request timestamp. On each call, evict timestamps older than `windowMs` from the front of the deque. Count remaining; if `< maxRequests`, allow.
+
+#### 🎨 Visual — Sliding Window Log Eviction
+
+```
+Limit: 3 req / 60,000ms. User "alice". Each "|" = 10,000ms.
+
+t=10,000  → log: [10000]               size=1 → ALLOW
+t=20,000  → log: [10000, 20000]        size=2 → ALLOW
+t=50,000  → log: [10000, 20000, 50000] size=3 → ALLOW
+t=60,000  → evict? 60000-10000=50000 < 60000 → no eviction
+              log: [10000, 20000, 50000], size=3 → DENIED
+
+t=70,001  → evict: 70001-10000=60001 >= 60000 → remove 10000
+              log: [20000, 50000], size=2
+              → add 70001 → size=3 → ALLOW
+
+No boundary burst: the window truly slides with wall clock time.
+Any 60,000ms interval contains at most 3 requests.
+
+KEY INVARIANT:
+  Deque front = oldest timestamp still in scope.
+  Evict from front while (now - front) >= windowMs.
+  Deque size = exact request count in the current window.
+```
+
+**Steps in plain English:**
+
+1. **Init** — create empty `ArrayDeque` if absent.
+2. **Evict** — poll from front while `now - front >= windowMs`.
+3. **Check** — if `deque.size() < maxRequests`, add `now` to back and allow. Else deny.
+
+```java
+class SlidingWindowLogRateLimiter {
+    private final Map<String, Deque<Long>> logs = new ConcurrentHashMap<>();
+    private final int maxRequests;
+    private final long windowMs;
+
+    public SlidingWindowLogRateLimiter(int maxRequests, long windowMs) {
+        this.maxRequests = maxRequests;
+        this.windowMs = windowMs;
+    }
+
+    public boolean allowRequest(String userId) {
+        long now = System.currentTimeMillis();
+        // Step 1 — create deque if absent
+        logs.putIfAbsent(userId, new ArrayDeque<>());
+        Deque<Long> log = logs.get(userId);
+        synchronized (log) {
+            // Step 2 — evict timestamps outside the window
+            while (!log.isEmpty() && now - log.peekFirst() >= windowMs) {
+                log.pollFirst();
+            }
+            // Step 3 — admit if under limit
+            if (log.size() < maxRequests) {
+                log.addLast(now);
+                return true;
+            }
+            return false;
+        }
+    }
+}
+```
+
+**Time:** O(maxRequests) amortized per request (eviction cost) | **Space:** O(users × maxRequests)
+
+---
+
+### Algorithm 3 — Token Bucket ⭐ (Real-World Default)
+
+**DS:** Inner `Bucket` class — `{double tokens, long lastRefillMs}` per user.
+
+Each user has a bucket holding up to `capacity` tokens. Tokens refill continuously at `refillRate` per second — but computed **lazily** on each request based on elapsed time. One request consumes one token.
+
+#### 🎨 Visual — Token Bucket Lazy Refill
+
+```
+Capacity = 5, refillRate = 1 token/sec. User "alice".
+
+t=0s:   bucket=[5.0] ← starts full
+        5 rapid requests → [4.0] [3.0] [2.0] [1.0] [0.0] — all ALLOWED
+        (burst absorbed by accumulated tokens)
+
+t=0.5s: request arrives.
+        elapsed=500ms → earned=0.5 tokens → bucket=[0.5]
+        0.5 < 1 → DENIED (partial token, not enough)
+
+t=1.0s: request arrives.
+        elapsed=500ms → earned=0.5 tokens → bucket=[1.0]
+        1.0 >= 1 → consume → bucket=[0.0] → ALLOWED
+
+t=6.0s: 5 seconds of silence.
+        elapsed=5000ms → earned=5.0 → bucket=[5.0] (capped at capacity)
+        User has full burst capacity again.
+
+KEY INVARIANT:
+  On every call (even DENIED): tokens = min(capacity, tokens + elapsed × rate).
+  If tokens >= 1.0: consume 1.0 token, allow. Else: deny.
+  lastRefillMs always updates — this is the lazy refill mechanism.
+```
+
+**Steps in plain English:**
+
+1. **Init** — create `Bucket` with `tokens = capacity`, `lastRefillMs = now`.
+2. **Refill** — compute `elapsed = now - lastRefill`, add `elapsed × ratePerMs` to tokens, cap at capacity, update `lastRefillMs`.
+3. **Consume** — if `tokens >= 1.0`, decrement by 1.0 and allow. Else deny.
+
+```java
+class TokenBucketRateLimiter {
+    private static class Bucket {
+        double tokens;
+        long lastRefillMs;
+        Bucket(int capacity, long now) {
+            this.tokens = capacity;
+            this.lastRefillMs = now;
+        }
+    }
+
+    private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
+    private final int capacity;
+    private final double ratePerMs;  // tokens per millisecond
+
+    // capacity = max burst size; refillRatePerSecond = steady-state throughput
+    public TokenBucketRateLimiter(int capacity, int refillRatePerSecond) {
+        this.capacity = capacity;
+        this.ratePerMs = (double) refillRatePerSecond / 1000.0;
+    }
+
+    public boolean allowRequest(String userId) {
+        long now = System.currentTimeMillis();
+        // Step 1 — init bucket at full capacity for new users
+        Bucket b = buckets.computeIfAbsent(userId,
+            k -> new Bucket(capacity, now));
+        synchronized (b) {
+            // Step 2 — lazy refill based on elapsed time
+            long elapsed = now - b.lastRefillMs;
+            b.tokens = Math.min(capacity, b.tokens + elapsed * ratePerMs);
+            b.lastRefillMs = now;
+            // Step 3 — consume one token if available
+            if (b.tokens >= 1.0) {
+                b.tokens -= 1.0;
+                return true;
+            }
+            return false;
+        }
+    }
+}
+```
+
+**Time:** O(1) | **Space:** O(users)
+
+---
+
+### Algorithm 4 — Sliding Window Counter (Approximation)
+
+**DS:** `Map<String, long[]>` where `entry = [prevCount, currCount, currWindowStartMs]`
+
+Keep two adjacent counters: previous window count and current window count. Estimate the sliding window count using how far through the current window we are. This gives O(1) space at the cost of ~5% approximation error.
+
+**Steps in plain English:**
+
+1. **Init** — create entry `[0, 0, now]` if absent.
+2. **Roll window** — if `now >= windowStart + windowMs`, advance: `prevCount = currCount`, reset `currCount = 0`, update `windowStart`.
+3. **Estimate** — `elapsed = now - windowStart`. `estimated = prevCount × (1 - elapsed/windowMs) + currCount`.
+4. **Check** — if `estimated < maxRequests`, increment `currCount` and allow. Else deny.
+
+```java
+class SlidingWindowCounterRateLimiter {
+    // entry = { prevWindowCount, currWindowCount, currWindowStartMs }
+    private final Map<String, long[]> counters = new ConcurrentHashMap<>();
+    private final int maxRequests;
+    private final long windowMs;
+
+    public SlidingWindowCounterRateLimiter(int maxRequests, long windowMs) {
+        this.maxRequests = maxRequests;
+        this.windowMs = windowMs;
+    }
+
+    public boolean allowRequest(String userId) {
+        long now = System.currentTimeMillis();
+        // Step 1 — init entry if absent
+        counters.putIfAbsent(userId, new long[]{ 0, 0, now });
+        long[] entry = counters.get(userId);
+        synchronized (entry) {
+            long prevCount = entry[0];
+            long currCount = entry[1];
+            long windowStart = entry[2];
+            // Step 2 — roll window if current window has expired
+            if (now >= windowStart + windowMs) {
+                long skipped = (now - windowStart) / windowMs;
+                // If exactly one window passed, prev = last curr; otherwise prev = 0 (too stale)
+                entry[0] = (skipped == 1) ? currCount : 0;
+                entry[1] = 0;
+                entry[2] = windowStart + skipped * windowMs;
+                prevCount = entry[0];
+                currCount = 0;
+                windowStart = entry[2];
+            }
+            // Step 3 — weighted estimate of requests in the last windowMs
+            double elapsed = now - windowStart;
+            double prevWeight = 1.0 - (elapsed / windowMs);
+            long estimated = (long)(prevCount * prevWeight) + currCount;
+            // Step 4 — admit if under limit
+            if (estimated < maxRequests) {
+                entry[1]++;
+                return true;
+            }
+            return false;
+        }
+    }
+}
+```
+
+**Time:** O(1) | **Space:** O(users) — O(1) per user vs O(maxRequests) for Sliding Log
+
+**Accuracy:** ~95% (< 5% error at window boundaries). Cloudflare uses this algorithm in production for its API rate limiting layer.
+
+---
+
+### Variants
+
+| Variant | Adaptation |
+| --- | --- |
+| Rate limit by IP instead of userId | Change map key to client IP — identical logic |
+| Rate limit by user + endpoint | Key = `userId + ":" + endpoint` — map handles the rest |
+| Distributed rate limiter (multi-node) | Replace in-memory Map with Redis; `INCR` + `EXPIRE` for Fixed Window; Lua script for atomicity |
+| Leaky bucket (smoothed output) | Queue incoming requests; drain at constant rate — smooths traffic, no burst; different from Token Bucket |
+| Allow a one-time burst above limit | Token Bucket with `capacity > 1-second refill amount` — idle users accumulate extra tokens |
+
+> 🧩 **Try these:**
+> - ✅ **Implement Fixed Window + Sliding Log from memory** — no code lookup, 20 min each; test with the boundary burst example above
+> - ✅ **Token Bucket from memory** — remember: refill on every call (including DENIED ones), cap at capacity
+> - 🟡 **Draw the boundary burst on paper** — explain in one sentence why Fixed Window allows 2× requests, then implement the Sliding Log fix
+> - 🔴 **Distributed Redis rate limiter** — needs Redis + Lua knowledge; reference only during DSA prep
+
+---
+
+## 🔗 Cross-References (Consistent Hashing, Task Scheduler)
+
+These two are also hybrid problems but **live in SystemDesignConcepts** (they have more system design depth than DSA depth). Rate Limiter is now fully covered in **Problem 5** above.
 
 | Problem | DS Core | System Add-on | Lives in |
 | --- | --- | --- | --- |
-| **Rate Limiter** | Deque (sliding window) or AtomicLong (token bucket) | Per-user keys, Redis Lua scripts, distributed counting | `SystemDesignConcepts/02-rate-limiting.md` (planned) |
 | **Consistent Hashing** | `TreeMap<Long, Node>` as circular ring, `ceilingKey()` for lookup | Virtual nodes, node add/remove, hotspot prevention | `SystemDesignConcepts/05-consistent-hashing.md` (planned) |
 | **Task Scheduler** | `PriorityQueue<Task>` sorted by nextRunTime | Delayed retry, recurring jobs, executor design | `SystemDesignConcepts/` (Phase 2 — not yet written) |
 
@@ -873,7 +1209,50 @@ public void reset(int playerId) {
 
 ---
 
-**Gotcha 7 — Thread-safety: get() on LRU is a write operation.**
+**Gotcha 7 — Rate Limiter: synchronizing on the whole method vs. per-user.**
+
+Using `synchronized` on the method makes every user's request block on every other user — a global bottleneck. Synchronize on the per-user entry instead.
+
+```java
+// ❌ wrong — global lock; all users block each other
+public synchronized boolean allowRequest(String userId) { ... }
+
+// ✅ right — lock per-user entry only
+public boolean allowRequest(String userId) {
+    long[] entry = windows.computeIfAbsent(userId, k -> new long[]{ 0, now });
+    synchronized (entry) {
+        // check and update entry
+    }
+}
+```
+
+---
+
+**Gotcha 8 — Token Bucket: forgetting to update lastRefillMs on DENIED requests.**
+
+If you skip the refill step when denying, the next allowed request will retroactively earn tokens for all the "quiet" time during the throttle period — causing a sudden burst to be allowed.
+
+```java
+// ❌ wrong — only refills on allowed requests
+if (b.tokens >= 1.0) {
+    b.tokens -= 1.0;
+    return true;
+}
+// skipped: b.lastRefillMs = now on denied path
+
+// ✅ right — always update lastRefillMs, even when denying
+b.tokens = Math.min(capacity, b.tokens + elapsed * ratePerMs);
+b.lastRefillMs = now;   // ← runs before the if-check, always
+if (b.tokens >= 1.0) {
+    b.tokens -= 1.0;
+    return true;
+}
+return false;
+```
+
+---
+
+**Gotcha 9 — Thread-safety: get() on LRU is a write operation.**
 
 Beginners try to use ReadWriteLock, giving get() the read lock. But get() calls moveToFront() which mutates the DLL. It needs the WRITE lock.
 
@@ -928,7 +1307,7 @@ These two problems force you to build the DLL from scratch. Until you can do thi
 
 8. 🔴 **LC 432 All O(1) Data Structure** — doubly-linked list of frequency buckets with O(1) getMaxKey/getMinKey; hard to design cold; read editorial
 9. 🔴 **Consistent Hashing** — see `SystemDesignConcepts/05-consistent-hashing.md` (planned)
-10. 🔴 **Rate Limiter** — see `SystemDesignConcepts/02-rate-limiting.md` (planned)
+10. ✅ **Rate Limiter** — implement all 4 algorithms (Fixed Window, Sliding Log, Token Bucket, Sliding Counter); explain the tradeoff table without notes
 
 ---
 
@@ -950,7 +1329,7 @@ These two problems force you to build the DLL from scratch. Until you can do thi
 - **LFU Cache:** 3 HashMaps + minFreq pointer | all O(1) | reset minFreq=1 on new key insert | LinkedHashSet preserves LRU tiebreak
 - **Hit Counter:** circular array (O(1) time/space) or Deque (O(N) space, handles variable windows)
 - **Leaderboard:** HashMap + TreeMap | addScore O(log N), top O(K log N) | score is the TreeMap key, not playerId
-- **Rate Limiter:** → see `SystemDesignConcepts/02-rate-limiting.md`
+- **Rate Limiter:** 4 algorithms — Fixed Window (simplest, boundary burst bug), Sliding Log (exact, O(maxReq) memory), Token Bucket ⭐ (real-world default, burst-friendly), Sliding Counter (O(1) approx) | thread safety = per-user `synchronized (entry)`, not global lock
 - **Gotcha 1 (LRU):** Node must store `key` — you need it for HashMap.remove() on eviction
 - **Gotcha 2 (LFU):** reset minFreq=1 on every new key insert, nowhere else
 - **Gotcha 3 (thread-safety):** LRU's get() is a write operation (calls moveToFront) — it needs the write lock
@@ -965,3 +1344,4 @@ These two problems force you to build the DLL from scratch. Until you can do thi
 | Date | Change |
 | --- | --- |
 | June 2026 | Created. Covers LRU, LFU, Hit Counter, Leaderboard at depth + cross-refs for Rate Limiter, Consistent Hashing, Task Scheduler. Triggered by WEX LRU+TTL interview miss. |
+| July 2026 | **Added Problem 5 — Rate Limiter.** Covers all 4 algorithms (Fixed Window, Sliding Log, Token Bucket, Sliding Counter) with full Java code, visuals, and tradeoff table. Moved Rate Limiter from cross-ref (planned external file) to first-class problem in this doc. Added Gotchas 7 and 8 for rate limiter-specific bugs. |

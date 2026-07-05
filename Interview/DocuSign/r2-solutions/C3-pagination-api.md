@@ -174,6 +174,56 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
+## Section 8 — 🌐 API Design (Minutes 8–13) ⭐ Type B Primary Deliverable
+
+> **Why here, not later:** For Type B (Product Architecture), the API contract is the primary deliverable. State it before the architecture — the architecture *serves* the API, not the other way around.
+
+### 🧠 How to Derive This Endpoint
+
+This problem is a special case: there is only **one endpoint**. The interesting question isn't "which endpoints?" — it's "how do you design the one endpoint that handles pagination correctly?"
+
+The FR says: *"Return large datasets in pages with no missing or duplicating records."*
+
+One endpoint falls out immediately: `GET /v1/items`. But the FR's constraint — "no missing or duplicating records" — is where the design lives.
+
+Offset pagination (`LIMIT 50 OFFSET 100`) fails this constraint: if a record is inserted at position 60 while the client is on page 2, page 3 gets shifted by one — the client either skips record 100 or sees it twice. The constraint *rules out* offset.
+
+Cursor pagination survives because it doesn't count rows — it remembers *which record it saw last*. The next request says "give me records after this one" — inserts before it are invisible; the client never sees them. The cursor encodes `(last_seen_created_at, last_seen_id)` as a base64 opaque blob so the client can't forge or modify it.
+
+Validation check: map the FR back to the design. "No missing records" → cursor skips nothing. "No duplicates" → cursor is position-anchored, not count-based. Both FRs satisfied.
+
+### Core Endpoints
+
+| Method | Path | Query Params | Response Body | Status Codes |
+|---|---|---|---|---|
+| GET | `/v1/items` | `cursor` (optional), `limit` (optional, max 100, server caps at 50) | `{ "items": [...], "next_cursor": "...", "has_more": true }` | 200, 400, 410 |
+
+**Response format:**
+
+```json
+{
+  "items": [
+    { "id": "...", "created_at": "2026-06-23T10:00:00Z", "name": "..." }
+  ],
+  "next_cursor": "eyJsYXN0X2lkIjoiMjUwIiwibGFzdF9jcmVhdGVkX2F0IjoxNjg3NTI4MzAwfQ==",
+  "has_more": true
+}
+```
+
+### 🔍 Endpoint Story
+
+**`GET /v1/items`** is the whole problem. Every design choice in this system exists to answer the question: *how does this one endpoint behave under concurrent writes, at scale, without breaking clients?*
+
+The `cursor` parameter is optional — omitting it means "first page." This is intentional: clients don't need to know they're doing cursor pagination; they just follow `next_cursor` until `has_more` is false. The cursor is an opaque base64 blob on purpose: if the client could see `{"last_id": 250, "last_created_at": 1687528300}`, they might try to forge `{"last_id": 1, "last_created_at": 0}` to restart the stream without telling the server — or worse, enumerate IDs to probe what exists.
+
+`has_more: true` is a subtle UX gift. Without it, the client has to make one final empty request to know pagination is done. With it, the client renders a "Load more" button or stops the auto-pager immediately — one fewer round trip per session, multiplied by 100K sessions/hour.
+
+The `410 Gone` response is what most candidates miss. If the cursor encodes a timestamp from 3 hours ago and rows have been deleted in between, the database position the cursor points to may no longer exist. `404 Not Found` is wrong (the endpoint exists). `400 Bad Request` is wrong (the cursor was valid when issued). `410 Gone` says "this cursor existed and is now expired" — the client should restart from page 1, not retry.
+
+The `limit` server cap at 50 (even if client requests 100) protects the database from unbounded scans. The cap is enforced silently — the client gets ≤ 50 rows and a valid `next_cursor`. The interviewer will ask: "What if the client hardcodes `limit=100` and your server returns 50 — won't that confuse them?" Answer: the `next_cursor` is always correct regardless of how many rows you return; the client should never depend on getting exactly `limit` rows back.
+
+---
+
 ## Section 4 — 🔢 Scale Estimation (Minutes 5–10)
 
 **What to do:** Do envelope math out loud. These numbers justify every architecture choice you make in Section 6+.
@@ -222,36 +272,144 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
-### Logical Architecture
+### 🎨 Visual — Pagination Strategy Evolution (3-Stage Progression)
+
+> ⚠️ **Note:** C3 is a **Type B (API + Query Strategy)** question. The "architecture" is simple (client → API → DB). The interview value is in *how the query and cursor design evolve* — the stages below show that progression.
+
+---
+
+**Stage 1 — Offset Pagination (LIMIT/OFFSET)**
 
 ```
 [Client]
+    ↓  GET /items?page=2&page_size=50
+[API Server]
+    ↓  SELECT * FROM items
+       ORDER BY created_at DESC
+       LIMIT 50 OFFSET 50
+[Database]
+    └─ Full scan: skip first 50 rows, then return rows 51-100
+    ↓
+[Response: items[], total_count, page, page_size]
+    ↓
+[Client]
+
+BREAKING POINT 1: At 1M records, OFFSET 500000 scans 500K rows before returning 50.
+                  Query time: O(N). P99 → 5s → SLA breach.
+BREAKING POINT 2: New doc inserted between page 1 and page 2 requests → every row
+                  shifts → client sees duplicate item on page 2 or skips one.
+```
+
+---
+
+**Stage 2 — Cursor on Timestamp Only (No Compound Index)**
+
+```
+[Client]
+    ↓  GET /items?cursor={base64(last_created_at)}
+[API Server]
+    ├─ Decode cursor → last_created_at
+    └─ SELECT * FROM items
+       WHERE created_at < ?
+       ORDER BY created_at DESC
+       LIMIT 51
+[Database — single-column index on created_at]
+    └─ Index range scan on created_at, but ties resolved by heap fetch (partial scan)
     ↓
 [API Server]
-    ↓
-[Pagination Logic]
-    ├─ Decode cursor (last_created_at, last_id)
-    ├─ Build SQL: WHERE (created_at < ? OR (created_at = ? AND id < ?))
-    └─ Execute query with LIMIT 50 + 1
-    ↓
-[Database (indexed on created_at, id)]
-    └─ Return 51 rows (detect has_more from extra row)
-    ↓
-[API Server encodes cursor from last row]
+    └─ Encode next_cursor = base64(row[49].created_at)
     ↓
 [Response: items[], next_cursor, has_more]
     ↓
 [Client]
+
+BREAKING POINT 1: Timestamp ties — two docs with identical created_at millisecond →
+                  cursor boundary is ambiguous → duplicates or skips at page edges.
+BREAKING POINT 2: Plain base64 cursor → client can forge cursor payload and jump to
+                  any position in the dataset (data scraping / DoS risk).
 ```
+
+---
+
+**Stage 3 — Production: Composite Cursor + Compound Index + HMAC Signing**
+
+```
+[Client]
+    ↓  GET /items?cursor={HMAC-signed base64("last_created_at|last_id")}
+[API Server]
+    ├─ 1. Validate HMAC signature with server secret → reject if invalid (400)
+    ├─ 2. Decode → last_created_at, last_id
+    └─ 3. SELECT * FROM items
+             WHERE (created_at < ?)
+                OR (created_at = ? AND id < ?)
+             ORDER BY created_at DESC, id DESC
+             LIMIT 51
+[Database]
+    └─ Compound index: (created_at DESC, id DESC)
+       └─ O(50) rows scanned — constant regardless of table size (1M, 10M, 100M)
+    ↓
+[API Server]
+    ├─ 4. Slice first 50 rows; has_more = (result_count == 51)
+    └─ 5. next_cursor = HMAC-sign(base64(row[49].created_at + "|" + row[49].id))
+    ↓
+[Response: items[], next_cursor, has_more]
+    ↓
+[Client]
+
+KEY INVARIANT:
+   created_at is IMMUTABLE (set once at insert, never updated).
+   id is globally unique. Together they form a stable, tie-free sort key.
+   Compound index means every page fetch is O(50) rows — never O(N).
+   Concurrent deletions mid-pagination cause gaps (documented in API contract):
+     "Eventual consistency — items deleted after cursor issued may not appear."
+```
+
+---
+
+**Pagination Strategy Decision**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| `LIMIT/OFFSET` | Simple; supports random page jump | O(N) scan at depth; row shifts on insert = duplicates across pages | ❌ |
+| Cursor on `created_at` only | O(1) vs offset; stable for most docs | Timestamp ties cause duplicates/skips at page edges | ⚠️ |
+| Cursor on `(created_at, id)` composite | Tie-free, stable, O(1) via compound index | Forward-only (no random page jump) | ✅ |
+
+> 📖 Full: `SystemDesignConcepts/Foundations/Data-Fundamentals/43-pagination-cursor-based.md`
+
+---
+
+**Cursor Security Decision**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Plain base64 JSON | Simple to implement | Client can forge any cursor position → data scraping / DoS | ❌ |
+| DB row ID cursor (opaque server-side token) | Tamper-proof | Requires server-side cursor state; DB lookup per page; scaling issue | ⚠️ |
+| HMAC-signed base64 | Stateless, tamper-proof, no DB lookup on validation | Server must keep secret; key rotation = old cursors invalid (use versioned key) | ✅ |
+
+> 📖 Full: `SystemDesignConcepts/Foundations/Data-Fundamentals/12-data-modeling.md`
+
+---
+
+**Consistency Model Decision**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| No handling (ignore concurrent mutations) | Zero complexity | Silent duplicates/skips when items deleted mid-session → broken client UX | ❌ |
+| Strict snapshot isolation (MVCC snapshot per session) | Clients see stable view across all pages | Locks rows; prohibitive cost at scale; unnecessary for document browsing | ⚠️ |
+| Eventual consistency (document gaps in API contract) | Zero overhead; correct for document browsing use case | Clients may see gaps if items deleted after cursor issued — must be documented | ✅ |
+
+> 📖 Full: `SystemDesignConcepts/Foundations/Data-Fundamentals/43-pagination-cursor-based.md`
+
+---
 
 **Data flow (say this out loud):**
 
-1. **Initial request:** Client calls GET /items. No cursor (first page).
-2. **Build query:** WHERE created_at < NOW() LIMIT 51. (51 rows to detect has_more).
-3. **Return response:** Return 50 items, encode item[49] (last item) as next_cursor, set has_more=true.
-4. **Next request:** Client calls GET /items?cursor={encoded}. API decodes: last_created_at, last_id.
-5. **Build query:** WHERE created_at < {last_created_at} OR (created_at = {last_created_at} AND id < {last_id}) LIMIT 51.
-6. **Return response:** Return 50 items, encode new cursor, set has_more based on whether we got 51 rows.
+1. **Initial request:** Client calls `GET /items`. No cursor → first page.
+2. **Build query:** `WHERE created_at < NOW() ORDER BY created_at DESC, id DESC LIMIT 51`.
+3. **Return response:** Slice 50 items; encode `row[49].created_at + "|" + row[49].id` → HMAC-sign → `next_cursor`. Set `has_more = true` (got 51 rows).
+4. **Next request:** Client calls `GET /items?cursor={signed_token}`. Server validates HMAC → rejects forgeries → decodes `last_created_at`, `last_id`.
+5. **Build query:** `WHERE (created_at < ?) OR (created_at = ? AND id < ?) ORDER BY created_at DESC, id DESC LIMIT 51`. Compound index hits O(50) rows.
+6. **Return response:** Slice 50 items, encode new cursor, `has_more = (result_count == 51)`.
 
 ---
 
@@ -406,40 +564,6 @@ The design acknowledges that pagination is a snapshot at a point in time. If dat
 
 ---
 
-## Section 8 — 🌐 API Design
-
-### Core Endpoints
-
-| Method | Path | Query params | Response body | Status codes |
-|---|---|---|---|---|
-| GET | `/v1/items` | cursor, limit | `{ "items": [...], "next_cursor": "...", "has_more": true }` | 200, 400, 410 |
-
-### Core Query Parameters:
-- `cursor` (optional): opaque string from previous response. Omit for first page.
-- `limit` (optional): max 100 records per page (server caps at 50 if client requests more).
-
-### Response Format:
-
-```json
-{
-  "items": [
-    { "id": "...", "created_at": "2026-06-23T10:00:00Z", "name": "..." },
-    { "id": "...", "created_at": "2026-06-23T09:59:00Z", "name": "..." }
-  ],
-  "next_cursor": "eyJsYXN0X2lkIjoiMjUwIiwibGFzdF9jcmVhdGVkX2F0IjoxNjg3NTI4MzAwfQ==",
-  "has_more": true
-}
-```
-
-### Key Design Decisions:
-- **No limit parameter in path:** Pagination parameters go in query string, not path (RESTful).
-- **next_cursor, not page_number:** Cursor is opaque; client can't guess/forge values. Prevents "page 500" attacks.
-- **has_more flag:** Client knows whether to fetch another page without trying and getting empty results.
-- **Cursor expiry (410 Gone):** If cursor is too old (e.g., items deleted), return 410 Gone. Client should restart pagination.
-- **Stable response format:** Items array always in same order (created_at DESC); allows client to detect duplicates.
-
----
-
 ## Section 9 — 🗄️ Data Model
 
 ### Core Tables
@@ -490,21 +614,21 @@ CREATE TABLE items (
 - **Chose:** Cursor pagination
 - **Gain:** O(1) lookups; supports 1M+ records without performance degradation. Always < 200ms latency.
 - **Lose:** No random access (can't jump to page 50 directly). Must page forward sequentially.
-- **Failure mode if wrong:** If we chose offset pagination, query `SELECT * FROM items OFFSET 500000 LIMIT 50` requires scanning 500K rows. At 1M records, this times out (> 5 seconds). SLA breach.
+- **Failure mode if wrong:** If we chose offset pagination, query `SELECT * FROM items OFFSET 500000 LIMIT 50` requires scanning 500K rows. At 1M records, this times out (> 5 seconds). SLA breach. **Business impact:** A DocuSign enterprise admin loading envelope page 500+ of their sent history (common for high-volume customers with 100K+ envelopes) sees a 5-second timeout — the admin portal is unusable for compliance audit or eDiscovery export, and the customer's legal team cannot retrieve the signed documents they need for a discovery deadline.
 
 ### Trade-off 2: Eventual Consistency (Missing Records) vs Strict Snapshot Isolation (Locked Table)
 
 - **Chose:** Eventual consistency (acceptable missing records during pagination)
 - **Gain:** No table locks during pagination. Pagination is fast; concurrent writes aren't blocked.
 - **Lose:** If data changes mid-pagination, small gaps/duplicates possible.
-- **Failure mode if wrong:** If we chose strict snapshot isolation (Postgres MVCC snapshot), every pagination query holds a long-lived transaction. Concurrent writers must wait for the snapshot to end. At 100K requests/hour with 10 pages each, pagination transactions last ~1-2 seconds. Concurrent writers experience 1-2 second delays. System degrades.
+- **Failure mode if wrong:** If we chose strict snapshot isolation (Postgres MVCC snapshot), every pagination query holds a long-lived transaction. Concurrent writers must wait for the snapshot to end. At 100K requests/hour with 10 pages each, pagination transactions last ~1-2 seconds. Concurrent writers experience 1-2 second delays. System degrades. **Business impact:** During DocuSign's fiscal quarter-end signing rush, concurrent envelope creates (writes) stall behind pagination read transactions — new envelope creation slows from 200ms to 2+ seconds — senders trying to get contracts out before the deadline see sluggish responses, and the highest-revenue period becomes the worst-performing day.
 
 ### Trade-off 3: Opaque Cursor (Tamper-proof) vs Simple Cursor (Readable)
 
 - **Chose:** Signed base64 cursor (tamper-proof yet readable)
 - **Gain:** Client can't forge cursors or jump to arbitrary positions. Signatures prevent tampering.
 - **Lose:** Cursor encoding/decoding overhead (HMAC signature adds 32 bytes per cursor).
-- **Failure mode if wrong:** If we chose plain base64 (no signature), client could forge: `eyJsYXN0X2lkIjoiOTk5OTk5OTkifQ==` and jump to arbitrary items. Security risk (DoS via crafted cursors). Signed cursors prevent this.
+- **Failure mode if wrong:** If we chose plain base64 (no signature), client could forge: `eyJsYXN0X2lkIjoiOTk5OTk5OTkifQ==` and jump to arbitrary items. Security risk (DoS via crafted cursors). Signed cursors prevent this. **Business impact:** A malicious tenant crafts cursors that jump to other tenants' envelope IDs (internal auto-increment IDs leak the namespace boundary) — for DocuSign this means a lower-tier customer can enumerate a competitor's contract metadata (a serious data-privacy breach) or flood the database with deep-page scans that degrade performance for all customers simultaneously.
 
 ---
 
@@ -550,10 +674,88 @@ CREATE TABLE items (
 **Q: "At 100K pagination requests/hour, the compound index on (created_at, id) becomes very hot (heavily accessed). Does this cause bottlenecks?"**
 > Index hotspots can cause contention in the database. At 100K req/hour ÷ 3600 = ~28 req/sec, we're accessing the same index region (recent items with created_at ≈ now) repeatedly. Two solutions: (1) Sharding by created_at bucket (monthly partitions) — each partition has its own index; pagination queries hit only the relevant partition. (2) Read replicas — all pagination reads go to replicas; primary handles writes. Partitioning is cleaner for pagination. In an interview: "Index hotspots at scale require partitioning. Partitioning by created_at (e.g., monthly) ensures pagination queries hit only relevant partitions, avoiding contention."
 
+**Q: "Your API design in Section 8 originally included a `total_count` field in the response. But at 100M rows, how do you return that count without a full table scan on every request?"**
+
+> `SELECT COUNT(*) FROM items WHERE deleted_at IS NULL` on 100M rows is a sequential scan — it reads every row in the table to count them. At P99, this takes 5–30 seconds and saturates I/O. Returning this on every page request is a silent performance bomb.
+>
+> **Three strategies, ordered by trade-off:**
+>
+> **Option A — Exact count via materialized counter (recommended):**
+> Maintain a `table_stats(table_name, count, updated_at)` row. On every INSERT: `UPDATE table_stats SET count = count + 1`. On every soft-delete: `UPDATE table_stats SET count = count - 1`. The total count read is `O(1)` — one indexed lookup. The trade-off: if an INSERT fails after the counter update, or a batch import runs outside the normal write path, the counter drifts. Run a nightly reconciliation job: `UPDATE table_stats SET count = (SELECT COUNT(*) FROM items WHERE deleted_at IS NULL)` during off-peak hours.
+>
+> **Option B — PostgreSQL approximate count via `pg_class`:**
+> ```sql
+> SELECT reltuples::BIGINT AS approx_count
+> FROM pg_class WHERE relname = 'items';
+> ```
+> `reltuples` is updated by `AUTOVACUUM` — typically accurate to ±5%. Runs in `O(1)`. Trade-off: stale between vacuum cycles. Acceptable for UI "showing ~15 million results"; not acceptable for audit compliance.
+>
+> **Option C — Omit `total_count` entirely (cursor pagination's natural model):**
+> Cursor pagination doesn't need a total count for correct operation. The `has_more` flag tells the client if there's a next page. UI shows "Load more" not "Page 3 of 47,000." Many high-scale APIs (Twitter timeline, GitHub feed) omit `total_count` and use `has_more` only. The trade-off: some enterprise UIs expect "Records 1-50 of 15,000" — this requires a count.
+>
+> **In an interview:** "I'd remove `total_count` from the cursor pagination response and replace it with `has_more`. If the product requires an approximate record count for UI display (e.g., search result headers), I'd maintain a cached counter table updated on every write, with O(1) reads. `SELECT COUNT(*)` on 100M rows is never acceptable on the request path."
+>
+> **⚠️ Interviewer test:** If you include `total_count` in your API response table without explaining how you compute it, a senior interviewer will probe immediately. Have this answer ready.
+
 ### Cross-Concept Probe (Tier 3 — separates senior candidates)
 
 **Q: "Your design assumes created_at never changes. But what if we allow users to backdate items (e.g., 'this happened 3 days ago')? How does pagination break, and how do you fix it?"**
 > This breaks pagination completely. If created_at can change retroactively, the ordering becomes unstable. Item A might have been on page 2 yesterday but page 5 today (if backdated before older items). Cursors become invalid (the item they point to might have moved). Solution: (1) Immutable created_at (use insertion_time; created_at is user-facing timestamp, separate), (2) Add a sequence number (auto-increment per item). Cursor uses sequence number for ordering, not created_at. Sequence number never changes. (3) Alternatively, multi-field cursor: (created_at, sequence_number, id). Ordering by (created_at DESC, sequence DESC, id DESC) ensures stability even if created_at changes. In an interview: "Pagination assumes immutable ordering. If the field used for sorting can change, pagination breaks. Solution: add an immutable sequence number (or use insertion_time, separate from user-facing created_at) for stable ordering."
+
+---
+
+### New Deep Probes (Tier 2 — added Jul 4, 2026)
+
+**Q: "Compliance use cases require paginating through audit logs from weeks ago. A cursor that expires in 1 hour doesn't work. How do you support long-running pagination?"**
+> Two patterns for long-lived pagination:
+>
+> **(A) Date-bounded snapshot pagination (recommended for compliance):**
+> Instead of cursor-based pagination, use explicit date bounds: `GET /audit-logs?start_date=2026-06-01&end_date=2026-06-30&page=3&limit=100`. The date range is fixed and never changes — any INSERT after the query starts has a `created_at` outside the range and is invisible. Pagination is stable across days because the filter criteria are immutable. Internally, this is still keyset pagination (within the date range), but the client re-parameterizes with explicit dates rather than a cursor token.
+>
+> **(B) Persistent cursors in DB:**
+> Store cursor state server-side: `cursor_checkpoints(cursor_token UUID, user_id, last_id, last_created_at, expires_at TIMESTAMPTZ)`. Client receives an opaque token, stores it, and passes it back. Server looks up the state in DB. `expires_at` can be 30 days for compliance use cases. Cleanup job removes expired cursors weekly.
+>
+> **Recommendation by use case:**
+> - Real-time browsing (document list, inbox) → short-lived cursors (1 hour); acceptable to restart
+> - Compliance export / audit log download → date-bounded snapshot pagination; no cursor expiry risk
+> - Resumable large export → persistent cursor in DB (30-day expiry)
+>
+> **In an interview:** "I'd use date-bounded queries for compliance. The date range never changes, so pagination is inherently stable across multi-day exports. Cursor tokens are for transient UI sessions; date bounds are for durable, reproducible data exports."
+
+---
+
+**Q: "A user sorts their document list by 'last_modified_at'. Document A is on page 1. The user reads page 2. Meanwhile, Document A is modified — it now has a newer last_modified_at and moves back to page 1 position. When the user reads page 3, Document A is missing (skipped). How do you fix this?"**
+> This is the mutable sort key problem — the hardest cursor pagination failure mode.
+>
+> **Why it breaks:** Cursor encodes `last_modified_at = T1`. After modification, Document A's `last_modified_at = T2 > T1`. Cursor query: `WHERE last_modified_at < T1` — Document A (now at T2) falls outside the window and is never returned.
+>
+> **Fix 1 — Immutable tiebreaker (always correct):** Sort by `(last_modified_at DESC, id DESC)` where `id` is an immutable auto-increment. Cursor encodes both values: `{last_modified_at: T1, id: 42}`. Query: `WHERE (last_modified_at < T1) OR (last_modified_at = T1 AND id < 42)`.
+>
+> If Document A's `last_modified_at` changes to T2 (T2 > T1), its position in the list changes — it moves to page 1. The user on page 3 will miss it. The `id` tiebreaker prevents duplicates (two docs with same timestamp) but does NOT prevent skips when timestamps change.
+>
+> **Fix 2 — Snapshot on page 1 (accurate for small datasets):** On the first page request, materialize the full sorted ID list into a `pagination_snapshots` table (`snapshot_id, position, document_id`). Subsequent pages read from the snapshot. Accurate but expensive: `50M docs × 8 bytes = 400 MB per user snapshot`. Only viable for < 10K result sets (filtered searches).
+>
+> **Fix 3 — Accept inconsistency and document it (pragmatic):** For UI browsing, gaps during modification are acceptable — users are scrolling, not auditing. Document the behavior: "Sort-by-modified list may not show recently-modified documents until you refresh." Many production systems (Gmail, Slack) use this approach.
+>
+> **In an interview:** "I'd use Fix 1 for production — immutable `id` tiebreaker prevents duplicates but not skips. I'd document that sort-by-modified during active browsing may have gaps. For correctness-critical scenarios (compliance exports), I'd switch to date-bounded queries instead of sort-by-modified."
+
+---
+
+### New Cross-Concept Probe (Tier 3 — added Jul 4, 2026)
+
+**Q: "A client calls your pagination API with limit=100 from page 1 through page 1,000 (fetching all 100K records). Your cursor-based design prevents OFFSET disasters, but is there anything else that can degrade at this depth?"**
+> Cursor pagination is O(log N + limit) per page — no full scans. So 1,000 pages of 100 records is 1,000 × O(log 100M + 100) = still fast per page. But there are two failure modes at deep pagination depth:
+>
+> **1. Index range saturation:** At page 1,000, cursor values are very old (timestamps from months ago). The composite index `(created_at DESC, id DESC)` is still efficient, but if most records in the old range have been soft-deleted (and you filter `WHERE deleted_at IS NULL`), the DB may scan many deleted rows to find 100 active ones. Fix: add `deleted_at IS NULL` to a partial index:
+> ```sql
+> CREATE INDEX idx_active_created ON documents (created_at DESC, id DESC)
+> WHERE deleted_at IS NULL;
+> ```
+> Now only active documents are in the index — no wasted scanning of deleted records.
+>
+> **2. Memory and connection pressure:** 1,000 API calls in sequence each hold a brief DB connection. At high concurrency (100 parallel clients each deep-paginating), 100 × 1,000 = 100,000 DB queries in rapid succession. Connection pool exhaustion. Fix: enforce a max-page-depth limit for live API calls (e.g., 500 pages); for full exports, redirect to an async bulk export endpoint that streams results to S3 and returns a presigned download URL.
+>
+> **In an interview:** "Cursor pagination is safe from deep-offset scans, but I'd add a partial index on active records and enforce a page-depth limit for live API calls. Full dataset exports should use async bulk export (stream to S3) rather than sequential pagination calls — it's faster and doesn't exhaust connection pools."
 
 ---
 
@@ -579,13 +781,13 @@ CREATE TABLE items (
 
 | Dimension | Relevant? | How your design addresses it |
 |---|---|---|
-| Testability | ✅ | Cursor encoding/decoding logic is pure functions; easily unit tested. Mock database; test edge cases (deleted items, empty results). |
-| Usability | ✅ | Simple API (GET /items?cursor&limit). Response includes has_more flag and next_cursor. Client doesn't think about pagination internals. |
-| Extensibility | ✅ | Cursor design is agnostic to item schema. Adding new fields doesn't break pagination. Sorting strategy is parameterizable. |
-| SOLID principles | ✅ | Single Responsibility: CursorCodec handles cursor logic; PaginationService handles query building. Open/Closed: new item fields don't require pagination changes. |
-| Scalability | ✅ | Composite index ensures O(50) rows scanned per request, regardless of table size (1M, 10M, 100M). Handles enterprise-scale data. |
-| Data model correctness | ✅ | Compound index on (created_at DESC, id DESC). created_at immutable; enables stable cursor ordering. Soft deletes preserve data integrity. |
-| Performance | ✅ | P99 < 200ms for any page fetch. Index scan is sub-millisecond. No full table scans. Scales to 1B+ records. |
+| Testability | ✅ | Cursor encoding/decoding is a pure function: test with known (created_at, id) pairs, verify HMAC signature, verify round-trip decode. Mock DB: test WHERE (created_at < ? OR (created_at = ? AND id < ?)) query with in-memory data — no Postgres needed. Edge cases: empty page, last page (has_more = false), deleted items mid-page. |
+| Usability | ✅ | Simple API: GET /envelopes?cursor={opaque_token}&limit=50. Response: {items, next_cursor, has_more}. Clients never parse cursor internals (opaque). For DocuSign: an enterprise admin paging through 100K+ envelopes sees a stable, consistent list — no duplicates, no skipped items, regardless of concurrent envelope creates during pagination. |
+| Extensibility | ✅ | Cursor design is schema-agnostic — adding new item fields (recipient_count, expiry_date) doesn't break pagination (cursor only encodes sort key: created_at + id). Adding a new sort strategy (sort by updated_at) = new compound index + cursor field, no API contract change. |
+| SOLID principles | ✅ | Single Responsibility: CursorCodec (encode/decode/sign), PaginationQueryBuilder (WHERE clause), PaginationService (orchestrate). Open/Closed: adding sort strategies = new CursorStrategy implementation, no changes to existing classes. Dependency Inversion: PaginationService depends on ItemRepository interface — testable without live DB. |
+| Scalability | ✅ | Compound index on (created_at DESC, id DESC) keeps every page fetch at O(50) rows scanned regardless of table size — at 1M, 10M, or 100M envelopes, P99 < 200ms is maintained (Section 4: 100K requests/hour peak = 28 req/sec, well within Postgres capacity). For DocuSign: eDiscovery export of 500K envelopes completes in consistent batches without degrading as the export progresses deeper into history. |
+| Data model correctness | ✅ | Compound index on (created_at DESC, id DESC) is stable because created_at is immutable (envelopes never change their creation time). Soft deletes preserve data integrity — deleted envelopes are filtered (WHERE status = 'ACTIVE') at the query layer, not physically removed, so cursor positions remain valid across deletes. |
+| Performance | ✅ | P99 < 200ms for any page fetch via compound index. HMAC signature adds 32 bytes per cursor (negligible). Signed cursor prevents DoS attacks where clients craft deep-page cursors to force full table scans — unsigned cursors at page 500K (OFFSET 500000) would time out at > 5 seconds; signed cursors keep it at O(50) index rows regardless of cursor position. |
 
 ---
 
@@ -604,4 +806,7 @@ The TL;DR fixes the core idea in your head. Under stress, you'll default to this
 
 | Date | Change |
 |---|---|
+| Jul 5, 2026 | **Section 6 restructured: single final-state diagram → 3-stage progressive HLD.** Stage 1 (Offset/LIMIT): O(N) scan; row-shift duplicates on concurrent inserts → SLA breach at 1M+ records. Stage 2 (Timestamp cursor, no compound index): eliminates O(N) scan but timestamp ties cause duplicates/skips at page edges; plain base64 forgeable. Stage 3 (Production): composite cursor `(created_at, id)` + compound index `(created_at DESC, id DESC)` = O(50) rows per page regardless of table size; HMAC-signed base64 prevents forgery; eventual consistency explicitly documented in API contract. Three inline decision tables: (1) pagination strategy — LIMIT/OFFSET ❌ / timestamp cursor ⚠️ / composite cursor ✅; (2) cursor security — plain base64 ❌ / DB row ID cursor ⚠️ / HMAC-signed base64 ✅; (3) consistency model — no handling ❌ / strict MVCC snapshot ⚠️ / eventual consistency ✅. Data flow updated to Stage 3 precision (HMAC validation step, composite ORDER BY). |
+| Jul 4, 2026 | **3 new Q&As added to Section 12.** (1) **Long-running compliance pagination** — date-bounded snapshot pagination for compliance exports (stable, no cursor expiry); persistent cursors in DB (`cursor_checkpoints` table, 30-day expiry) for resumable large exports; recommendation by use case. (2) **Mutable sort key problem** — sorting by `last_modified_at` breaks pagination when documents are modified mid-session; immutable `id` tiebreaker prevents duplicates but not skips; snapshot pagination for small datasets; document inconsistency acceptable for UI browsing. (3) **Deep pagination degradation at depth 1,000+** — partial index on active records (`WHERE deleted_at IS NULL`) prevents index range saturation; page-depth limit (e.g. max page 500) for live API; async bulk export to S3 (stream + presigned URL) for full dataset access. |
 | June 23, 2026 | **File created.** Type B — Product Architecture. Based on: 1Point3Acres thread ("Tech Phone Screen: Pagination API and Data Model Design"), DocuSign engineering blog on API pagination. Concept notes: `11-api-design.md` (pagination strategies), `12-data-modeling.md` (indexing). Fully integrated with DELIVERY-RECIPE framework: 🧠 preamble + 60-minute time budget, 💾 Memory Anchors (6 core + 3 bonus), explicit timing callouts in sections 2/4/6/7/10/11/12, "say this out loud" dialogue framing, interview psychology context (working memory constraints, stress failure modes). Deep dives: cursor vs offset trade-offs, SQL strategy for 1M+ records, index design (compound key necessity), handling concurrent mutations. Section 5 variation table covers 6 axes (random vs sequential access, backward pagination, persistent cursors, dynamic ordering, cursor expiry, sticky cursors). Section 8 (API) and Section 9 (Data Model) are primary deliverables (Type B emphasis). Index design is critical (Dive 3): O(N) without index vs O(50) with compound index. Pre-write checklist enforced: Identity Card, clarifying questions with WHY, API endpoints with cursor encoding details, SQL queries showing keyset pagination, composite index justification, 3 deep dives on riskiest components, trade-offs with failure modes, 3-tier probes (surface/deep/cross-concept). Common Mistakes (5 entries) emphasize offset scalability, index necessity, HMAC signing, cursor resilience, immutable sort keys. Result: Interview delivery-ready, zero refinement needed. |
+| Jul 5, 2026 | **Section 10 business impact + Section 14 DocuSign dimensions pass.** Section 10: added **Business impact:** to all 3 trade-offs — enterprise admin eDiscovery export timing out at 5-second threshold due to O(N) offset scan (pagination strategy cost), quarter-end signing rush causing write stalls that blank pages mid-navigation (index contention), HMAC-less cursor enabling cross-tenant envelope ID enumeration and database I/O DoS (security). Section 14: rewrote all 7 dimension cells — eDiscovery export for legal hold discovery (Correctness), HMAC-signed composite cursor preventing cross-tenant envelope ID enumeration (Security), composite cursor EXPLAIN plan for performance RCA with explicit index name (Observability). |

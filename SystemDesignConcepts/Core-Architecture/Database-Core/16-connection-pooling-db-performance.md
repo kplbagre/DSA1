@@ -253,7 +253,7 @@ If you're on AWS RDS or Aurora, **RDS Proxy** is the managed equivalent of PgBou
 - **Razorpay** (payment processing): 100K+ concurrent requests during checkout bursts. Connection pool sized to match peak card-processing throughput. Oversizing wastes memory; undersizing causes checkout timeout failures.
 - **Swiggy** (food delivery): Connection saturation during lunch rush (11:30 AM–1:30 PM) — app load spikes 5x. Pool tuned for 99th percentile traffic, not average.
 - **BookMyShow** (ticketing): Flash sale (Diwali movie release): 50K users hit "Buy" simultaneously. Connection pool must absorb the spike. Pool metrics exposed in Datadog; alerts fire if queue grows above 80%.
-- **Amazon Web Services** (RDS): Publishes "Maximum connections" as a service limit based on instance type (db.t2.micro = 20 max; db.r5.4xlarge = 16K max). If your pool size exceeds this, all connection attempts fail.
+- **Amazon Web Services** (RDS): Publishes "Maximum connections" as a service limit based on instance type — varies by instance class (small instances allow ~60–90 connections; large instances allow thousands). AWS publishes exact limits per instance type. If your pool size exceeds the limit, all connection attempts fail.
 
 ---
 
@@ -347,3 +347,4 @@ If you're on AWS RDS or Aurora, **RDS Proxy** is the managed equivalent of PgBou
 |---|---|
 | June 25, 2026 | Created as Concept 16. Added mental model (valet lot), HikariCP code example, sizing formula. |
 | July 1, 2026 | Added PgBouncer section (session/transaction/statement pooling modes, ASCII multiplexer diagram), RDS Proxy comparison table, and 2 new interview Q&As. Updated TL;DR. |
+| Jul 3, 2026 | **Number accuracy fix.** RDS connection limit example: replaced specific instance-class numbers (`db.t2.micro = 20 max; db.r5.4xlarge = 16K max`) with accurate description — small instances allow ~60–90 connections, large instances allow thousands; defer exact limits to AWS docs. |

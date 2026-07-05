@@ -6,6 +6,27 @@
 
 ---
 
+## 🎯 What Is This System?
+
+**In plain English:** A document storage service accepts file uploads (PDFs, contracts, images, any binary), stores them durably with versioning and access control, and retrieves them on demand — with encryption at rest, compliance-friendly retention policies, and audit logging of every access.
+
+**Real-world examples:**
+
+| System / Company | What they built |
+|---|---|
+| **Google Drive** | 1B+ users; versioned file storage with real-time collaboration |
+| **Dropbox** | Consumer and enterprise file sync + cloud storage |
+| **Box** | Enterprise content management with granular permission controls |
+| **AWS S3** | The infrastructure most of the above are built on |
+| **SharePoint / OneDrive** | Microsoft's enterprise document management, integrated with Office 365 |
+| **DocuSign Envelope storage** | After signing completes, the sealed PDF lives here — 7-year retention |
+
+**Core user journey:** User uploads a 5MB signed contract → gets a stable, permanent URL → can retrieve version 1 (original) and version 2 (countersigned) at any time → only authorized team members can access it → document is retained for 7 years to satisfy SOC 2 and GDPR compliance requirements.
+
+**Why it's hard to build at scale:** Binary blobs cannot live in a relational DB — they go in object storage (S3), while only metadata lives in Postgres; access control must be per-document, not just per-folder; versioning must be immutable (you cannot alter a signed legal document); and compliance requires that you can prove nobody accessed a document except authorized parties.
+
+---
+
 ## Section 0 — Question Identity Card
 
 | | |
@@ -104,6 +125,50 @@ Then pivot to Section 2 (clarifying questions).
 
 ---
 
+## Section 8 — 🌐 API Design (Minutes 8–13) ⭐ Type B Primary Deliverable
+
+> **Why here, not later:** For Type B (Product Architecture), the API contract is the primary deliverable. Naming the nouns in Section 3.5 (Document, DocumentVersion, LegalHold, AuditLog) directly unlocks the URL paths below.
+
+### 🧠 How to Derive These Endpoints
+
+Five FRs, five endpoints — but the *how* of each one is where the interview happens.
+
+"Users upload documents" → CREATE → resource is a document → `POST /v1/documents` with multipart body. The FR says documents can be large (contracts, signed PDFs) → you can't send a 500MB file as a JSON body. Two options: multipart upload inline, or return a pre-signed S3 upload URL and let the client PUT directly to S3. The latter keeps your service stateless. Either is defensible — say which and why.
+
+"Users retrieve documents" → READ → but what does "retrieve" mean for a binary file? You don't serve bytes through your API server — that would turn your API tier into a bandwidth-burning blob proxy. The correct endpoint is `GET /v1/documents/{id}/download` which returns a `302 Redirect` to a pre-signed S3 URL (15-minute expiry). Client talks to S3 directly; your service never touches the bytes. The `/download` path makes the intent explicit — `GET /v1/documents/{id}` would return metadata, not the file.
+
+"Track all edits / versioning" → `GET /v1/documents/{id}/versions`. It's a sub-resource of the document. Each version is an immutable record. The endpoint returns the ordered list — the caller decides which version to download.
+
+"Legal compliance — audit every access" → `GET /v1/documents/{id}/audit`. This endpoint exists because someone will eventually ask in court "who accessed this document?" The audit log is append-only; this endpoint is read-only. The fact that it exists as a first-class endpoint (not buried in a generic search API) signals that you take compliance seriously.
+
+"Soft delete with legal hold blocking" → `DELETE /v1/documents/{id}`. The response code story: `200` with body `{status: "DELETED"}` when successful. `423 Locked` when a legal hold is active — `423` is the right code (not `403`). `403` means you don't have permission; `423` means you have permission but the resource is locked. Most candidates return `400` for everything and collapse the signal.
+
+Validation check: every FR maps to an endpoint. The "compliance → 7-year retention" FR has no endpoint — retention is enforced by the storage layer (S3 lifecycle policy), not a REST call. Correct to have no endpoint.
+
+### Core Endpoints
+
+| Method | Path | Auth | Request | Response | Status Codes |
+|---|---|---|---|---|---|
+| POST | `/v1/documents` | JWT Bearer | `{title, file (multipart), type}` | `{document_id, version: 1, s3_key, status}` | 201, 400, 409 |
+| GET | `/v1/documents/{id}/download` | JWT Bearer | — | `302` redirect to pre-signed S3 URL | 302, 403, 404 |
+| GET | `/v1/documents/{id}/versions` | JWT Bearer | — | `{versions: [{version, created_at, created_by, size}], current_version}` | 200, 403, 404 |
+| DELETE | `/v1/documents/{id}` | JWT Bearer | — | `{document_id, status: "DELETED"}` | 200, 403, 404, 423 |
+| GET | `/v1/documents/{id}/audit` | JWT Bearer | — | `{audit_logs: [{action, timestamp, user_id, reason}]}` | 200, 403, 404 |
+
+### 🔍 Endpoint Stories
+
+**`POST /v1/documents`** is the upload entry point — but the interesting question is where the bytes go. If you accept multipart binary in the request body, your API server becomes a byte-pumping pipe: every upload thread holds a connection open for the duration of the upload. At 10K uploads/day that's manageable; at 10M/day it isn't. The better pattern: POST returns a pre-signed S3 upload URL; the client uploads directly to S3; S3 triggers a Lambda or webhook to confirm the upload completed. The `document_id` is created in Postgres before the bytes land — so the metadata exists immediately and the async confirmation fills in `s3_key`. Most candidates describe the simple multipart approach; mentioning the pre-signed URL pattern is the differentiator.
+
+**`GET /v1/documents/{id}/download`** returns a `302 Redirect`, not bytes. This surprises most candidates who expect `200 OK` with a file body. The redirect to a 15-minute pre-signed S3 URL is the standard pattern: your API service is stateless, the CDN caches the file at the edge, and the URL auto-expires so sharing it doesn't grant permanent access. Every access that generates a pre-signed URL is logged in `audit_logs` — the act of generating the URL counts as a "download attempt," even if the client never follows the redirect.
+
+**`GET /v1/documents/{id}/versions`** is the versioning audit trail from the client's perspective. The probe: "How do you retrieve a specific version for download?" You add `?version=2` to the download endpoint — `GET /v1/documents/{id}/download?version=2` — returning a pre-signed URL to the version-specific S3 key. The versions list endpoint tells the client what versions exist; the download endpoint serves them.
+
+**`DELETE /v1/documents/{id}`** is a soft delete — the `documents` table gets `deleted_at = NOW()`, the S3 object is not deleted (retained per policy). The `423 Locked` status code is what the interviewer will probe: "Why 423 and not 403?" Because the caller has deletion permission — they own the document. The lock is on the resource, not on the caller's access. `423 Locked` is an HTTP-spec status code specifically for "temporarily locked" — WebDAV introduced it, but it's valid for any resource lock. DocuSign-specific: legal holds are a real compliance primitive; being specific about `423` shows you've thought about compliance workflows, not just CRUD operations.
+
+**`GET /v1/documents/{id}/audit`** is the compliance endpoint. The probe: "Should this be paginated?" Yes — a document with 100,000 access events over 7 years would return an enormous payload. Add `?cursor=` and `?from=&to=` date filters. The audit log is append-only and immutable: rows are never updated or deleted, even if the document itself is soft-deleted. The audit trail outlives the document.
+
+---
+
 ## Section 4 — 🔢 Scale Estimation (Minutes 5–10)
 
 **Traffic:**
@@ -147,175 +212,161 @@ Then pivot to Section 2 (clarifying questions).
 
 ## Section 6 — 🏗️ High-Level Architecture (Minutes 10–25)
 
-### 🎨 ASCII Architecture Diagram
+### Stage 1 — App Server + Local/NFS Disk (Baseline)
+
+> Start here. Works for small scale (< 100K documents). Two breaking points: (1) local disk doesn't survive node failure — no HA; (2) downloads routed through the app server — 5.8 GB/sec bandwidth is impossible for a server farm.
 
 ```
-  DOCUMENT STORAGE & RETRIEVAL SERVICE — HIGH-LEVEL ARCHITECTURE
-  ───────────────────────────────────────────────────────────────
+── Stage 1: App Server + Disk ────────────────────────────────────────
 
-  CLIENT (Web, Mobile, API)
-         │
-         ▼
-  ┌──────────────────────────────────────────┐
-  │         API Server (Stateless)           │
-  │  ┌────────────────────────────────────┐  │
-  │  │ POST /v1/documents (upload)        │  │
-  │  │ GET  /v1/documents/{id} (download) │  │
-  │  │ PATCH /v1/documents/{id}/versions  │  │
-  │  │ DELETE /v1/documents/{id}          │  │
-  │  └────────────────────────────────────┘  │
-  └──────┬──────────────────────────────────┘
-         │
-    ┌────┴─────────────────────────────┐
-    │                                  │
-    ▼                                  ▼
-┌──────────────────────┐        ┌─────────────────────┐
-│  Postgres (metadata) │        │   Redis (cache)     │
-│  ┌────────────────┐  │        │  ┌───────────────┐  │
-│  │ documents      │  │        │  │ doc:{id}      │  │
-│  │ versions       │  │        │  │ (metadata)    │  │
-│  │ access_logs    │  │        │  │ TTL: 1 hour   │  │
-│  │ audit_logs     │  │        │  └───────────────┘  │
-│  │ legal_holds    │  │        └─────────────────────┘
-│  └────────────────┘  │
-│                      │
-│  ┌────────────────┐  │
-│  │ Indexes:       │  │
-│  │ owner_id       │  │
-│  │ doc_id+version │  │
-│  │ created_at     │  │
-│  └────────────────┘  │
-└──────────────────────┘
+ ┌────────────┐  POST /v1/documents  ┌────────────────────────────────┐
+ │   Client   │─────────────────────▶│          API Server            │
+ └────────────┘                      │  1. Write file to /var/data/   │
+       ▲  302 → download URL         │  2. INSERT metadata to Postgres │
+       │                             │  3. Return doc_id              │
+ ┌────────────┐  GET /download/{id}  └──────────────┬─────────────────┘
+ │   Client   │◀────────────────────                 │ reads
+ └────────────┘                      ┌──────────────▼─────────────────┐
+  (streams bytes                     │           PostgreSQL            │
+   through server)                   │  documents (metadata + s3_key) │
+                                     │  audit_logs (append-only)      │
+                                     └────────────────────────────────┘
+                                     ┌────────────────────────────────┐
+                                     │     /var/data/ (local disk)    │
+                                     │  docs/owner_id/doc_id/v1.pdf   │
+                                     └────────────────────────────────┘
 
-  Download flow (API → S3 directly):
-    API generates pre-signed URL (15 min expiry)
-    Client downloads directly from S3 (bypasses app server)
-    S3 logs download to CloudTrail (audit)
+BREAKING POINT 1:
+   Local disk: if the app server node fails, all documents are lost.
+   No replication, no HA. At 250 TB, local disk is not even viable.
 
-    ┌─────────────────┐
-    │  Amazon S3      │
-    │ (immutable docs)│
-    │                 │
-    │ docs/{user_id}/ │
-    │ {doc_id}/       │
-    │   v1.pdf        │
-    │   v2.pdf        │
-    │   v3.pdf        │
-    └─────────────────┘
-           │
-           │ Large downloads
-           │ (direct S3 → client)
-           ▼
-        CLIENT
+BREAKING POINT 2:
+   Downloads stream through the app server: 100M downloads/day × 5 MB avg
+   = 5.8 GB/sec. No server farm can handle this bandwidth.
+   App server is a bandwidth bottleneck that kills the download path.
+```
 
-  Upload flow (multipart):
-    Client → S3 multipart upload (resumable)
-    On completion → trigger Lambda → INSERT metadata in Postgres
-    Postgres INSERT → triggers replication to read replicas
+**WHICH content storage?**
 
-    ┌──────────────────┐
-    │  AWS Lambda      │
-    │  (on S3 upload   │
-    │   completion)    │
-    └──────────────────┘
-           │
-           ▼
-    Update Postgres metadata
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Local disk / NFS | Zero setup cost; simple streaming | Single point of failure; no HA; can't reach 250 TB; no geographic redundancy | ❌ Not viable for 250 TB with 99.9% SLA |
+| On-prem SAN / NAS | High-throughput; centralized | Expensive ($100K+); ops burden; still single datacenter risk | ⚠️ Works in enterprise data centers; not cloud-native |
+| Amazon S3 (object storage) | Unlimited capacity; 99.999999999% durability (11 nines); $6K/month for 250 TB; multi-AZ; immutable via unique keys | Eventual consistency on overwrite (not an issue — we never overwrite, only add new keys) | ✅ Best — unlimited scale, built-in HA, cheap, immutable |
 
-SUPPORTING INFRASTRUCTURE
-───────────────────────────────────────────────────────────────
-┌─────────────────────────────────────────────────────────────┐
-│  Audit Trail (Append-Only)                                  │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │ • access_logs (download attempts)                      │ │
-│  │ • version_history (version changes, reverts)           │ │
-│  │ • S3 CloudTrail (AWS service that auto-logs every S3 API call — uploads, downloads, deletions — a free audit trail of all storage operations requiring zero application code)          │ │
-│  │ • Archived to S3 Glacier after 1 year (compliance)    │ │
-│  └────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+> 📖 Full: `SystemDesignConcepts/Production-Grade/System-Design-Patterns/14-document-blob-storage.md`
 
-┌─────────────────────────────────────────────────────────────┐
-│  Compliance Layer                                            │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │ • Legal Holds (prevent deletion per user/doc)          │ │
-│  │ • Data Residency (route to region per user)            │ │
-│  │ • Encryption (SSE-S3 or KMS)                           │ │
-│  │ • Soft Deletes (never purge from S3)                   │ │
-│  └────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+---
+
+### Stage 2 — S3 + Metadata DB + Pre-Signed URLs (Production)
+
+> **Why we evolve:** Stage 1 breaks at both storage durability and download bandwidth. Fix: move content to S3 (unlimited, durable), generate pre-signed URLs (client downloads directly from S3 — bypasses app server entirely). Redis caches hot metadata reads at 3.5K QPS.
+
+```
+── Stage 2: Production ───────────────────────────────────────────────
+
+── Upload Flow ──────────────────────────────────────────────────────
+
+ ┌────────────┐  POST /v1/documents  ┌────────────────────────────────┐
+ │   Client   │─────────────────────▶│          API Server            │
+ └────────────┘                      │  1. PUT to S3 key:             │
+       ▲  {doc_id, version: 1}       │     docs/{owner}/{doc_id}/v1.pdf│
+       └─────────────────────────────│  2. INSERT metadata to Postgres │
+                                     │  3. Return doc_id              │
+                                     └──────────────┬─────────────────┘
+                                                    │ writes
+                                     ┌──────────────▼─────────────────┐
+                                     │           PostgreSQL            │
+                                     │  documents  (metadata, s3_key) │
+                                     │  audit_logs (append-only)      │
+                                     │  legal_holds (compliance)      │
+                                     └──────────────┬─────────────────┘
+                                                    │ S3 PUT
+                                     ┌──────────────▼─────────────────┐
+                                     │           Amazon S3             │
+                                     │  docs/{owner}/{doc_id}/v1.pdf  │
+                                     │  docs/{owner}/{doc_id}/v2.pdf  │
+                                     │  (immutable; never overwritten) │
+                                     └────────────────────────────────┘
+
+── Download Flow ────────────────────────────────────────────────────
+
+ ┌────────────┐  GET /download/{id}  ┌────────────────────────────────┐
+ │   Client   │─────────────────────▶│          API Server            │
+ └────────────┘                      │  1. GET doc:{id} from Redis    │
+       ▲  302 → presigned URL        │     miss → SELECT from Postgres │
+       │  (15-min expiry)            │  2. Check ACL (owner or viewer) │
+       │                             │  3. Generate presigned URL     │
+       └─────────────────────────────│  4. INSERT audit_logs          │
+                                     └──────────────┬─────────────────┘
+                                                    │ cache-aside
+                                     ┌──────────────▼─────────────────┐
+                                     │       Redis (1hr TTL)          │
+                                     │  doc:{id} → metadata JSON      │
+                                     └────────────────────────────────┘
+
+ ┌────────────┐  follows 302 redirect
+ │   Client   │──────────────────────────────────────────────────────▶ Amazon S3
+ └────────────┘  (downloads bytes DIRECTLY from S3 — app server not involved)
+
+── Soft Delete Flow ─────────────────────────────────────────────────
+
+ DELETE /v1/documents/{id}
+ → Check legal_holds: if active hold → 423 Locked
+ → UPDATE documents SET status = 'DELETED', deleted_at = NOW()
+ → INSERT audit_logs (append-only, immutable)
+ → S3 object: NEVER DELETED (preserves audit trail + legal hold)
 
 KEY INVARIANT:
-   Metadata table is source of truth for queries (who owns? version? deleted?).
-   S3 is source of truth for content (immutable, versioned, never deleted).
-   These are synchronized: metadata.s3_key → S3 object exists.
+   Metadata (Postgres) is source of truth for queries: who owns? version? deleted?
+   Content (S3) is source of truth for bytes: immutable, versioned by key.
+   Pre-signed URLs bypass the app server — S3 handles 5.8 GB/sec download bandwidth.
+   Soft deletes preserve audit trail while hiding docs from user queries.
+   S3 objects are NEVER deleted — legal holds and audit compliance require this.
 ```
 
-**Data flow walkthrough (say this out loud):**
+**WHICH download strategy?**
 
-**Flow 1 — Document Upload:**
-1. Client calls `POST /v1/documents` with metadata (title, type) + file
-2. API Server generates a unique S3 key: `docs/{owner_id}/{doc_id}/v1.pdf`
-3. **Option A (simple):** API server streams file to S3 directly (works for small files < 100 MB)
-   - `s3Client.putObject(bucket, key, file.getInputStream(), metadata)`
-4. **Option B (multipart upload, resumable):** An S3 feature that splits a large file into independently-uploadable chunks (e.g., 10 MB each); each chunk uploads in parallel; if one chunk fails, only that chunk is retried — not the whole file. API initiates the multipart upload, returns presigned URLs for each part; client uploads parts in parallel; client sends a "complete" request to S3 when all parts are done
-5. S3 returns ETag (entity tag — a checksum S3 computes for the uploaded object; compare it against your locally-computed checksum to confirm the bytes arrived intact and nothing was corrupted in transit)
-6. API inserts metadata row into `documents` table:
-   ```sql
-   INSERT INTO documents (id, owner_id, s3_key, version, is_latest, status, created_at)
-   VALUES (?, ?, 'docs/{owner_id}/{doc_id}/v1.pdf', 1, TRUE, 'ACTIVE', NOW())
-   ```
-7. Return to client: `{document_id, version: 1, s3_key, status: 'ACTIVE'}`
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| App server proxies download (reads S3, streams to client) | Full control; can add streaming logic | Bandwidth bottleneck: 100M downloads/day = 5.8 GB/sec through app servers; unscalable | ❌ Bandwidth kills the server farm |
+| CDN (CloudFront in front of S3) | Low latency via edge; caches popular docs globally | Cached URLs can't have per-user access control; public cache vs private content | ⚠️ Good for public/shared docs; not for private documents |
+| Pre-signed S3 URLs (app signs URL, client downloads directly) | S3 handles all bandwidth; 15-min expiry limits leak window; access control enforced at generation time | URL can be shared (mitigated by short expiry); expired URL returns 403 mid-download | ✅ Best — scales to any bandwidth, per-user access control |
 
-**Flow 2 — Document Download (Via Pre-Signed URL):**
-1. Client calls `GET /v1/documents/{doc_id}`
-2. API queries metadata table (check access control: is requester owner or authorized?):
-   ```sql
-   SELECT s3_key, owner_id, status FROM documents WHERE id = ? AND version = (latest_version)
-   ```
-3. If access denied → 403 Forbidden
-4. If deleted (status = 'DELETED') → check legal_holds table; if legal hold exists, allow access; else 404
-5. **Generate pre-signed URL** (a time-limited URL with AWS credentials embedded as a cryptographic signature in the query string; the client uses it to download directly from S3 with no app server involvement; anyone with the URL can download for up to 15 minutes, after which the signature expires and S3 rejects it):
-   ```java
-   String presignedUrl = s3Client.generatePresignedUrl(bucket, s3_key, expiryTime);
-   ```
-6. Log the download attempt to `access_logs` table (append-only): timestamp, user_id, doc_id, IP
-7. Return presigned URL to client (metadata in response body, URL in header)
-8. Client downloads directly from S3 using presigned URL (no app server involved for data transfer)
+> 📖 Full: `SystemDesignConcepts/Production-Grade/System-Design-Patterns/14-document-blob-storage.md`
 
-**Flow 3 — Document Versioning (New Version Uploaded):**
-1. Client uploads new version of document `{doc_id}`
-2. API generates new S3 key: `docs/{owner_id}/{doc_id}/v2.pdf`
-3. Upload to S3 (same flow as Flow 1)
-4. **Atomically update metadata table (in one transaction):**
-   ```sql
-   BEGIN;
-   UPDATE documents SET is_latest = FALSE WHERE id = ? AND is_latest = TRUE;
-   INSERT INTO documents (id, owner_id, s3_key, version, is_latest, status, created_at)
-   VALUES (?, ?, 'docs/{owner_id}/{doc_id}/v2.pdf', 2, TRUE, 'ACTIVE', NOW());
-   INSERT INTO version_history (document_id, old_version, new_version, changed_by, changed_at)
-   VALUES (?, 1, 2, current_user_id, NOW());
-   COMMIT;
-   ```
-5. Both metadata updates + version history insert succeed or all roll back
+**WHICH versioning approach?**
 
-**Flow 4 — Soft Delete:**
-1. Client calls `DELETE /v1/documents/{doc_id}`
-2. API updates metadata (does NOT delete S3 object):
-   ```sql
-   UPDATE documents SET status = 'DELETED', deleted_at = NOW() WHERE id = ?;
-   INSERT INTO audit_logs (document_id, action, user_id, timestamp)
-   VALUES (?, 'DELETED', current_user_id, NOW());
-   ```
-3. **S3 object is never deleted** (preserves audit trail + enables legal hold + GDPR compliance)
-4. Future queries filter by `status = 'ACTIVE'` (soft delete invisibility)
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Overwrite single row (update s3_key on each version) | Simple schema; small table | Version history lost on each update; can't revert; audit trail incomplete | ❌ Loses history — legally indefensible |
+| One row per version (immutable rows, `is_latest` flag) | Full history preserved; revert = query; audit trail is natural | More rows (50M docs × 2.5 versions = 125M rows); needs `is_latest` for current-version queries | ✅ Best — history preserved, queries simple with index on (id, is_latest) |
+| Hybrid (current row + separate `version_history` table) | Fast current-version queries + full history | Two tables to keep in sync; INSERT + UPDATE per version — atomic transaction required | ⚠️ Viable; more complex to maintain consistency |
 
-**Why each component:**
-- **Postgres (metadata only, not content)**: Queryable, indexed, fast (< 10ms); holds owner_id, version, status, s3_key pointer
-- **Redis (cache)**: Metadata queries at 3.5K QPS would hammer Postgres; cache hits reduce DB load to 10% baseline
-- **S3 (blob storage)**: Unlimited capacity (250 TB), cheap ($6K/month), immutable, versioned via keys
-- **Pre-signed URLs**: Clients download directly from S3 (no app server involved); eliminates server bottleneck for 100M downloads/day
-- **Audit logs (append-only)**: Downloads logged for compliance; queryable by document_id + timestamp
-- **Legal holds + soft deletes**: Comply with GDPR (no purge until legal hold released) + e-signature law (tamper-proof history)
+> 📖 Full: `SystemDesignConcepts/Production-Grade/System-Design-Patterns/14-document-blob-storage.md`
+
+---
+
+### Data Flow Walkthrough (say this out loud)
+
+**Flow 1 — Upload:**
+1. Client `POST /v1/documents`. API generates S3 key `docs/{owner_id}/{doc_id}/v1.pdf`, PUTs to S3.
+2. S3 returns ETag (entity tag — a checksum computed for the uploaded object; compare against local checksum to confirm no bit-rot in transit).
+3. API INSERTs metadata row: `(doc_id, owner_id, s3_key, version=1, is_latest=TRUE, status=ACTIVE)`. Returns `{doc_id, version: 1}`.
+
+**Flow 2 — Download (pre-signed URL):**
+1. Client `GET /download/{id}`. API checks Redis (`doc:{id}`, 1hr TTL) → cache miss → Postgres.
+2. ACL check (owner or viewer role). Generate S3 presigned URL (15-min expiry). INSERT `audit_logs`.
+3. Return 302 with `Location: {presigned_url}`. Client follows redirect → downloads directly from S3 (app server not in data path).
+
+**Flow 3 — New version:**
+1. API generates new S3 key `v2.pdf`, PUTs to S3.
+2. Atomic transaction: `UPDATE documents SET is_latest=FALSE WHERE id=? AND is_latest=TRUE`; `INSERT (v2, is_latest=TRUE)`; `INSERT version_history`. All or nothing.
+
+**Flow 4 — Soft delete:**
+1. API checks `legal_holds` — if active hold → 423 Locked (compliance block).
+2. `UPDATE documents SET status='DELETED', deleted_at=NOW()`. `INSERT audit_logs`. S3 object untouched.
+3. Future queries filter `WHERE status='ACTIVE'`; deleted docs invisible to owner, queryable by legal team.
 
 ---
 
@@ -696,29 +747,6 @@ public class DocumentDeletionService {
 
 ---
 
-## Section 8 — 🌐 API Design
-
-### Core Endpoints
-
-| Method | Path | Auth | Request body | Response | Status codes |
-|---|---|---|---|---|---|
-| POST | `/v1/documents` | JWT Bearer | `{title, file (multipart), type}` | `{document_id, version: 1, s3_key, status}` | 201, 400, 409 |
-| GET | `/v1/documents/{doc_id}/download` | JWT Bearer | — | 302 redirect to pre-signed URL (or 403, 404) | 200, 302, 403, 404 |
-| GET | `/v1/documents/{doc_id}/versions` | JWT Bearer | — | `{versions: [{version, created_at, created_by, size}], current_version}` | 200, 403, 404 |
-| DELETE | `/v1/documents/{doc_id}` | JWT Bearer | — | `{document_id, status: "DELETED"}` | 200, 403, 404, 423 (locked due to legal hold) |
-| GET | `/v1/documents/{doc_id}/audit` | JWT Bearer | — | `{audit_logs: [{action, timestamp, user_id, reason}]}` | 200, 403, 404 |
-
-### Key Design Decisions
-
-- **Multipart uploads**: For large files (> 100 MB), return presigned URLs for S3 multipart upload; client uploads parts in parallel.
-- **Pre-signed URL generation**: GET `/documents/{doc_id}/download` returns 302 redirect with S3 pre-signed URL (15-minute expiry).
-- **Version history**: GET `/documents/{doc_id}/versions` lists all versions (queryable, ordered by version DESC).
-- **Audit endpoint**: GET `/documents/{doc_id}/audit` returns full access/deletion history (compliance).
-- **Legal hold blocking**: DELETE returns 423 Locked if legal hold is active.
-- **Auth**: JWT with `sub` (user_id) and `tenant_id` claims; access control checked for each operation.
-
----
-
 ## Section 9 — 🗄️ Data Model
 
 ### Core Tables (Already Detailed in Section 7)
@@ -778,7 +806,7 @@ CREATE TRIGGER audit_immutable_trigger
 
 **Lose:** If a download takes > 15 minutes (rare, but happens for 500 MB files on slow connections), client gets a 403 and must request a new URL.
 
-**Failure mode if wrong:** If expiry is 1 day (for usability), URL can be leaked and shared; attacker downloads all your documents. If expiry is 1 minute, users on slow connections get frequent 403s.
+**Failure mode if wrong:** If expiry is 1 day (for usability), URL can be leaked and shared; attacker downloads all your documents. If expiry is 1 minute, users on slow connections get frequent 403s. **Business impact:** For DocuSign: a 24-hour pre-signed URL for a signed contract PDF gets forwarded in an email thread — opposing counsel clicks it and downloads the full agreement before disclosure is authorized. Conversely, a 1-minute expiry causes a signer on a mobile connection to receive a 403 when clicking the completion download link 90 seconds later — they believe the signing failed and call support, despite the ceremony completing successfully.
 
 ---
 
@@ -790,7 +818,7 @@ CREATE TRIGGER audit_immutable_trigger
 
 **Lose:** Customer might expect "truly gone"; requires filtering (queries must WHERE status = 'ACTIVE'); orphaned S3 objects if metadata is accidentally lost.
 
-**Failure mode if wrong:** If you hard-delete (remove S3 object) and customer requests GDPR access report 2 years later, you have no proof what documents existed or were deleted. Non-compliant. If you soft-delete and forget to filter queries, deleted documents show up in listings (confusing user experience).
+**Failure mode if wrong:** If you hard-delete (remove S3 object) and customer requests GDPR access report 2 years later, you have no proof what documents existed or were deleted. Non-compliant. If you soft-delete and forget to filter queries, deleted documents show up in listings (confusing user experience). **Business impact:** DocuSign is subject to 7-year document retention laws in financial services (SEC 17a-4) — hard-deleting a document to fulfill a GDPR deletion request destroys the legally required audit trail, exposing DocuSign to regulatory fines and litigation. The inverse failure: a sender sees a "deleted" envelope in their active listing, opens it, and shares the wrong document version with a counterparty — creating a contract dispute.
 
 ---
 
@@ -802,7 +830,7 @@ CREATE TRIGGER audit_immutable_trigger
 
 **Lose:** Stale metadata (up to 1 hour); if user updates a document's title, it takes up to 1 hour for the cache to reflect the change.
 
-**Failure mode if wrong:** If you bypass cache, 3.5K reads/sec hit the database. Postgres can handle ~1K sustained queries; DB becomes bottleneck, queries slow to 100ms+, users see timeouts. If you cache without fallback and Redis is down, API is broken (no fallback to DB).
+**Failure mode if wrong:** If you bypass cache, 3.5K reads/sec hit the database. Postgres can handle ~1K sustained queries; DB becomes bottleneck, queries slow to 100ms+, users see timeouts. If you cache without fallback and Redis is down, API is broken (no fallback to DB). **Business impact:** For DocuSign: 3.5K document metadata reads/sec without cache causes the envelope listing API to time out — an enterprise legal team running an eDiscovery export of 10K envelopes finds the API non-responsive during a court deadline — a publicly traded company faces a discovery sanctions risk. If Redis fails without DB fallback, 100% of document access breaks, blocking all in-progress signing ceremonies until Redis recovers.
 
 ---
 
@@ -823,6 +851,46 @@ Document storage is fundamental to DocuSign's product. Every signed contract mus
 4. **Legal holds**: Compliance/legal teams can issue a hold on a document (e.g., during litigation), which blocks deletion even if the user requests it. This must be queryable and enforceable at the API layer.
 
 5. **Multi-region compliance (GDPR)**: If a user is in the EU, their documents must stay in the EU (data residency). Your schema has `data_region` column; documents are routed to region-specific S3 buckets.
+
+6. **S3 Object Lock (WORM) — the correct legal compliance mechanism:**
+
+A soft delete (marking a DB row `status = 'DELETED'`) is a helpful UX pattern. It is **not** compliance-grade legal hold. The distinction matters:
+
+- A soft delete is enforced by application code. A determined admin with DB write access (or a bug) can physically DELETE the row, removing the document from the audit trail.
+- Compliance standards for regulated industries (SEC 17a-4, FINRA, HIPAA, GDPR data retention) require **WORM storage** (Write Once Read Many — a storage constraint that physically prevents any modification or deletion of an object for a specified retention period, regardless of who requests it, including AWS account root).
+
+**S3 Object Lock** is AWS's WORM implementation. It operates at the S3 API level — below your application, below your IAM policies, below even your AWS account admin.
+
+Two modes:
+- **Governance mode**: Account users with a special `s3:BypassGovernanceRetention` permission can override the lock. Used for internal compliance (audit, SOX).
+- **Compliance mode**: No one can delete or overwrite the object during the retention period — not even root. Used for SEC 17a-4, FINRA, and any regulation that requires tamper-proof storage. Once set, the retention period can only be extended, never shortened.
+
+**How to apply it at upload time:**
+
+```java
+// When a document is "SIGNED" and legally sealed, apply object lock
+s3Client.putObjectRetention(PutObjectRetentionRequest.builder()
+    .bucket("docusign-prod-eu")
+    .key("docs/" + ownerId + "/" + docId + "/v" + version + ".pdf")
+    .retention(ObjectLockRetention.builder()
+        .mode(ObjectLockRetentionMode.COMPLIANCE)
+        // Retain for 7 years from signing date (common legal requirement)
+        .retainUntilDate(Instant.now().plus(Duration.ofDays(365 * 7)))
+        .build())
+    .build());
+```
+
+**What soft-delete covers vs what Object Lock covers:**
+
+| Concern | Soft Delete | S3 Object Lock |
+|---|---|---|
+| Hide from user queries | ✅ filters out `status = DELETED` | ❌ not a query concept |
+| Prevent accidental app-level deletion | ✅ guards normal code paths | ✅ guards S3 delete API calls |
+| Prevent admin/root physical deletion | ❌ a DBA can run `DELETE FROM documents` | ✅ AWS API physically rejects delete during retention period |
+| Passes SEC 17a-4 / FINRA audit | ❌ insufficient | ✅ specifically designed for this |
+| Supports legal hold (indefinite) | ✅ `legal_hold = true` in DB | ✅ `ObjectLockLegalHold = ON` at S3 API level |
+
+**In an interview:** "Soft delete handles UX — documents disappear from listings. For legal compliance, signed documents get S3 Object Lock in Compliance mode with a 7-year retention. This is WORM storage — no one, not even AWS root, can delete or overwrite the object during the retention window. This is what passes a SOC 2 or SEC 17a-4 audit; soft delete alone does not."
 
 **Your answer should include:**
 
@@ -853,6 +921,59 @@ Document storage is fundamental to DocuSign's product. Every signed contract mus
 **Q: "Your audit_logs table logs every download. At 100M downloads/day, that's 100M audit inserts/day. How do you prevent the audit table from becoming a bottleneck, and how do you query it efficiently?"**
 
 > The audit_logs table is write-heavy but read-light. To avoid write bottleneck, we use a **partitioned table** (partition by month: audit_logs_202606, audit_logs_202607, etc.). New inserts go to the current-month partition (hot). Old partitions are archived to S3 Glacier. To query efficiently, we add indexes on (document_id, action_timestamp DESC) for "show me this document's audit trail" and (user_id, action_timestamp DESC) for "show me this user's activity." Both are O(log N) lookups. We also cache "recent audit events" in Redis (5-day window), so 80% of audit queries hit Redis instead of Postgres.
+
+---
+
+### New Deep Probes (Tier 2 — added Jul 4, 2026)
+
+**Q: "A user uploads a document. Your design immediately writes to S3 and inserts the metadata row. But what if the uploaded file contains malware? How do you prevent a malicious PDF from entering the production bucket?"**
+> **Quarantine bucket pattern.** Instead of writing user uploads directly to the production S3 bucket, all uploads land in a quarantine bucket (`docusign-quarantine/{doc_id}/filename`). The file is never user-accessible from here.
+>
+> On S3 upload completion, an S3 event notification fires a Lambda (a serverless function — code that runs on AWS's infrastructure in response to an event, without you managing a server) → the Lambda runs a malware scanner (ClamAV — an open-source antivirus engine that scans file bytes for known malware signatures) against the file bytes:
+>
+> - **Clean:** Lambda copies the file from quarantine to the production bucket (`docusign-prod/{owner_id}/{doc_id}/v1.pdf`), then inserts the metadata row in Postgres with `status = 'ACTIVE'`. The document is now accessible.
+> - **Infected:** Lambda moves the file to a security-review bucket (`docusign-quarantine-hold/{doc_id}`), inserts metadata with `status = 'QUARANTINED'`, and sends a Kafka event → Notification Service informs the user: "Your upload failed our security scan."
+>
+> The presigned URL generation service checks `status = 'ACTIVE'` before issuing a URL — a `QUARANTINED` document can never be downloaded by the user.
+>
+> **Trade-off:** Scanning adds 2–10 seconds to the upload-to-available latency. Acceptable for documents; not acceptable for real-time video. In an interview: "I'd use a quarantine bucket to ensure no file enters production without a clean scan. The user sees 'processing…' during the scan window — typically 2–5 seconds for a 5MB PDF."
+
+---
+
+**Q: "S3 and Postgres can get out of sync — what if the metadata row is inserted but the S3 object was never written (network failure mid-upload), or the S3 object exists but there's no metadata row (Lambda crashed between copy and INSERT)?"**
+> These are the two orphan-state failure modes. Both require a reconciliation job to detect:
+>
+> **Mode 1 — Postgres row exists, no S3 object:**
+> Triggered by: S3 write failed after metadata INSERT, or S3 object deleted by accident.
+> Effect: `generatePresignedUrl()` generates a URL that returns S3 404 when the client tries to download.
+> Fix: Before returning the presigned URL, call `s3.headObject(bucket, key)`. If it returns 404, return HTTP 404 to the client immediately and alert ops. Recovery: restore from S3 versioning (if enabled) or from cross-region replica.
+>
+> **Mode 2 — S3 object exists, no Postgres row (orphaned object):**
+> Triggered by: Lambda/API crashed after S3 write but before INSERT.
+> Effect: File sits in S3 forever, consuming storage, never accessible.
+> Fix: Reconciliation job (runs daily) lists all S3 objects via `S3.listObjectsV2`, checks each key against the documents table. Orphaned keys (no row in documents) are flagged. For recently uploaded files (< 24h), auto-insert the metadata row (likely a crash recovery). For older orphans (> 7 days), move to a glacier bucket and alert ops for manual review.
+>
+> **In an interview:** "I'd make the upload idempotent: S3 write is the source of truth. Metadata INSERT only happens after S3 confirms the object exists. A daily reconciliation job catches any remaining discrepancies. This belt-and-suspenders approach means no data is ever truly lost — just temporarily inaccessible until reconciliation corrects it."
+
+---
+
+### New Cross-Concept Probe (Tier 3 — added Jul 4, 2026)
+
+**Q: "DocuSign has enterprise customers in Germany (GDPR strict — data must stay in the EU). Your design stores all documents in a single S3 bucket in us-east-1. How do you handle data residency requirements at the document level?"**
+> Data residency is one of the hardest multi-tenant constraints. Three approaches:
+>
+> **(A) Single region, contractual compliance:** Store everything in US; claim GDPR Standard Contractual Clauses (SCCs) cover the transfer. Problem: Germany's DPA (Datenschutzbeauftragter — data protection authority) has cracked down on this; it no longer accepts SCCs alone for most use cases. Risk: GDPR fines up to 4% of global revenue.
+>
+> **(B) Per-customer dedicated region (chosen):** At account creation, assign the customer a home region (EU tenant → Frankfurt S3 bucket; US tenant → us-east-1 bucket). Store `data_region` on every document and the tenant config. The API reads `tenant.data_region` and routes S3 calls to the appropriate regional bucket. Cross-region copies are never made for EU tenants.
+>
+> Implementation:
+> - `documents.data_region = 'eu-central-1'` (set at upload time from tenant config)
+> - Upload: `s3client.putObject("docusign-prod-eu", key, file)` (Frankfurt bucket)
+> - Presigned URL: `s3client.generatePresignedUrl("docusign-prod-eu", key, expiry)` (Frankfurt URL)
+>
+> **(C) Encryption + key control:** Store ciphertext in US bucket, but hold the KMS key in the EU. Under GDPR, if the data is cryptographically inaccessible without the EU-resident key, it's effectively "not transferred." This is legally grey; not all DPAs accept it.
+>
+> **Recommendation:** Option B. It's legally clear, operationally simple (one bucket per region), and aligns with what DocuSign actually does (they have dedicated EU data centers for GDPR compliance). The `data_region` column in `documents` makes routing deterministic — no global coordination required.
 
 ---
 
@@ -891,3 +1012,6 @@ Document storage is fundamental to DocuSign's product. Every signed contract mus
 | Date | Change |
 |---|---|
 | June 24, 2026 | **D2-document-storage.md created.** Final solution file (8 of 8). Full 15-section solution framework for Type B Product Architecture. Covers: metadata schema design (one row per version), S3 blob storage pattern (immutable content + indexed metadata), pre-signed URL generation (security + scalability), soft deletes + legal holds (compliance), audit trail (immutable append-only), and multi-region GDPR compliance. Scale: 250 TB storage, 100M downloads/day, 10K uploads/day. Prerequisites: `14-document-blob-storage.md`, `03-caching.md`. |
+| Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **Quarantine bucket pattern for malware scanning** — uploads land in quarantine S3 bucket, Lambda runs ClamAV on upload completion, clean files copied to prod bucket + metadata inserted, infected files moved to hold bucket + status = QUARANTINED; presigned URL generation blocked for non-ACTIVE docs; adds 2–5s latency; (2) **S3/Postgres out-of-sync failure modes** — Mode 1 (row exists, no S3 object): `s3.headObject()` check before presigned URL + ops alert + restore from versioning; Mode 2 (S3 object exists, no row): daily reconciliation job via `listObjectsV2`, auto-insert for <24h orphans, glacier for >7-day orphans; (3) **Data residency for EU customers (GDPR)** — per-customer region assignment at account creation, `data_region` column routes S3 calls to Frankfurt or us-east-1 bucket; documents.data_region set at upload time; approach aligns with how DocuSign operates dedicated EU data centers. |
+| Jul 5, 2026 | **Section 6 restructured: single final-state diagram → 2-stage progressive HLD.** Stage 1 (App Server + Local/NFS Disk): single-node upload+download, no HA, downloads proxied through app server — BREAKING POINTs: disk failure = data loss; 5.8 GB/sec bandwidth saturates app server fleet. Stage 2 (S3 + Metadata DB + Pre-Signed URLs): separate upload/download/soft-delete flows, metadata in Postgres, content in S3, pre-signed URLs bypass app server entirely. Three inline decision tables added: (1) content storage — Local disk ❌ / SAN-NAS ⚠️ / S3 ✅; (2) download strategy — App proxy ❌ / CDN ⚠️ / Pre-signed URLs ✅; (3) versioning approach — Overwrite ❌ / One-row-per-version ✅ / Git-style delta ⚠️. Verdict alignment verified: all Section 6 verdicts match Section 7 deep-dive choices. |
+| Jul 5, 2026 | **Section 10 business impact pass.** Added **Business impact:** to all 3 trade-offs — 24-hour pre-signed URL leaking to opposing counsel during litigation + 1-minute expiry causing 403 immediately after signing ceremony completes (URL lifetime), SEC 17a-4 7-year retention conflicting with GDPR right-to-erasure exposing regulatory fines in both jurisdictions simultaneously (compliance conflict), eDiscovery export non-responsive during court deadline + Redis failure blocking all document access including active signing ceremonies (cache dependency). |

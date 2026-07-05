@@ -26,7 +26,7 @@
 |---|---|---|---|---|---|---|
 | A1 | **Design a URL Shortener** | DocuSign official prep guide (PDF p.3) | ✅ Yes — explicitly listed | PDF dated 2024 | ⭐ Confirmed | ✅ `r2-solutions/A1-url-shortener.md` (full 60-min framework, Jun 23, 2026) |
 | A2 | **Build a Facebook Chat / Messenger** | DocuSign PDF p.3 + multiple Blind/Glassdoor reports 2024-25 | ✅ Yes — "Build a Facebook chat" | Glassdoor Nov-Dec 2025, Blind threads | ⭐ Confirmed | ✅ `r2-solutions/A2-chat-messenger.md` + DELIVERY-RECIPE integration (Jun 23, 2026) |
-| A3 | **Architect a Worldwide Video Distribution System** | DocuSign official prep guide (PDF p.3) | ✅ Yes — "Architect a worldwide video distribution system" | PDF dated 2024 | ⭐ Confirmed | `Interview/DocuSign/DOCUSIGN_PREP.md` — full design (high-level, not 60-min interview format) |
+| A3 | **Architect a Worldwide Video Distribution System** | DocuSign official prep guide (PDF p.3) | ✅ Yes — "Architect a worldwide video distribution system" | PDF dated 2024 | ⭐ Confirmed | ✅ `r2-solutions/A3-video-distribution.md` (full 60-min framework, 3-stage HLD, DocuSign PDF pivot, Jul 5, 2026) |
 
 ---
 
@@ -36,7 +36,7 @@
 
 | # | Question | Source | In PDF? | When | Tier | Coverage |
 |---|---|---|---|---|---|---|
-| B1 | **Design a Subscription Billing API** | DocuSign PDF p.3 — "Design a service or product API" | ✅ Yes — example listed | PDF dated 2024 | ⭐ Confirmed | `Interview/DocuSign/DOCUSIGN_PREP.md` — full design with SOLID, state machine, Kafka fanout |
+| B1 | **Design a Subscription Billing API** | DocuSign PDF p.3 — "Design a service or product API" | ✅ Yes — example listed | PDF dated 2024 | ⭐ Confirmed | ✅ `r2-solutions/B1-subscription-billing.md` (full 60-min framework, 3-stage HLD, outbox+Kafka, SOLID, Jul 5, 2026) |
 | B2 | **Design a Chat Service or Feed API** | DocuSign PDF p.3 — explicitly listed | ✅ Yes | PDF dated 2024 | ⭐ Confirmed | `Interview/DocuSign/DOCUSIGN_PREP.md` — Feed API section |
 | B3 | **Design an Email Server** | DocuSign PDF p.3 — explicitly listed | ✅ Yes | PDF dated 2024 | ⭐ Confirmed | `Interview/DocuSign/DOCUSIGN_PREP.md` — Email Server section (thin) |
 
@@ -81,17 +81,62 @@
 
 ---
 
+## July 2026 Research Pass — Newly Surfaced Questions
+
+> **Research basis:** 12 web searches + 6 page fetches across Glassdoor, 1Point3Acres, LeetCode Discuss, Exponent, DesignGurus, Blind, Prepfully, AlgoDaily, MockQuestions (Jul 4, 2026).
+>
+> **Confidence notation:** ⭐ = dated candidate report / 🔶 = aggregator-inferred (no single dated source). Source quality was mixed — most primary pages (LeetCode, hw.glich, prachub) returned 403/503. Don't weight 🔶 questions equally to confirmed ⭐.
+
+| # | Question | Source | When | Tier | Level | Coverage |
+|---|---|---|---|---|---|---|
+| E1 | **OOD: Object-Oriented Design of a Chess Game** | Glassdoor report, Chicago candidate (Sep 2025) | Sep 2025 | ⭐ Confirmed (single report) | SWE (unspecified level) | ✅ `r2-solutions/E1-search-system.md` exists — **NOT this question. GAP.** |
+| E2 | **Design a Multi-Level Parking System** | Multiple aggregator sites (Dataford, DesignGurus) | 2025 (aggregator) | 🔶 Likely | Senior SWE (P4) | ❌ GAP — not written |
+| E3 | **Design a Multi-Region, Low-Latency System** | Dataford 2026 guide (aggregator) | 2025-26 (aggregator) | 🔶 Speculative | Senior SWE (P4) | ❌ GAP — but partially covered by CDN design (A3) and messaging (A2) |
+| E4 | **Design a WhatsApp-Like End-to-End Communication App** | LeetCode Discuss P4 candidate experience (specific round detail) | 2025 | ⭐ Confirmed (1 report) | P4 Senior | Covered by `r2-solutions/A2-chat-messenger.md` — add E2E encryption angle |
+| E5 | **Design a Document Signing Service** | DesignGurus DocuSign guide | 2025 (aggregator) | 🔶 Likely | Senior SWE | Covered by `r2-solutions/D1-digital-signature.md` |
+
+### ⚠️ Format conflict — not resolved
+
+Two different P4 interview structures reported in the 2025–26 research pass:
+
+| Source | Structure |
+|---|---|
+| Blind thread (2025) | 2 DSA rounds → 1 HLD round → 1 HM round (4 total) |
+| InterviewQuery guide (aggregated) | 2 technical rounds → 1 system design → 3 behavioral rounds (6 total) |
+
+**Action:** Confirm with recruiter which format applies to your loop. The 4-round P4 structure (2 DSA + 1 HLD + 1 HM) is the most commonly reported. The 3-behavioral variant may apply to senior loops with more stakeholders.
+
+### SWE (P3) vs Senior SWE (P4) — what the data shows
+
+| Dimension | SWE / P3 | Senior SWE / P4 |
+|---|---|---|
+| **Format** | 1-2 DSA + 1 system design | 2 DSA + 1 HLD + 1 HM (sometimes more behavioral rounds) |
+| **System design depth** | Clean API + basic scale | Trade-offs without prompting; "simple, testable, auditable" expected |
+| **VP in loop** | Not confirmed | Confirmed — Blind: "VP level won't let you through if basic coding weak" |
+| **Behavioral rounds** | 1 (blended in HM) | 1 HM + sometimes 3 separate behavioral rounds |
+| **Data confidence** | Weak — few P3-specific reports | Solid — multiple P4 candidate reports in 2025 |
+
+> **Honest gap:** Most 2025-26 reports are from P4 candidates. P3 question patterns are inferred, not confirmed.
+
+---
+
 ## Coverage Summary
 
 | Status | Questions |
 |---|---|
-| ✅ Fully covered in DOCUSIGN_PREP.md (high-level) | A3, B1, B2, B3 |
-| ✅ Fully covered in r2-solutions/ (60-min interview format) | A1, A2, C1, C2, C3, D1, D2, D3 |
+| ✅ Fully covered in r2-solutions/ (60-min interview format) | A1, A2, A3, B1, C1, C2, C3, CF1, D1, D2, D3, E1-search-system, E2-authentication-system |
+| ✅ Covered in DOCUSIGN_PREP.md (high-level, not 60-min format) | B2, B3 |
+| 🔶 Newly surfaced — chess OOD is a real gap | E1-questions-file (OOD chess game) — not written; `E1-search-system.md` is a different problem |
+| 🔶 Low priority — covered adjacent or speculative | E2-questions-file (parking system — not written; `E2-authentication-system.md` is a different problem), E3, E5 |
+| ✅ Already covered (different framing) | E4 → A2 (add E2E encryption angle) |
 | ⛔ Skipped intentionally (low ROI, no candidate corroboration) | S1, S2, S3 |
 
-**Total questions to prep: 12 (4 high-level + 8 interview-ready solutions)**
-**Interview-ready solutions written: A1, A2, C1, C2, C3, D1, D2, D3**
-**Status: ✅ COMPLETE — All confirmed & likely questions covered**
+> ⚠️ **Naming mismatch:** The `E1-` and `E2-` files in r2-solutions/ were written independently — they cover a Search System and an Authentication System respectively. They do NOT correspond to this file's E1 (OOD chess) or E2 (parking lot). The questions master list and r2-solutions/ use the same prefixes for different problems. Treat them as standalone bonus solutions.
+
+**Total confirmed+likely questions in this file: 16**
+**Interview-ready solutions in r2-solutions/: A1, A2, A3, B1, C1, C2, C3, CF1, D1, D2, D3, E1-search-system, E2-authentication-system (13 files)**
+**Still only in DOCUSIGN_PREP.md (high-level): B2, B3**
+**OOD chess game (questions-file E1): not written — single Glassdoor report Sep 2025**
 
 ---
 
@@ -99,4 +144,6 @@
 
 | Date | Change |
 |---|---|
+| Jul 5, 2026 | **B1 and A3 promoted to r2-solutions/.** Full 15-section 60-min solutions written for Subscription Billing API (`B1-subscription-billing.md`) and Worldwide Video Distribution (`A3-video-distribution.md`). Both use progressive 3-stage HLD. Coverage count updated from 11 to 13. B2 and B3 remain in DOCUSIGN_PREP.md only. Coverage Summary updated to reflect actual r2-solutions/ state; CF1, E1-search-system, E2-authentication-system coverage confirmed; naming mismatch between questions-file E1/E2 and r2-solutions E1/E2 documented. |
 | June 2026 | File created. Research basis: DocuSign official PDF (4 pages) + 16 web searches + 10 page fetches across Glassdoor, Blind, Exponent, InterviewQuery, 1Point3Acres, LinkedIn, Design Gurus. |
+| July 2026 | Second research pass added (Jul 2026 section above). Newly surfaced: E1 OOD chess (⭐ Sep 2025 Glassdoor), E4 WhatsApp E2E (⭐ 2025 LC Discuss), E2/E3/E5 (🔶 aggregator). Format conflict documented. P3 vs P4 split noted. |

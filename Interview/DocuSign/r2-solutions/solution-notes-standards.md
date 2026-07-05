@@ -61,6 +61,46 @@ Every solution file has these sections, in this order. Do not skip any.
 
 ---
 
+### Section -1 — 🎯 What Is This System? (Pre-Interview Orientation)
+
+**Placed before the interview delivery framework.** This is NOT a section you deliver in the interview — it is a reader-orientation block for you, the person studying. Its purpose is to ground you in what you're actually building before your working memory fills up with trade-offs.
+
+Every reader should be able to answer three questions after reading this section:
+
+1. What does this system do? (plain English, no jargon)
+2. Which real companies have built it? (names + one-line description)
+3. Why is it hard? (one sentence on the core scaling or correctness challenge)
+
+**Format:**
+
+```markdown
+## 🎯 What Is This System?
+
+**In plain English:** [2-sentence plain description — no jargon, no acronyms]
+
+**Real-world examples:**
+
+| System / Company | What they built |
+|---|---|
+| **[Company A]** | [one-line description] |
+| **[Company B]** | [one-line description] |
+| **[Company C]** | [one-line description] |
+
+**Core user journey:** [One sentence from the user's perspective — what they do, what they get]
+
+**Why it's hard to build at scale:** [One sentence naming the specific technical failure mode or correctness requirement]
+```
+
+**Rules:**
+- Keep the whole section under 20 lines
+- "In plain English" must be understandable by a non-engineer
+- Real-world examples table: 4–6 rows; include the company that is most domain-relevant to the interview (for DocuSign questions: include DocuSign if applicable)
+- "Why it's hard" names a concrete failure mode — not "it's complex" or "it requires scale"
+
+**Placement:** After the opening `---` divider, before `## 🧠 How to Use This File` (or before `## Section 0` in files that don't have a How-to-Use block).
+
+---
+
 ### Section 0 — Question Identity Card
 
 ```markdown
@@ -223,6 +263,32 @@ ASCII diagram first, explanation second. Draw the boxes, then walk through the d
 
 **Rule:** Every box in the diagram must be justified. Don't draw a Kafka if you don't explain why you need it.
 
+**⭐ NEW MANDATORY RULE — Quantified Stage Transition Thresholds:**
+
+Every Stage N → Stage N+1 transition must include a specific number that triggers the evolution. Do not say "Stage 1 breaks" — say *why it breaks at what load*.
+
+```markdown
+BREAKING POINT: Stage 1 breaks at [X req/sec / Y GB / Z concurrent connections]
+  because [specific resource — Postgres CPU / Redis memory / TCP connections / thread pool]
+  is exhausted at that load. At this threshold, [observable symptom: P99 > X ms / OOM /
+  connection refused]. This is why Stage 2 is needed.
+```
+
+**Format for each stage:**
+```markdown
+══════════════════════════════════════════════════
+STAGE N — [Name] ([scale this handles])
+══════════════════════════════════════════════════
+
+[ASCII diagram]
+
+BREAKING POINT: [specific metric] hits [specific number] at [specific load].
+  Observable symptom: [what the user or engineer sees].
+  Why Stage N+1 is needed: [one sentence].
+```
+
+**Why this matters:** An interviewer asking "at what point does Stage 1 fail?" expects a number. "It breaks under load" scores zero. "Single Postgres primary tops out at ~5K reads/sec; our peak is 3,300 redirect/sec. With 3 other query types running, CPU saturates at ~2,800 redirect/sec, causing P99 > 500ms — that's when we need Stage 2" scores full marks.
+
 ---
 
 ### Section 7 — 🔬 Core Component Deep Dives (Minutes 20–38)
@@ -253,25 +319,77 @@ The trade-off I'm accepting is [what you lose].
 
 ---
 
-### Section 8 — 🌐 API Design (Type B questions + Type A where relevant)
+### Section 8 — 🌐 API Design
 
-Define the exact API contract. For DocuSign's product architecture questions, this is often the main deliverable.
+**Placement — universal rule: API design BEFORE HLD, always.**
 
-**Format:**
+> Validated by Hello Interview, interviewing.io, DesignGurus/Grokking (2024-2025 frameworks). Logic: API defines *what* the system does → HLD shows *how* it does it. You can't draw an HLD in the air without first naming what it needs to implement.
+
+| Type | When to deliver | Time budget | Role |
+|---|---|---|---|
+| **Type B (Product Architecture)** | Minutes 8–13 — after entities (Section 3.5), before scale (Section 4) | 8–13 minutes, full derivation + stories | Primary deliverable. The API contract IS the answer. |
+| **Type A (System Design)** | After scale/variation (Sections 4–5), before HLD (Section 6) | 3–5 minutes, concise | Supporting. Names the interface; HLD implements it. |
+| **Mixed (A+B)** | After entities (Section 3.5), before scale — closer to Type B | 5–8 minutes | Both matter; API gives the vocabulary for the HLD discussion. |
+
+**The one difference between Type A and Type B is depth, not position.** Both put API before HLD. Type B spends 8–13 minutes on it (it's the primary deliverable). Type A spends 3–5 minutes (quick boundary statement before the architecture conversation).
+
+---
+
+**Section 8 has three parts — all three are required:**
+
+**Part 1 — 🧠 Derivation Framework (narrative, not a checklist)**
+
+Do NOT write "Question 1: Who calls this? Question 2: What do they send?" — that's mechanical and doesn't survive stress. Instead, write a narrative derivation that shows the thought process applied to 2-3 actual FRs from Section 3:
+
+```markdown
+### 🧠 How to Derive These Endpoints (Reconstruct, Don't Recall)
+
+Every endpoint starts from a functional requirement. The move is: **FR → operation → resource → HTTP method → contract.**
+
+**"[FR text]"** → [operation type] → resource is `[noun]` → `[METHOD /path]`. Who calls it? [auth]. What's the minimum they send? [request]. What do they get back? [response — and WHY that specific field matters].
+
+**"[FR with a constraint in it]"** → The FR itself names the constraint. This tells you: [specific API design implication — header, status code, response field].
+
+**Validation check:** After deriving all endpoints, map each back to a FR. Orphan endpoints shouldn't exist. FRs with no endpoint are gaps.
+```
+
+**Rules for the derivation narrative:**
+- Walk through 2-4 FRs — enough to teach the pattern, not all of them
+- For each FR, show the full chain: FR text → operation → resource → method → at least one non-obvious contract detail
+- At least one of the examples should show a FR constraint shaping the contract (idempotency, a specific status code, a specific response field)
+- Keep the whole section under 20 lines
+
+**Part 2 — Core Endpoints table (compact quick reference)**
 
 ```markdown
 ### Core Endpoints
 
-| Method | Path | Auth | Request body | Response | Status codes |
+| Method | Path | Auth | Request Body | Response | Status Codes |
 |---|---|---|---|---|---|
-| POST | /v1/... | JWT Bearer | {fields} | {fields} | 201, 400, 409 |
-
-### Key Design Decisions:
-- Idempotency: [how handled — Idempotency-Key header, PUT semantics]
-- Versioning: [/v1/ in path vs Accept-Version header — and why]
-- Pagination: [cursor vs offset — and why]
-- Error format: [standard error body]
+| [METHOD] | /v1/... | [auth] | {fields} | {fields} | [codes] |
 ```
+
+Rules:
+- Keep the table to 6 columns maximum — do not add a Responsibility column (too wide)
+- Status codes: always include at least one error code (4xx), not just 200/201
+- Response: include only what the caller needs next — not the entire object
+- 4–8 endpoints typical for Type B; 2–4 for Type A
+
+**Part 3 — 🔍 Endpoint Stories (why each endpoint exists)**
+
+After the table, one paragraph per endpoint:
+
+```markdown
+### 🔍 Endpoint Stories — Why Each One Exists
+
+**`[METHOD /path]`** — [one sentence: what this endpoint does in plain English]. [One sentence: what makes it non-obvious or interesting — the status code choice, the response field that tells a story, the auth requirement, the probe the interviewer will ask]. [Optional: the FR it directly satisfies].
+```
+
+Rules:
+- Not every endpoint needs the same depth — focus paragraph length on the interesting ones
+- Each story must contain at least one thing the interviewer will probe on
+- For Type A files where API is supporting, endpoint stories can be shorter — 1-2 sentences each
+- Think as an interviewer: what would make me ask a follow-up about this endpoint?
 
 ---
 
@@ -310,13 +428,36 @@ Three must-cover trade-offs. For each: what you chose, what you gain, what you l
 - **Chose:** [option]
 - **Gain:** [what]
 - **Lose:** [what]
-- **Failure mode if wrong:** [what breaks]
+- **Failure mode if wrong:** [what breaks technically — AND what the user/business experiences]
 
 ### Trade-off 2: ...
 ### Trade-off 3: ...
 ```
 
 **The DocuSign PDF says:** "Focus on Trade-offs: We are more interested in seeing how you think through the pros and cons of different approaches."
+
+**⭐ NEW MANDATORY RULE — Business Impact in Every Failure Mode:**
+
+"Failure mode if wrong" must have TWO layers:
+1. **Technical breakdown** — what component fails, what resource is exhausted
+2. **Business impact** — what the user perceives, what the business metric takes a hit
+
+```markdown
+- **Failure mode if wrong:** [Technical]: [component] fails / [resource] exhausted.
+  [Business]: Users experience [observable UX symptom]. For DocuSign, this means
+  [specific product consequence — signing flow blocked / envelope delivery delayed /
+  audit trail unavailable / customer support ticket spike].
+```
+
+**Example (good):**
+> "Failure mode if wrong: if we chose sync entitlement calls, entitlement service 5s timeout → payment API P99 spikes. For DocuSign's Commerce Backend: customers who just paid see a spinning button for 5+ seconds. ~15% abandon and call support thinking the charge was taken. SLA breach = escalation to VP of Engineering."
+
+**Example (bad — no business layer):**
+> "Failure mode if wrong: entitlement service timeout causes payment API to return 500."
+
+The bad example describes what breaks technically. The good example describes what the interviewer's manager would see in a post-incident review.
+
+**Why this rule exists:** Senior engineers are trusted with on-call because they can answer: "What is the customer impact?" If your failure modes stop at the technical layer, you sound like a junior engineer who's never been paged at 3 AM.
 
 ---
 
@@ -329,6 +470,31 @@ What makes YOUR answer DocuSign-flavored vs a generic answer from a textbook. Th
 - The e-signature / legal compliance angle
 - The specific features DocuSign's product has that your system must support
 - KYC (Know Your Customer) / audit trail / non-repudiation where relevant
+
+**⭐ NEW MANDATORY RULE — No Generic Dimension Mapping:**
+
+Section 14 (DocuSign Dimensions Checklist) must NOT be filled with boilerplate. Each row must contain a product-specific, DocuSign-grounded sentence — not a template phrase.
+
+**Bad (boilerplate, scores zero):**
+> "Scalability: horizontal sharding handles growth."
+
+**Good (product-grounded, scores full):**
+> "Scalability: at DocuSign's 1.6M paying orgs, the entitlement read path sees 5,500 req/sec peak — DB reads are impossible; Redis cache with 30-second TTL is the only way to stay within the payment P99 SLO."
+
+**The test for each dimension cell:**
+- Does it name a specific number from Section 4 (scale estimation)?
+- Does it name a specific DocuSign product scenario (not "a SaaS product")?
+- Could this sentence appear verbatim in a post-incident RCA or architecture review?
+
+If all three answers are NO → rewrite the cell.
+
+**For Section 11 narrative content**, each point must connect to DocuSign's **actual business reality**:
+- Name a DocuSign product tier, team, or customer segment
+- Reference a compliance standard they actually certify to (SOC 2, GDPR, ESIGN Act, PCI-DSS)
+- Describe a failure scenario that would generate a real customer support ticket at DocuSign
+
+**Template sentence pattern for Section 11 depth points:**
+> "For DocuSign's [specific team/product/customer type], [your design decision] is required because [specific compliance/business/product constraint]. Without it, [what specific DocuSign failure scenario occurs]."
 
 ---
 
@@ -412,6 +578,8 @@ If you had 60 seconds to summarize your entire answer, this is what you'd say. R
 
 ## 🧪 Pre-Write Checklist (Run Before Writing Each Solution File)
 
+**Structure:**
+- [ ] **Section -1 (What Is This System?)** written — plain English description, 4–6 real-world examples, one-line user journey, one-line "why it's hard"
 - [ ] Section 0 (Identity card) filled in — interview type confirmed
 - [ ] Section 2 (Clarifying questions) has WHY for each question and the architectural fork
 - [ ] Section 5 (Requirements variation) covers at least 5 axes of variation
@@ -423,6 +591,12 @@ If you had 60 seconds to summarize your entire answer, this is what you'd say. R
 - [ ] Section 14 (Dimensions checklist) filled in — each dimension either addressed or explicitly out of scope
 - [ ] ASCII diagram is readable and every box is justified
 - [ ] No concept note content reproduced here — cross-reference by link, don't copy
+
+**Quality gates (NEW — added Jul 5, 2026):**
+- [ ] **Section 6 breaking points**: Every stage transition has a quantified threshold — *"Stage N breaks at X req/sec because Y resource is exhausted at that load. Observable symptom: Z."* No stage transition says just "breaks" without a number.
+- [ ] **Section 10 business impact**: Every "Failure mode if wrong" has two layers — (1) technical breakdown + (2) user/business consequence. *"P99 spikes → users experience → DocuSign metric hits."* No failure mode stops at the technical layer.
+- [ ] **Section 14 DocuSign-specific**: Every dimension cell passes the 3-test: names a specific number from Section 4, names a specific DocuSign product scenario, could appear in a real RCA. No boilerplate "scalability: horizontal sharding" cells.
+- [ ] **Status codes**: Every API endpoint's status codes are logically consistent with the assumed design (no 409 if custom codes are out of scope, no 200 where 201 is correct, etc.). Each 4xx code has a named trigger in the Endpoint Stories.
 
 ---
 
@@ -443,4 +617,6 @@ All resources were pre-vetted in `SystemDesignConcepts/resources.md`. Key source
 
 | Date | Change |
 |---|---|
+| Jul 5, 2026 | **3 new quality gates added to Pre-Write Checklist.** (1) Section 6 quantified breaking points: every stage transition requires a specific threshold (req/sec, GB, connections) and observable symptom — "breaks under load" is no longer acceptable. (2) Section 10 business impact: every failure mode requires two layers — technical breakdown + user/business consequence (what DocuSign customer sees, what metric takes a hit). (3) Section 14 DocuSign-specific dimensions: every checklist cell must pass a 3-point test (specific number from Section 4, specific DocuSign product scenario, RCA-ready prose). Template sentence pattern added. Pre-Write Checklist split into Structure and Quality Gates sections. |
+| Jul 5, 2026 | **Section -1 "What Is This System?" added as a mandatory pre-section.** Added to all 14 existing solution files (A1, A2, A3, B1, C1, C2, CF1, D1, D2, D3, E1, E2) and codified in the Pre-Write Checklist. Purpose: ground the reader in what system they're solving before working memory fills up with trade-offs. Format: plain-English description + real-world examples table + one-line user journey + one-line "why it's hard." |
 | June 2026 | File created. Defines 15-section solution note format, two interview types (System Design vs Product Architecture), requirements variation table as key differentiator, 60-minute time budget, DocuSign 7-dimension checklist. Based on research: RESHADED framework, hellointerview.com delivery framework, DocuSign PDF interview guide. |

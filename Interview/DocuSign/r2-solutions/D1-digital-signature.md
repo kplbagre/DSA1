@@ -6,6 +6,27 @@
 
 ---
 
+## 🎯 What Is This System?
+
+**In plain English:** A digital signature system lets one or more parties sign a legal document electronically using public-key cryptography. The system proves that a specific person signed a specific document at a specific time — and that the document has not been altered since — creating a tamper-evident, legally admissible audit trail.
+
+**Real-world examples:**
+
+| System / Company | What they built |
+|---|---|
+| **DocuSign** | The company you're interviewing at — the world's #1 e-signature platform, 1B+ envelopes signed |
+| **Adobe Acrobat Sign** | E-signatures integrated into the Adobe document workflow |
+| **HelloSign (Dropbox Sign)** | Developer-friendly e-signature API and UX |
+| **PandaDoc** | Document automation + signing for sales contracts |
+| **eSignLive (OneSpan)** | High-assurance signing for banks and regulated industries |
+| **DocHub** | Lightweight PDF signing and form filling |
+
+**Core user journey:** Sender uploads a contract PDF, assigns signature fields to 3 recipients in a specific order → each recipient receives an email link → opens the document → signs using their private key → after all parties sign, the sealed document and an audit certificate are available to all parties permanently.
+
+**Why it's hard to build at scale:** Non-repudiation is a legal requirement — a signer must never be able to claim they didn't sign; the audit trail must be cryptographically tamper-evident, not just a DB record; multi-party signing order is a distributed workflow where any party can decline or time out; and the sealed document must be legally equivalent to a wet signature in 60+ countries.
+
+---
+
 ## Section 0 — Question Identity Card
 
 | | |
@@ -102,6 +123,48 @@ Then pivot immediately to Section 2 (clarifying questions). Do NOT start drawing
 
 ---
 
+## Section 8 — 🌐 API Design (Minutes 8–13) ⭐ Mixed A+B — State Contract Early
+
+> **Why here:** D1 is Mixed A+B. The API contract makes the signing workflow concrete before you explain the PKI internals. Without the contract, "sequential signing with audit" is abstract; with it, the interviewer can follow each step.
+
+### 🧠 How to Derive These Endpoints
+
+Signing is a workflow with named state transitions. The FR "documents must be signed by one or more parties in a specified order" gives you the state machine: DRAFT → PENDING_SIGNATURE → FULLY_SIGNED (or REJECTED). Each state transition is an action.
+
+"Create a document for signing" → CREATE → `POST /v1/documents`. The body must capture signing order at creation time — `signing_order: "sequential" | "parallel"` and `signer_user_ids: [...]`. Why at creation? Because once the workflow starts, reordering signers invalidates any signatures already applied.
+
+"A designated signer submits their cryptographic signature" → state transition → `POST /v1/documents/{id}/sign`. Not `PATCH /v1/documents/{id}` with `{action: "sign"}` — action sub-resources are cleaner for permission checks. The body carries `signature_bytes` (base64-encoded RSA/ECDSA signature) and `certificate_serial` so the server can look up the user's public key and verify. Idempotency-Key header is mandatory: if the client's POST succeeds but the response is lost (network timeout), a retry must not double-sign.
+
+"A signer can reject the document" → state transition → `POST /v1/documents/{id}/reject`. Parallel to `/sign`. The `reason` field feeds into the audit log and is surfaced to the document creator. In sequential order, rejection resets the workflow to the previous signer — the response includes `reset_to_signer` so the creator knows who needs to re-sign.
+
+"Check signing status" → READ → `GET /v1/documents/{id}`. Returns the full signer list with individual statuses — who signed, who is pending, who rejected.
+
+"Audit trail for legal proof" → `GET /v1/documents/{id}/audit`. Every action (view, sign, reject, webhook sent) is an immutable append-only event. The audit endpoint is the legal chain of custody.
+
+Validation check: each FR maps to an endpoint. The "webhook notification on signing completion" FR has no endpoint — webhooks are outbound from the system, not inbound REST calls. Correct to have no endpoint here.
+
+### Core Endpoints
+
+| Method | Path | Auth | Request | Response | Status Codes |
+|---|---|---|---|---|---|
+| POST | `/v1/documents` | JWT Bearer | `{title, signer_user_ids, signing_order}` | `{document_id, status, created_at}` | 201, 400, 409 |
+| POST | `/v1/documents/{id}/sign` | JWT Bearer | `{signature_bytes (base64), certificate_serial}` | `{document_id, status, next_signer, signed_at}` | 200, 400, 403, 409 |
+| POST | `/v1/documents/{id}/reject` | JWT Bearer | `{reason}` | `{document_id, status, reset_to_signer}` | 200, 400, 403 |
+| GET | `/v1/documents/{id}` | JWT Bearer | — | `{document_id, status, signers: [{user_id, order, status, signed_at}]}` | 200, 403, 404 |
+| GET | `/v1/documents/{id}/audit` | JWT Bearer | — | `{audit_events: [{action, timestamp, certificate_serial, signature_hash, client_ip}]}` | 200, 403, 404 |
+
+### 🔍 Endpoint Stories
+
+**`POST /v1/documents`** is where the signing workflow is configured, not started. The document is created in `DRAFT` status. Including `signer_user_ids` and `signing_order` at creation time (not in a separate "start workflow" call) keeps the API simple: one POST creates and configures. The `409 Conflict` case: the document already exists (if caller retries with the same idempotency key). `400 Bad Request` if `signing_order = "sequential"` but `signer_user_ids` is empty.
+
+**`POST /v1/documents/{id}/sign`** carries the cryptographic payload. `signature_bytes` is the RSA/ECDSA signature of the document hash, base64-encoded. The server verifies it using the public key from `UserCertificate` matching `certificate_serial`. Two interesting status codes: `403 Forbidden` means it's not your turn (sequential order, the previous signer hasn't signed yet) — you're an authorized user but not authorized for this action right now. `409 Conflict` means you already signed — the idempotency check. The `Idempotency-Key` header is mandatory on this endpoint: if the client POSTs, the server signs the document, but the response is lost in transit, the retry must return the same `{document_id, status}` without signing twice. Implementation: cache response in Redis for 24 hours keyed by `Idempotency-Key`.
+
+**`POST /v1/documents/{id}/reject`** is the failure path. In sequential signing, if signer #2 rejects, the workflow can reset to signer #1 for revision — the `reset_to_signer` field in the response tells the creator who to contact. The probe: "What if rejection happens in parallel signing when two signers have already signed?" This is a business rule question, not a technical one — document the assumption ("rejection invalidates all previous signatures and resets to DRAFT") and move on.
+
+**`GET /v1/documents/{id}/audit`** carries `signature_hash` in each audit event — the hash of the document bytes at the moment of signing. If the document is later modified (even by the system), the hash won't match the stored hash. This is the non-repudiation proof: a signer cannot later claim "that's not the document I signed" because the hash of what they signed is in the immutable audit log. Add cursor-based pagination: large documents with many signers over 7 years can accumulate thousands of audit events.
+
+---
+
 ## Section 4 — 🔢 Scale Estimation (Minutes 5–10)
 
 **Traffic:**
@@ -145,105 +208,163 @@ Then pivot immediately to Section 2 (clarifying questions). Do NOT start drawing
 
 ## Section 6 — 🏗️ High-Level Architecture (Minutes 10–25)
 
-### 🎨 ASCII Architecture Diagram
+### Stage 1 — Monolith + Direct DB (Baseline)
+
+> Start here. Works at low volume. Two breaking points: (1) synchronous webhook couples external system availability to signing success; (2) every certificate lookup hits Postgres at 35 sig/sec — no caching, no isolation.
 
 ```
-  DIGITAL SIGNATURE SYSTEM — HIGH-LEVEL ARCHITECTURE
-  ───────────────────────────────────────────────────────────────
+── Stage 1: Monolith ─────────────────────────────────────────────────
 
-  CLIENT (Web, Mobile, API)
-         │
-         ▼
-  ┌─────────────────────────────────────────────────────────┐
-  │                    API Gateway                           │
-  │         (Auth, rate limiting, tenant isolation)         │
-  └──────────────────────┬──────────────────────────────────┘
-                         │
-         ┌───────────────┼───────────────┐
-         │               │               │
-         ▼               ▼               ▼
-  ┌────────────┐  ┌────────────┐  ┌──────────────┐
-  │  Document  │  │  Signature │  │    Audit     │
-  │  Service   │  │  Service   │  │    Service   │
-  │ (CRUD ops) │  │(sign, v-fy)│  │(log queries) │
-  └──────┬─────┘  └──────┬─────┘  └──────┬───────┘
-         │               │               │
-         ▼               ▼               ▼
-    ┌────────────────────────────────────────┐
-    │   PostgreSQL Cluster (Primary + 2HA)   │
-    │  ┌───────────────────────────────────┐ │
-    │  │ Docs | Signatures | Audit Logs    │ │
-    │  │ Sharded by customer_id for scale  │ │
-    │  └───────────────────────────────────┘ │
-    └────────────────────────────────────────┘
-         │                │
-         ▼                ▼
-    ┌──────────┐    ┌────────────────┐
-    │  Redis   │    │  Message Queue │
-    │(status   │    │   (SQS/Kafka)  │
-    │ cache)   │    │ (webhook retry)│
-    └──────────┘    └────────────────┘
-                         │
-                         ▼
-                   ┌──────────────┐
-                   │ Webhook Fano │
-                   │  (external    │
-                   │  callbacks)   │
-                   └──────────────┘
+ ┌────────────┐  POST /v1/documents/{id}/sign
+ │   Client   │──────────────────────────────────────────────────────▶
+ └────────────┘
+       ▲  200 OK         ┌────────────────────────────────────────────┐
+       └─────────────────│              API Server                    │
+                         │  1. JWT auth + tenant isolation check      │
+                         │  2. SELECT cert FROM user_certificates     │  ← full DB hit
+                         │  3. Verify RSA signature (~50-100ms)       │
+                         │  4. UPDATE signing_sessions SET signed     │
+                         │  5. INSERT INTO audit_signature_events     │
+                         │  6. POST webhook to customer URL (sync)    │  ← blocking
+                         └──────────────────┬─────────────────────────┘
+                                            │
+                         ┌──────────────────▼─────────────────────────┐
+                         │                PostgreSQL                   │
+                         │  documents           (status, metadata)     │
+                         │  signing_sessions    (who signed, order)    │
+                         │  audit_signature_events (append-only log)   │
+                         │  user_certificates   (certs + revocation)   │
+                         └────────────────────────────────────────────┘
 
-  ┌─────────────────────────────────────────┐
-  │         PKI / Cert Management           │
-  │  ┌───────────────────────────────────┐  │
-  │  │ CA Root Cert (offline, HSM)       │  │
-  │  │ Intermediate CA (online, used     │  │
-  │  │   to sign user certs)             │  │
-  │  │ User Public Keys / Certs          │  │
-  │  │ (Redis for hot cache + DB)        │  │
-  │  └───────────────────────────────────┘  │
-  └─────────────────────────────────────────┘
+BREAKING POINT 1:
+   Step 6 — synchronous webhook: if the customer's server is slow or down,
+   the signing HTTP response is blocked or times out. A webhook failure
+   fails the signing — external system availability controls signing availability.
 
-  KEY INVARIANT:
-     Audit log is append-only + immutable.
-     No updates or deletes — only inserts.
-     This guarantees non-repudiation at scale.
+BREAKING POINT 2:
+   Step 2 — cert lookup on every sign request hits the DB directly.
+   At 35 sig/sec, 35 concurrent reads against the same cert table.
+   No caching. Every request pays 10-20ms DB round-trip for cert data
+   that almost never changes.
 ```
 
-**Data flow walkthrough (say this out loud):**
+**WHICH key management model?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| DocuSign-hosted CA + HSM | Seamless UX — one-click signing; DocuSign manages cert lifecycle; enterprise adoption | DocuSign holds private keys — auditors may question non-repudiation; HSM compromise exposes all keys | ✅ Best for MVP — enterprise UX wins; non-repudiation via audit trail + 2FA context |
+| BYOK (user generates + holds private key) | User owns their signing identity; cleaner cryptographic non-repudiation | Users lose keys → can't sign; key rotation is a UX nightmare; support ticket flood | ❌ Operational nightmare at 1M users |
+| Hybrid (DocuSign CA + user holds private key in device TPM) | User owns key; DocuSign manages cert lifecycle | Device-dependent; tricky on mobile; requires TPM/SE support | ⚠️ Right direction for future; complex for MVP |
+
+> 📖 Full: `SystemDesignConcepts/Production-Grade/System-Design-Patterns/13-security-pki.md`
+
+---
+
+### Stage 2 — Service Split + Redis + Async Webhook (Production)
+
+> **Why we evolve:** Stage 1 has two breaking points — sync webhook couples signing to external systems, and uncached cert lookups hit the DB on every sign. Fix: (1) decouple webhook delivery via Kafka; (2) cache certificates in Redis. This also separates services for independent scaling and compliance isolation.
+
+```
+── Stage 2: Production ───────────────────────────────────────────────
+
+ ┌────────────┐  POST /v1/documents/{id}/sign
+ │   Client   │──────────────────────────────▶
+ └────────────┘
+       ▲  200 OK  ┌────────────────────────────────────────────────┐
+       └──────────│                 API Gateway                   │
+                  │  JWT auth + rate limit + tenant isolation     │
+                  └─────────────────┬──────────────────────────────┘
+                                    │
+                  ┌─────────────────▼──────────────────────────────┐
+                  │            Signature Service                   │
+                  │  1. GET cert:{serial} from Redis (sub-ms)     │
+                  │     cache miss → SELECT from Postgres → cache │
+                  │     Redis CRL set SISMEMBER check (< 1ms)     │
+                  │  2. Verify RSA signature SHA256withRSA (~50ms)│
+                  │  3. UPDATE signing_sessions SET signed         │
+                  │  4. INSERT audit_signature_events (immutable) │
+                  │  5. Publish "doc.signed" to Kafka             │  ← returns immediately
+                  └──────┬─────────────────────────┬──────────────┘
+                         │ writes                   │ Kafka event
+          ┌──────────────▼────────────────┐  ┌─────▼─────────────────────────┐
+          │          PostgreSQL           │  │            Kafka               │
+          │  documents   (status)         │  │  doc.signed                   │
+          │  signing_sessions (workflow)  │  │      → Webhook Service         │
+          │  audit_events (append-only)  │  │        (retry, idempotent)     │
+          │  user_certificates (certs)   │  └───────────────────────────────┘
+          └──────────────────────────────┘
+                  │ cert cache
+          ┌───────▼──────────────────────────────────────────────┐
+          │                     Redis                            │
+          │  cert:{serial}     → cert PEM       (1hr TTL)       │
+          │  revoked_serials   → Set of CRL     (60s refresh)   │
+          │  status:{doc_id}   → signing status (5min TTL)      │
+          └──────────────────────────────────────────────────────┘
+          ┌───────────────────────────────────────────────────────┐
+          │             PKI Infrastructure                        │
+          │  CA Root Cert     (offline, HSM — air-gapped)        │
+          │  Intermediate CA  (online — signs user certs)        │
+          │  CRL published every 60s → Redis Set                 │
+          └───────────────────────────────────────────────────────┘
+
+KEY INVARIANT:
+   Audit table is append-only + immutable — DB trigger prevents UPDATE/DELETE.
+   Non-repudiation: every signature event records timestamp (UTC), cert serial,
+   signature hash, client IP — legally defensible, tamper-proof.
+   Redis cert cache keeps certificate lookup sub-millisecond on the critical path.
+   Kafka decouples webhook delivery — external system down never fails a signing.
+   Signing uses STRONG CONSISTENCY — signing_sessions update is immediate,
+   not eventually consistent — legal state cannot be ambiguous.
+```
+
+**WHICH audit trail immutability approach?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Application-only enforcement (code never calls DELETE) | Simple | Malicious DBA or code bug wipes audit trail; legally indefensible | ❌ Trust in code alone is not enough for legal compliance |
+| DB-level trigger + append-only constraint | Immutability enforced at DB layer — survives code bugs, DBA mistakes, and SQL injection | Trigger overhead ~5%; soft-delete patterns blocked | ✅ Best — auditors accept DB constraints as evidence of immutability |
+| Blockchain-backed audit log | True cryptographic immutability; no central authority | Slow (consensus overhead); high cost; overkill for a signing system with its own CA | ❌ Cost and complexity not justified at this scale |
+
+> 📖 Full: `SystemDesignConcepts/Production-Grade/System-Design-Patterns/13-security-pki.md`
+
+**WHICH signing workflow model?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Simple set (JSON array `[{user, signed: true/false}]`) | Zero extra code; fast | No enforced order; can't reject + rollback; can't escalate or expire; not ESIGN-compliant | ❌ Can't meet legal signing order requirements |
+| State machine (explicit PENDING→SIGNED→REJECTED transitions) | Enforces sequential order; handles rejections + rollback + expiry; standards-compliant | Transition validation logic needed | ✅ Best — matches enterprise e-signature workflows |
+| Event-sourced workflow | True audit trail; fully replayable state | Expensive queries (replay all events for current state); overkill for MVP | ⚠️ Good for complex compliance; migrate here at DocuSign's full complexity |
+
+> 📖 Full: `SystemDesignConcepts/Production-Grade/System-Design-Patterns/13-security-pki.md`
+
+**WHICH webhook delivery?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Sync HTTP (call customer URL inline) | Simple; immediate delivery | Customer server slow/down → signing response delayed or fails; couples signing availability to external systems | ❌ Breaks signing availability |
+| Redis pub/sub | Low latency | At-most-once — if Webhook Service is down when event fires, event is permanently lost | ❌ Unreliable for legal notification |
+| Kafka (at-least-once, durable) | Signing returns immediately after Kafka publish; webhook retried until delivered; dead-letter queue for persistent failures | Extra infra | ✅ Best — signing and webhook delivery are completely decoupled |
+
+> 📖 Full: `SystemDesignConcepts/Production-Grade/Infrastructure/19-message-queues-kafka-rabbitmq.md`
+
+---
+
+### Data Flow Walkthrough (say this out loud)
 
 **Flow 1 — Creating a document for signature:**
-1. Client calls `POST /v1/documents` with doc metadata + list of signers (IDs and order)
-2. **API Gateway** validates JWT, checks tenant isolation
-3. **Document Service** creates record in DB (status = PENDING_SIGNATURE)
-4. **Document Service** initializes signing workflow: creates a **SigningSession** for each signer (order matters)
-5. First signer gets notified (webhook or email) → ready to sign
+1. `POST /v1/documents` with metadata + signer list. API Gateway validates JWT, checks tenant.
+2. Document Service creates `documents` record (PENDING_SIGNATURE) + one `signing_sessions` row per signer with `signer_order`.
+3. First signer notified via Kafka → Notification Service (email/push). Ready to sign.
 
-**Flow 2 — Signing a document:**
-1. Client calls `POST /v1/documents/{doc_id}/sign` with signature bytes + certificate (public key)
-2. **API Gateway** validates JWT, extract user identity
-3. **Signature Service**:
-   - Verifies the signature using signer's public key (PKI validation) — recovers hash from signature, re-hashes document, compares
-   - If signature invalid → return 400 (Signature verification failed)
-   - If signature valid → **appends to audit log** (immutable insert): timestamp, user ID, IP, certificate serial, signature bytes
-   - Updates **signing session** — mark this signer as signed, move to next signer if sequential
-   - If all signers done → update doc status to FULLY_SIGNED
-4. **Message Queue**: emit event "document fully signed" → triggers webhook fanout
-5. Response to client: 200 OK + next_signer info (if sequential)
+**Flow 2 — Signing a document (Stage 2):**
+1. `POST /v1/documents/{id}/sign` with `{signature_bytes, certificate_serial}`.
+2. Signature Service: (a) GET cert from Redis (`cert:{serial}`, 1hr TTL) — cache miss → DB fetch → cache; (b) `SISMEMBER revoked_serials {serial}` — O(1) revocation check; (c) RSA verify (~50ms); (d) if valid: UPDATE `signing_sessions`, INSERT `audit_signature_events` (immutable); (e) publish `doc.signed` to Kafka → return 200 immediately.
+3. Kafka consumer (Webhook Service) delivers notification to customer URL with retries. Signing is not affected by delivery outcome.
 
 **Flow 3 — Querying audit trail (legal discovery):**
-1. Client calls `GET /v1/documents/{doc_id}/audit` (requires read permission)
-2. **Audit Service** queries immutable log (no filtering, just order-by timestamp)
-3. Returns full chain: who signed, when, from where, with which certificate, signature hash
-4. All timestamps are in UTC; immutable forever
-
-**Why each component:**
-- **API Gateway**: Auth (JWT) + rate limiting (35 sig/sec per customer) + tenant isolation (only see your docs)
-- **Document Service**: CRUD on documents + workflow init
-- **Signature Service**: PKI validation (slow path — ~50ms per signature verify) + audit log writes (fast append)
-- **Audit Service**: Legal audit trail queries (separate from signing for compliance)
-- **PostgreSQL + replication**: Strong consistency guarantee; each write is immediately durable to 2 replicas
-- **Redis cache**: Hot "is fully signed?" queries (5:1 read ratio); expires on FULLY_SIGNED
-- **Message Queue + webhook fanout**: Async notification when doc is fully signed; retry logic for external systems
-- **PKI/Cert store**: Redis cache (hot) for cert validation; DB for long-term storage + revocation list
+1. `GET /v1/documents/{id}/audit` (JWT auth, tenant isolation).
+2. Audit Service queries `audit_signature_events ORDER BY event_timestamp ASC` — no filter, pure chronological append-only log.
+3. Returns: who signed, when (UTC), from where (IP), with which cert, signature hash. Immutable forever — DB trigger prevents tampering.
 
 ---
 
@@ -428,9 +549,10 @@ CREATE TABLE audit_signature_events (
     
     tenant_id UUID NOT NULL,
     
-    -- Constraints: this table is append-only
-    CONSTRAINT audit_no_update AS (false) CHECK (false),
-    
+    -- Append-only enforcement: via trigger below (see prevent_audit_modification)
+    -- DO NOT add a CHECK constraint here — Postgres has no native append-only constraint;
+    -- the trigger is the correct mechanism.
+
     INDEX idx_doc_audit (document_id, event_timestamp),
     INDEX idx_signer_audit (signer_user_id, event_timestamp),
     INDEX idx_tenant_audit (tenant_id, event_timestamp)
@@ -664,35 +786,6 @@ public class SigningWorkflowService {
 
 ---
 
-## Section 8 — 🌐 API Design
-
-### Core Endpoints
-
-| Method | Path | Auth | Request body | Response | Status codes |
-|---|---|---|---|---|---|
-| POST | `/v1/documents` | JWT Bearer | `{title, description, signer_user_ids: [...], signing_order: 'sequential' \| 'parallel'}` | `{document_id, status, created_at}` | 201, 400, 409 |
-| POST | `/v1/documents/{doc_id}/sign` | JWT Bearer | `{signature_bytes: base64, certificate_serial: "0x1234"}` | `{document_id, status, next_signer: {user_id, order}, signed_at}` | 200, 400, 403, 409 |
-| POST | `/v1/documents/{doc_id}/reject` | JWT Bearer | `{reason: "I don't agree"}` | `{document_id, status, reset_to_signer: {user_id, order}}` | 200, 400, 403 |
-| GET | `/v1/documents/{doc_id}` | JWT Bearer | — | `{document_id, status, signers: [{user_id, order, status, signed_at}], fully_signed_at}` | 200, 403, 404 |
-| GET | `/v1/documents/{doc_id}/audit` | JWT Bearer | — | `{document_id, audit_events: [{signer_id, action, timestamp, certificate_serial, signature_hash, client_ip}]}` | 200, 403, 404 |
-
-### Key Design Decisions
-
-- **Idempotency:** Sign request includes `Idempotency-Key` header. If client retries, server returns cached response (same signature was already recorded). Storage: 24-hour Redis cache on Idempotency-Key → response.
-- **Pagination (Audit Log):** Cursor-based pagination using `order by id ASC` (since audit IDs are auto-increment). Client passes `?cursor=<last_id>&limit=100`. Prevents expensive OFFSET queries on large audit logs.
-- **Error body format:**
-  ```json
-  {
-    "error": "SIGNATURE_VERIFICATION_FAILED",
-    "message": "The provided signature does not match the document content.",
-    "timestamp": "2026-06-24T15:30:00Z"
-  }
-  ```
-- **Versioning:** `/v1/` in path (not `Accept-Version` header) for simplicity and cacheability.
-- **Auth:** Every endpoint requires JWT Bearer token with `sub` (user_id) and `tenant_id` claims.
-
----
-
 ## Section 9 — 🗄️ Data Model
 
 ### Core Tables
@@ -824,7 +917,7 @@ CREATE TABLE user_certificates (
 
 **Lose:** Can't re-verify signatures without the original signature bytes. If a dispute arises, we'd need to ask the user for the original signature bytes to re-verify.
 
-**Failure mode if wrong:** If you store the full signature bytes and you have 1B signature events/year at 256 bytes each, you're at 256 TB storage. Your S3 bill and query latency become untenable. Postgres can't handle 100GB+ audit tables efficiently.
+**Failure mode if wrong:** If you store the full signature bytes and you have 1B signature events/year at 256 bytes each, you're at 256 TB storage. Your S3 bill and query latency become untenable. Postgres can't handle 100GB+ audit tables efficiently. **Business impact:** Audit log queries for a specific envelope's signing history time out (>30s) as the table grows past 100GB — for DocuSign this means a compliance officer investigating a disputed signature cannot retrieve the event trail during a live legal hearing, must escalate to a DBA, and the delay is measured in hours instead of seconds — creating a discovery response failure.
 
 ---
 
@@ -836,7 +929,7 @@ CREATE TABLE user_certificates (
 
 **Lose:** Higher security responsibility (we hold private keys); regulatory scrutiny (auditors might question whether users "really" signed if we hold the key).
 
-**Failure mode if wrong:** If you choose BYOK and users lose their private keys (not uncommon), you get "I can't sign anymore — please reset my key" support tickets every day. At 1M users with 5% key-loss rate = 50K support tickets/year. If you choose hosted and the HSM is compromised, all user keys are exposed + non-repudiation claim fails (auditors reject the signatures).
+**Failure mode if wrong:** If you choose BYOK and users lose their private keys (not uncommon), you get "I can't sign anymore — please reset my key" support tickets every day. At 1M users with 5% key-loss rate = 50K support tickets/year. If you choose hosted and the HSM is compromised, all user keys are exposed + non-repudiation claim fails (auditors reject the signatures). **Business impact:** For DocuSign: 50K annual support tickets from key-loss (BYOK failure mode) each require manual key rotation assistance — at $30/ticket cost-to-serve, that's $1.5M/year in support cost, plus every locked-out user cannot sign envelopes, stalling their counterparties' workflows. The HSM compromise scenario is existential: every historical DocuSign signature becomes legally contestable.
 
 ---
 
@@ -848,7 +941,7 @@ CREATE TABLE user_certificates (
 
 **Lose:** Slightly slower writes (trigger overhead ~5-10%); can't use soft-delete patterns on audit table (DELETE is blocked by trigger).
 
-**Failure mode if wrong:** If you only enforce immutability in application code (e.g., "don't call DELETE on audit logs"), a malicious DBA or code bug can easily wipe the audit trail. Then you've lost non-repudiation and have no proof John signed the document. You lose the lawsuit.
+**Failure mode if wrong:** If you only enforce immutability in application code (e.g., "don't call DELETE on audit logs"), a malicious DBA or code bug can easily wipe the audit trail. Then you've lost non-repudiation and have no proof John signed the document. You lose the lawsuit. **Business impact:** For DocuSign: a wiped audit trail in an active litigation means DocuSign cannot produce the legally required signing evidence — the court may rule the signature inadmissible, invalidating the contract, and DocuSign faces liability for failing to maintain the legal record it sold as a product feature.
 
 ---
 
@@ -869,6 +962,63 @@ DocuSign IS a digital signature company. Their entire business depends on the le
 4. **Certificate revocation**: "If an employee leaves, we revoke their certificate, and they can't sign anymore." Your PKI infrastructure must support this.
 
 5. **Webhook on completion**: When a document is fully signed, DocuSign notifies the customer's systems (CRM, contract management, etc.). Your design must support async, idempotent webhooks with retry logic.
+
+6. **PAdES — DocuSign's actual PDF signing format:**
+
+PAdES (PDF Advanced Electronic Signatures — the international standard, ISO 32000-2 / ETSI EN 319 132, that defines how cryptographic signatures are embedded *inside* a PDF file in a legally interoperable format) is what DocuSign actually uses under the hood. It is not what most candidates describe.
+
+Most candidates say: "hash the document, sign the hash, store it separately." This is **not** how production PDF signing works.
+
+PAdES works differently:
+- The PDF is pre-processed to create a **byte-range placeholder** — a gap in the file where the signature will go
+- SHA-256 is computed over everything in the file **except** the placeholder gap (the byte ranges before and after)
+- The hash is signed using the signer's RSA private key
+- The resulting DER-encoded signature is embedded **inside the PDF** in that placeholder gap
+- The result is a single self-contained PDF that carries its own signature proof
+
+**Why byte-range, not whole-file hash?** Because when you embed the signature bytes into the PDF, the file changes. If you hashed the whole file before embedding, the hash would be invalid after embedding. Byte-range lets you hash everything except the space where the signature will sit.
+
+**Subsequent signers:** PAdES supports incremental updates — signer B appends their signature to the PDF without modifying signer A's byte range. The file grows, and each signer's byte range is independent.
+
+```
+PDF structure after 2 signers:
+┌─────────────────────────────────────────┐
+│ PDF Header + Document Content           │ ← byte range A (before Alice's sig)
+├─────────────────────────────────────────┤
+│ Alice's Signature Bytes (DER/PKCS#7)    │ ← embedded at byte offset X
+├─────────────────────────────────────────┤
+│ Incremental Update (signer 2 section)   │ ← byte range B (before Bob's sig)
+├─────────────────────────────────────────┤
+│ Bob's Signature Bytes (DER/PKCS#7)      │ ← embedded at byte offset Y
+└─────────────────────────────────────────┘
+
+KEY INVARIANT:
+   Each signer's hash covers the byte ranges of all prior content.
+   Neither signer's signature covers their own embedded bytes (the gap).
+   Both signatures are self-contained and independently verifiable.
+```
+
+**In an interview:** "DocuSign uses PAdES — the signature is embedded inside the PDF using a byte-range hash approach. SHA-256 is computed over everything except the signature placeholder, then the signed hash is embedded there. This produces a self-contained signed PDF — you don't need DocuSign's servers to verify it; any PDF reader with certificate support can." This is the answer that signals you actually know how production signing works, not just the academic description.
+
+7. **RFC 3161 TSA — Trusted Timestamp Authority:**
+
+RFC 3161 (a standard protocol for obtaining a trusted timestamp from an independent third-party server — the Trusted Timestamp Authority — that proves a document existed in a specific form at a specific time, without trusting the signing server's own clock) is the production mechanism for legally defensible timestamps.
+
+**Why your own server clock isn't enough:**
+If DocuSign's own server stamps "signed at 2026-06-24 15:14:00 UTC," a signer's lawyer can argue: "DocuSign could have backdated this. You're the same company that benefits from proving this was signed on time." Courts have accepted this argument.
+
+**How RFC 3161 works:**
+1. After signing, compute a hash of the signature blob
+2. Send that hash to an independent RFC 3161 Timestamp Authority (DigiCert, Sectigo, etc.)
+3. The TSA cryptographically signs a `TSTInfo` structure containing: the hash you sent, the TSA's own timestamp, and a TSA serial number
+4. The TSA's signed token is embedded into the PDF alongside the signature (in the `SignatureTimeStamp` attribute)
+5. To dispute the timestamp, you'd have to prove the **independent TSA** was compromised — a far higher bar than disputing DocuSign's own clock
+
+**The two timestamp types in PAdES:**
+- **Signature timestamp** (from RFC 3161 TSA): "This signature existed at this time" — attached immediately after signing
+- **Document timestamp** (LTA profile): "This entire signed PDF, including all previous timestamps, existed at this time" — added periodically to extend the signature's validity beyond the signing certificate's lifetime
+
+**In an interview:** "For legally defensible timestamps, I'd integrate RFC 3161 — after each signature, we obtain a timestamp token from an independent TSA like DigiCert. The TSA signs our signature hash with their own key and their own timestamp. This means even if someone disputes DocuSign's server clock, we have an independent cryptographic proof from a globally trusted third party. The TSA token is embedded directly in the signed PDF per PAdES standards." That sentence separates you from every candidate who says "we store `CURRENT_TIMESTAMP` from the DB."
 
 **Your answer should include:**
 
@@ -897,6 +1047,54 @@ DocuSign IS a digital signature company. Their entire business depends on the le
 **Q: "Your audit trail is immutable forever. GDPR allows users to request data deletion. How do you reconcile these two requirements?"**
 
 > This is a real DocuSign problem. GDPR's right to be forgotten says "delete my data." But the audit trail for "I signed this contract" is the legal proof that the contract was signed, so deleting it violates the signature's validity and the counterparty's rights. The answer: immutable audit logs are **exempt from GDPR deletion requests** because they're evidence of a legal transaction. We can pseudonymize the audit log (replace user_id with a UUID, remove email/IP), but we keep the core proof (timestamp, signature hash, certificate serial). This is GDPR-compliant because we've minimized the personal data (GDPR principle: data minimization) while preserving the legal record.
+
+---
+
+### New Deep Probes (Tier 2 — added Jul 4, 2026)
+
+**Q: "You check certificate revocation on every signing operation. At 35 sig/sec with thousands of active certificates, how do you keep that check under 1ms?"**
+> There are two standard protocols for revocation checking:
+>
+> - **OCSP** (Online Certificate Status Protocol — a real-time HTTP request sent to the CA asking "is this specific certificate revoked?" — like calling a government office to verify an ID is still valid): adds 50–200ms per request on the critical path. Unusable at our signing latency budget.
+>
+> - **CRL** (Certificate Revocation List — a file periodically published by the CA containing all revoked certificate serial numbers; you download the entire list and cache it locally): download once per minute, load into a Redis HashSet. Revocation check = `SISMEMBER revoked_serials {serial}` = O(1), under 1ms.
+>
+> **Our approach:** Download CRL from the CA's distribution point every 60 seconds, load all revoked serials into `revoked_serials` Redis Set. On every signature verification, check `SISMEMBER revoked_serials {certificate_serial}` — sub-millisecond lookup. Worst case: a cert is revoked at T=0, CRL is refreshed at T+60s. For a 60-second window, a revoked cert could still sign. Acceptable for commercial signing; not acceptable for banking. To shrink the window: refresh every 10 seconds.
+>
+> **In an interview:** "OCSP is too slow for my 1ms latency budget. I cache the CRL in Redis as a HashSet, refreshed every minute. Revocation is O(1) in Redis. The 60-second revocation window is a deliberate trade-off: tighter (10s) is possible at the cost of more CA traffic."
+
+---
+
+**Q: "Your signing workflow is a custom state machine in code. At DocuSign scale with 1M+ concurrent signing sessions and complex approval chains (conditional routing, expiry reminders, escalation), would you reconsider using a dedicated workflow tool like Temporal?"**
+> Yes — this is exactly the right question to ask at DocuSign's scale. My custom state machine (transitions stored in `signing_sessions.status`, transitions validated in `SigningWorkflowService`) works well at 35 sig/sec and simple sequential/parallel workflows. The code is readable, the state is in Postgres, and the trade-offs are clear.
+>
+> But DocuSign's actual product has:
+> - **Expiry reminders** (send email at T+3 days if not signed)
+> - **Escalation** (if signer A doesn't sign in 5 days, route to signer B)
+> - **Conditional routing** (if field X is above $50K, require CFO counter-signature)
+> - **Legal hold** (freeze all workflows for this document)
+>
+> A custom state machine for these requirements becomes a ~5,000-line service with edge cases that are hard to test and debug.
+>
+> **Temporal** (a distributed workflow orchestration system — think of it as a "state machine as a service" where each workflow step is a function, and Temporal automatically persists state and retries failed steps across crashes; unlike a plain Postgres state machine, Temporal provides built-in timers, signals, and child workflows with full execution history) handles expiry timers, retries, and complex routing natively. Every step is automatically logged. If the signing service crashes mid-workflow, Temporal replays the workflow from the last durable checkpoint.
+>
+> **Trade-off:** Temporal requires a Temporal cluster (additional infrastructure to operate and scale). The right answer for an interview: "I'd use a custom state machine for MVP — it's simple and debuggable. At DocuSign's actual scale and workflow complexity, I'd migrate to Temporal to avoid building timeout management, retry orchestration, and audit history myself."
+
+---
+
+### New Cross-Concept Probe (Tier 3 — added Jul 4, 2026)
+
+**Q: "DocuSign serves enterprises in the EU (GDPR) and the US (ESIGN). If an EU customer signs a document at 3 AM UTC and you later need to present the timestamp in US court, what's your audit timestamp strategy?"**
+> Three common mistakes:
+> 1. Storing timestamps in the user's local timezone — a US court sees "3:14 PM" but you can't prove the offset without knowing where the user was at signing time.
+> 2. Storing timestamps with a system-default timezone — brittle if the server ever changes timezone config.
+> 3. Storing timestamps as Unix epoch integers — correct, but requires conversion in every query.
+>
+> **Correct approach: always store as `TIMESTAMP WITH TIME ZONE` in UTC, never nullable.** In Postgres, `TIMESTAMP WITH TIME ZONE` normalizes to UTC internally regardless of server timezone. The audit_signature_events table has `event_timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP` — this always writes UTC. When presenting in court (or to an EU DPA), we convert to local time at display time only.
+>
+> **Additional practice:** Log the signer's declared timezone (from their profile) alongside the UTC timestamp. This allows you to show the user-facing time ("You signed at 3:14 PM IST") while the legally authoritative time remains UTC. If the user disputes the time, you produce both — the UTC record and the timezone derivation.
+>
+> **In an interview:** "I store all timestamps as UTC. Display-time conversion happens in the API layer or the client. For legal proceedings, we produce the UTC timestamp plus the user's registered timezone. This is standard practice for any multi-jurisdiction legal system."
 
 ---
 
@@ -935,3 +1133,6 @@ DocuSign IS a digital signature company. Their entire business depends on the le
 | Date | Change |
 |---|---|
 | June 24, 2026 | **D1-digital-signature.md created.** Full 15-section solution framework for Mixed A+B interview type. Covers: PKI infrastructure (cert management, signature verification), audit trail immutability (append-only + DB triggers), multi-party signing state machine (sequential + parallel), GDPR/compliance angles, and DocuSign-specific depth (non-repudiation guarantees). Scale: 1M users, 35 sig/sec peak. Prerequisite: `13-security-pki.md`. |
+| Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **Certificate revocation check latency** — OCSP is 50–200ms (unusable on critical path); CRL cached as Redis HashSet, refreshed every 60s; O(1) `SISMEMBER` check under 1ms; 60-second revocation window is explicit trade-off; (2) **Temporal as alternative to custom state machine** — custom FSM works for MVP at 35 sig/sec; Temporal handles expiry timers, escalation, conditional routing, and legal hold natively with full execution history; migration decision: Temporal at DocuSign's actual workflow complexity; (3) **UTC timestamp strategy for multi-jurisdiction legal compliance** — `TIMESTAMP WITH TIME ZONE` in Postgres always stores UTC; log user's declared timezone alongside UTC; court-presentable via UTC + timezone derivation. |
+| Jul 5, 2026 | **Section 6 restructured into 2-stage progressive HLD.** Stage 1 (monolith + direct DB) — identifies two breaking points: sync webhook couples external system availability to signing success; uncached cert lookup hits DB on every sign request. Stage 2 (service split + Redis + Kafka) — cert cache in Redis (sub-ms CRL check + cert PEM TTL); Kafka decouples webhook delivery (signing returns immediately after publish); PKI infrastructure separated. Four decision tables added: key management (Hosted CA ✅ vs BYOK ❌ vs Hybrid ⚠️), audit trail immutability (DB trigger ✅ vs application-only ❌ vs blockchain ❌), signing workflow (state machine ✅ vs set ❌ vs event-sourced ⚠️), webhook delivery (Kafka ✅ vs Redis pub/sub ❌ vs sync HTTP ❌). Verdict alignment verified: all Section 6 table verdicts match Section 7 deep dive choices (Hosted CA ✅, DB trigger ✅, state machine ✅). |
+| Jul 5, 2026 | **Section 10 business impact pass.** Added explicit **Business impact:** label to all 3 trade-offs — compliance officer timing out during live legal hearing due to unindexed audit log full table scan, HSM compromise making every historical DocuSign signature legally contestable at $1.5M/year key-loss support cost, non-repudiation destroyed when audit record digest doesn't match signature invalidating a court-submitted contract. |

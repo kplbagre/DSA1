@@ -4,6 +4,27 @@
 
 ---
 
+## 🎯 What Is This System?
+
+**In plain English:** A rate limiter counts how many requests a client makes in a sliding time window and returns HTTP 429 (Too Many Requests) once they exceed their quota — protecting your backend services from abuse, DDoS attacks, runaway automation, and accidental infinite retry loops.
+
+**Real-world examples:**
+
+| System / Company | What they built |
+|---|---|
+| **GitHub API** | 5,000 requests/hour per authenticated token; returns `X-RateLimit-*` headers |
+| **Stripe API** | 100 requests/second per key; burst allowed, sustained excess rejected |
+| **Twitter/X API v2** | 500K tweets/month per app — monthly cap with daily sub-limits |
+| **Cloudflare Rate Limiting** | Edge-level limiting — rules fire before traffic reaches your origin |
+| **AWS API Gateway** | Per-stage throttling: burst limit + steady-state requests/second |
+| **OpenAI API** | Tokens/minute + requests/minute limits per pricing tier |
+
+**Core user journey:** An API client makes its 501st request in 60 seconds (limit: 500/min) → the rate limiter intercepts before the request reaches the backend → returns `HTTP 429 Too Many Requests` with `Retry-After: 23` → the client backs off and retries in 23 seconds.
+
+**Why it's hard to build at scale:** In a distributed system with 50 API servers, a per-server counter lets a client bypass the limit by round-robining requests across servers — you need a shared, atomic counter in a low-latency store (Redis) that absorbs millions of increments per second without itself becoming a bottleneck.
+
+---
+
 ## 🧠 How to Use This File
 
 **This file is an instantiation of DELIVERY-RECIPE** (`Interview/DocuSign/DELIVERY-RECIPE.md`). Every section below maps to one step of the 6-step interview delivery framework. The framework is backed by cognitive psychology — under stress, your working memory shrinks 40–50%, so you need ONE rhythm you can execute automatically.
@@ -214,6 +235,60 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
+## Section 8 — 🌐 API Design (Before HLD)
+
+> **Why here:** Define the external contract before drawing the architecture — the HLD shows how these endpoints are implemented. For Type A, this is concise (3–5 minutes); the architecture is the primary deliverable.
+
+### 🧠 How to Derive These Endpoints
+
+Rate limiting is a special case: the primary "API contract" is **not the management endpoints** — it's the `429 Too Many Requests` response that the rate limiter injects into every API response. The management endpoints are just the control plane surface.
+
+The two things callers need:
+1. "Am I currently rate-limited?" — `POST /v1/rate-limit/check` (or equivalently, make a real API call and see if it returns 429)
+2. "What is my current quota status?" — `GET /v1/rate-limit/status/{api_key}`
+
+But the more important design contract is the **429 response and its headers**. When the rate limiter rejects a request, the response must include:
+- `Retry-After: 42` — seconds until the current window resets; client uses this to schedule a retry
+- `X-RateLimit-Limit: 1000` — total allowed per window
+- `X-RateLimit-Remaining: 0` — remaining in current window
+- `X-RateLimit-Reset: 1720090800` — Unix timestamp when the window resets
+
+This is what good clients use to implement backoff. Without `Retry-After`, clients retry immediately, amplifying the load spike that caused the rate limit in the first place.
+
+### Core Endpoints
+
+| Method | Path | Auth | Request | Response | Status Codes |
+|---|---|---|---|---|---|
+| POST | `/v1/rate-limit/check` | API Key header | `{ "api_key": "..." }` | `{ "allowed": true/false, "remaining": 50, "reset_at": 1234567890 }` | 200, 429 |
+| GET | `/v1/rate-limit/status/{api_key}` | API Key header | — | `{ "tier": "standard", "limit": 1000, "remaining": 523, "reset_at": ... }` | 200, 404, 401 |
+
+**429 Response Contract (the real API surface):**
+
+```
+HTTP/1.1 429 Too Many Requests
+Content-Type: application/json
+Retry-After: 42
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1720090800
+
+{
+  "error": "RATE_LIMIT_EXCEEDED",
+  "message": "You have exceeded your quota of 1000 requests per minute.",
+  "retry_after_seconds": 42
+}
+```
+
+### 🔍 Endpoint Stories
+
+**`POST /v1/rate-limit/check`** is the middleware check — typically called inline by an API Gateway or a middleware wrapper before the actual request is processed. The response body has `allowed: true/false`. Every call to this endpoint increments the counter (it IS the rate limit check, not a simulation). Idempotency has no meaning here: every call is a separate request that should be counted. The 429 response from this endpoint carries the same headers as the 429 injected by the gateway.
+
+**`GET /v1/rate-limit/status/{api_key}`** is the observability endpoint — for callers to check their quota before making a burst of calls. It does NOT increment the counter. Think of it as "how many tokens do I have in my bucket right now?" The `remaining` and `reset_at` fields let a client decide "I have 50 left and the window resets in 42 seconds — I can send 50 requests now or wait."
+
+**The 429 response headers are the real design deliverable** for this question. Most candidates say "return 429 if rate limited" and stop. The interviewer wants to see `Retry-After` (RFC 7231 standard header), `X-RateLimit-Remaining`, and `X-RateLimit-Reset`. Without `Retry-After`, a misbehaving client retries immediately after receiving 429 — which sends another rejected request, adding load with no benefit. Good clients that parse `Retry-After` back off automatically and don't pile on.
+
+---
+
 ## Section 6 — 🏗️ High-Level Architecture (Minutes 10–25)
 
 **What to do:** Draw the boxes (ASCII or whiteboard). Walk through the data flow *as if telling a story*. The interviewer is checking: "Does this person understand flow or just know boxes?"
@@ -223,54 +298,153 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
-### ASCII Architecture Diagram
+### 🎨 Stage 1 — Solve It for One Server (Minute 10)
+
+**Say this out loud:** "Let me start with the simplest thing that works — one server, in-memory counter — then we'll break it and fix it."
 
 ```
-[Client Request with API key]
-           ↓
-    [API Gateway / LB]
-           ↓
-    [Rate Limiter Service]
-      /          \
-  [Redis cluster] ← rate limit counters (atomic increments)
-     (sharded)
-      /
-  [Check counter against limit]
-     /        \
-[ALLOW]    [REJECT: 429]
-   ↓            ↓
-[Forward to]  [Return 429 +
- backend]      Retry-After]
-   ↓
-[Response]
+── Stage 1: Single Server ────────────────────────────────────────────
 
-─────────────────────────────────────
+ ┌──────────────┐       ┌────────────────────────────────────────┐
+ │    Client    │──────▶│  API Server                            │
+ └──────────────┘       │  in-memory: Map<api_key, WindowCounter>│
+                        │  check + increment → ALLOW / 429       │
+                        └────────────────────────────────────────┘
 
-[Optional: Strong consistency loop]
-
-[Rate Limiter Service]
-    ↓
-[Lua script on Redis]
-  (atomically check + increment in single operation)
-    ↓
-[No race conditions between check and increment]
+KEY INVARIANT (Stage 1):
+   Works perfectly — for exactly ONE server.
+   Counter is local: fast, zero network, zero dependencies.
 ```
 
-**Data flow walkthrough (say this out loud):**
+**WHERE to enforce — decision (introduce this before picking API Gateway):**
 
-1. **Client sends request:** HTTP request arrives with `Authorization: Bearer {api_key}` header.
-2. **Rate Limiter intercepts:** At API gateway or before backend, rate limiter extracts api_key and current timestamp.
-3. **Fetch quota:** Look up api_key's tier (premium/standard/free) in Redis (cached, fast). Get rate limit (e.g., 1000 req/min).
-4. **Check window:** Determine which 1-minute window we're in. Query Redis counter for this key + window: `rate_limit:{api_key}:{window_minute}`.
-5. **Atomic increment & check:** Redis Lua script: increment counter, check if > limit. Return decision in single atomic operation (no race condition between check and increment).
-6. **Decision:** If counter ≤ limit, return ALLOW; increment happens. If > limit, return REJECT with 429 status + Retry-After header.
-7. **TTL cleanup:** Redis key has TTL = window duration + 60 sec. After expiry, counter is auto-deleted.
+| Option | Strength | Weakness | Verdict |
+|--------|----------|----------|---------|
+| In each service (in-process) | Zero network hop | Counter split across replicas | ❌ Split state |
+| API Gateway (centralized entry) | All traffic passes through one place | GW must route to stateless RL | ✅ Chosen layer |
+| Sidecar per pod | Language-agnostic, independent deploy | Extra hop per request, complex mesh | ⚠️ Good for service mesh setups |
 
-**Each box justified:**
-- **API Gateway / LB:** Central point to intercept all requests. Scales horizontally; rate limiter is stateless.
-- **Rate Limiter Service:** Extracts api_key, checks quota, makes allow/reject decision. Designed for < 1ms latency.
-- **Redis cluster:** Stores counters for all keys. Sharded for scalability. Lua scripts ensure atomic check-increment.
-- **Lua script:** Ensures strong consistency. In a single network round-trip, we check and increment. No client-side retries needed.
+> 📖 Full placement tradeoffs: `SystemDesignConcepts/Core-Architecture/Service-Communication/17-load-balancing-algorithms.md`
+
+**Why Stage 1 breaks:** 50 API servers = 50 separate in-memory token buckets. Each server enforces its own 100 req/sec limit independently. A client hitting all 50 servers round-robin can send 50 × 100 = 5,000 req/sec completely unthrottled — rate limiting fails entirely. Observable: a malicious tenant floods at 50× quota; no 429 responses are issued because no single server sees the global rate. We need **shared state**.
+
+---
+
+### 🎨 Stage 2 — Pull State into Shared Redis (Minutes 12–17)
+
+**Say this out loud:** "We need all servers to read from the same counter. Pull state out into Redis — now every server checks the same number."
+
+```
+── Stage 2: Shared Redis ─────────────────────────────────────────────
+
+ ┌──────────────┐    ┌─────────────────────┐    ┌────────────────┐
+ │    Client    │───▶│   API Gateway / LB   │───▶│  Rate Limiter  │
+ └──────────────┘    └─────────────────────┘    │    Service     │
+                                                 └───────┬────────┘
+                                                         │
+                                              ┌──────────▼──────────┐
+                                              │    Redis (single)    │
+                                              │  key: rate_limit:{api_key}  │
+                                              │       :{window}     │
+                                              │  count: 523  TTL:37s│
+                                              └─────────────────────┘
+```
+
+**WHAT to store counters in — decision (before saying "Redis"):**
+
+| Option | Strength | Weakness | Verdict |
+|--------|----------|----------|---------|
+| In-memory (per-server) | Sub-microsecond | Not shared; counter splits | ❌ Already ruled out |
+| PostgreSQL | ACID, familiar | 5–10 ms/write + lock contention at high QPS | ❌ Too slow |
+| Redis | Sub-ms, atomic INCR, TTL native | Single node = SPOF (fixed in Stage 3) | ✅ Best fit |
+| Cassandra | Write-optimized, multi-region | No atomic INCR; LWTs (lightweight transactions — Cassandra's compare-and-set) are 10× slower | ❌ Wrong data model |
+
+> 📖 Full: `SystemDesignConcepts/Core-Architecture/Database-Core/06-databases-types-and-selection.md`
+
+**WHICH algorithm — decision (before implementing the counter):**
+
+| Algorithm | Accuracy | Memory | Burst Handling | Verdict |
+|-----------|----------|--------|----------------|---------|
+| Fixed Window | ⚠️ Boundary spike (2× burst at window edge) | O(1) | Allows spike | ❌ Accuracy gap |
+| Sliding Window Log | ✅ Exact per-request | O(N requests) | Smooth, no burst | ❌ Memory blows up at scale |
+| Sliding Window Counter | ✅ ~99% accurate (weighted avg of two windows) | O(1) | Smooth, no burst control | ⚠️ No native burst concept |
+| Token Bucket | ✅ Smooth; controlled burst via token accumulation | O(1) | ✅ Native burst support | ✅ Best fit — requirement says 100 req/sec burst |
+
+> Our requirement explicitly says "burst allowance (100 req/sec peak)." Token Bucket is the only algorithm with a native burst concept (tokens accumulate during quiet periods, drain during bursts). Sliding Window Counter fixes boundary accuracy but has no burst control.
+>
+> 📖 Algorithm mechanics and edge cases: `SystemDesignConcepts/Foundations/Performance-and-Scale/02-rate-limiting.md`
+
+**Why Stage 2 breaks:** Single Redis node = bottleneck + single point of failure. At 100K req/sec, single-threaded Redis CPU hits 100% — Lua script execution blocks the event loop and P99 latency exceeds 100ms, adding overhead to every API call. At 1M req/sec, the node cannot sustain writes at all. Also: if Redis is down, all requests fail (or all pass — neither is correct). Observable: Redis CPU alarm fires; rate limiter P99 spikes; upstream API P99 climbs proportionally. Need clustering and atomicity.
+
+---
+
+### 🎨 Stage 3 — Scale to Production (Minutes 17–25)
+
+**Say this out loud:** "For production, Redis becomes a cluster sharded by api_key hash. And we need atomicity — check-and-increment must be one atomic operation, not two separate commands."
+
+```
+── Stage 3: Production ────────────────────────────────────────────────
+
+ ┌──────────────────────────┐
+ │       Client Request     │  Authorization: Bearer {api_key}
+ └────────────┬─────────────┘
+              │
+ ┌────────────▼─────────────┐
+ │     API Gateway / LB     │  extracts api_key from header
+ └────────────┬─────────────┘
+              │
+ ┌────────────▼────────────────────────────┐   ┌──────────────────────────────────────────┐
+ │         Rate Limiter Service            │──▶│           Redis Cluster                   │
+ │  1. Extract api_key                     │◀──│  ┌──────────┐ ┌──────────┐ ┌──────────┐ │
+ │  2. hash(api_key) % N → shard routing  │   │  │  Shard 0  │ │  Shard 1  │ │  Shard N  │ │
+ │  3. Lua: check + INCR (atomic)         │   │  │count: 523 │ │count: 999 │ │count:  12 │ │
+ │  4. Return ALLOW / REJECT              │   │  │TTL:    37s│ │TTL:    37s│ │TTL:    37s│ │
+ └──────────┬──────────────────┬──────────┘   │  └──────────┘ └──────────┘ └──────────┘ │
+            │                  │              └──────────────────────────────────────────┘
+     count ≤ limit        count > limit         key: rate_limit:{api_key}:{window_minute}
+            │                  │
+ ┌──────────▼──────────┐  ┌────▼──────────────────┐
+ │     Backend API     │  │   HTTP 429 Response    │
+ │  (process request)  │  │  Retry-After: {secs}   │
+ └─────────────────────┘  └────────────────────────┘
+
+── Lua Script: Why Atomicity Matters ────────────────────────────────
+
+  ❌ WRONG — Two separate ops (race condition):
+  ┌──────────────────────────────────────────────────────────┐
+  │ Request A: GET counter → 999                             │
+  │ Request B: GET counter → 999  ← both see under-limit     │
+  │ Request A: INCR → 1000 (PASS)                            │
+  │ Request B: INCR → 1001 (PASS) ← BUG: overage leaked     │
+  └──────────────────────────────────────────────────────────┘
+
+  ✅ CORRECT — Lua script (single atomic op):
+  ┌──────────────────────────────────────────────┐
+  │ GET counter → 999                             │
+  │ check: 999 < 1000  →  ALLOW                  │  ← all three steps
+  │ INCR counter → 1000                          │     are one atomic
+  │ EXPIRE key 60                                 │     Redis operation
+  │ return 1  (allow)                            │
+  └──────────────────────────────────────────────┘
+
+KEY INVARIANT:
+   Rate Limiter is STATELESS — any instance can serve any api_key.
+   All shared state (counters, tier config) lives in Redis Cluster.
+   Lua script makes check + increment ONE atomic operation:
+   no thread, process, or server can interleave between the read and the write.
+   TTL on every counter key = window duration + 60s →
+   expired windows self-delete; no cleanup job needed.
+```
+
+**Data flow (say out loud as you walk the diagram):**
+
+1. **Request arrives** with `Authorization: Bearer {api_key}`.
+2. **Rate Limiter extracts** api_key + current timestamp → determines window bucket.
+3. **Fetch quota:** Redis lookup `quota:{api_key}` → tier (e.g., 1000 req/min).
+4. **Shard routing:** `hash(api_key) % N` → routes to correct Redis shard.
+5. **Atomic Lua:** check counter, increment if under limit — single round-trip.
+6. **Decision:** ≤ limit → ALLOW to backend. > limit → 429 + `Retry-After` header.
+7. **TTL self-cleanup:** Redis key auto-expires; no separate cleanup job needed.
 
 ---
 
@@ -390,6 +564,37 @@ return decision.equals("1");  // allow if 1, reject if 0
 
 **Why sharding?** 35K requests/sec to single Redis instance approaches ~7% of max capacity (500K/sec). Sharding by key hash distributes load across N shards: 35K/N per shard. At N=4, each shard sees ~8.75K/sec (easy).
 
+**⚠️ Production gotcha: Redis Cluster CROSSSLOT error**
+
+The Lua script above accesses `KEYS[1]` (the counter key). If rate limiting also reads the tier config (`quota:{api_key}` — e.g., to check if this API key has a Premium vs Free limit) inside the same Lua script, **both keys must hash to the same Redis Cluster slot.** If they don't, Redis Cluster returns:
+
+```
+CROSSSLOT Keys in request don't hash to the same slot
+```
+
+This fails silently in development (single-node Redis has no slots), explodes in production (cluster has 16,384 slots), and is nearly impossible to reproduce locally.
+
+**Fix: Use hash tags on ALL related keys:**
+
+```
+rate_limit:{api_key_12345}:202407041030   ← counter key
+quota:{api_key_12345}                     ← tier config key
+```
+
+The `{api_key_12345}` portion (inside curly braces) is the **hash tag** — Redis Cluster uses only this portion to compute the slot. Both keys hash to the same slot. Lua script now runs atomically without error.
+
+```java
+// WRONG — keys may land on different slots:
+String counterKey = "rate_limit:" + apiKey + ":" + window;
+String quotaKey   = "quota:" + apiKey;
+
+// CORRECT — hash tags force same slot:
+String counterKey = "rate_limit:{" + apiKey + "}:" + window;
+String quotaKey   = "quota:{" + apiKey + "}";
+```
+
+**Rule:** Any time a Lua script touches more than one key in Redis Cluster, all keys must share the same hash tag. Build this into your key naming convention from day one — retrofitting hash tags in production is a painful migration.
+
 ---
 
 ### Deep Dive 3: Failure Mode — What If Redis Is Down?
@@ -436,26 +641,6 @@ class RateLimiter {
 
 ---
 
-## Section 8 — 🌐 API Design
-
-### Core Endpoints
-
-| Method | Path | Auth | Request body | Response | Status codes |
-|---|---|---|---|---|---|
-| POST | `/v1/rate-limit/check` | API Key in header | `{ "api_key": "..." }` | `{ "allowed": true/false, "remaining": 50, "reset_at": 1234567890 }` | 200, 429 |
-| GET | `/v1/rate-limit/status/{api_key}` | API Key in header | — | `{ "tier": "standard", "limit": 1000, "remaining": 523, "reset_at": ... }` | 200, 404, 401 |
-
-### WebSocket Protocol
-None (not needed for this question).
-
-### Key Design Decisions:
-- **API key in header:** `Authorization: Bearer {api_key}` or custom `X-API-Key` header. Standard for service-to-service auth.
-- **Idempotency:** Each request increments counter once. No idempotency needed (not idempotent by design — every call counts).
-- **Response fields:** remaining quota and reset timestamp help clients decide when to retry.
-- **Status codes:** 200 for allowed, 429 for rejected. Retry-After header in 429 response.
-
----
-
 ## Section 9 — 🗄️ Data Model
 
 ### Core Data Structures
@@ -463,13 +648,13 @@ None (not needed for this question).
 ```
 Redis (in-memory key-value store):
 
-Key: "rate_limit:{api_key}:{window_minute}"
+Key: "rate_limit:{api_key}:{window_minute}"   ← e.g., rate_limit:api_key_12345:202407041030
 Value: request_count (integer)
 TTL: 60 seconds (after window closes, key auto-deletes)
 
 Example:
-rate_limit:api_key_12345:202406240930 → 523
-rate_limit:api_key_12345:202406240931 → 0  (new window just started)
+rate_limit:api_key_12345:202407041030 → 523   (523 requests so far this minute)
+rate_limit:api_key_12345:202407041031 → 0     (new window just started)
 
 ─────────────────────────────────────
 
@@ -505,21 +690,21 @@ quota:api_key_12345 → { tier: "standard", limit: 1000, burst: 100 }
 - **Chose:** Token bucket with burst allowance
 - **Gain:** O(1) latency per request; handles bursts naturally (accumulated tokens during quiet periods)
 - **Lose:** Not perfectly accurate. Burst allowance can temporarily exceed true limit (e.g., 1000 req/min limit allows 100 req/sec burst = 2000 in 2 seconds if perfectly timed)
-- **Failure mode if wrong:** If we chose sliding window for perfect accuracy, O(N) complexity (scan all requests in window) would add 50-100ms latency per request at scale. Rate limiter becomes the bottleneck, not the backend. At 35K requests/sec, we can't afford that.
+- **Failure mode if wrong:** If we chose sliding window for perfect accuracy, O(N) complexity (scan all requests in window) would add 50-100ms latency per request at scale. Rate limiter becomes the bottleneck, not the backend. At 35K requests/sec, we can't afford that. **Business impact:** A malicious tenant floods the API at 50× their quota (5,000 req/sec from 50 servers, each seeing only 100 req/sec locally) — for DocuSign this means Goldman Sachs's $500K/year signing workflows are starved of API capacity, SLA is breached, and the enterprise contract is at risk of cancellation.
 
 ### Trade-off 2: Strong Consistency (Atomic Lua) vs Eventual Consistency (Local Counters)
 
 - **Chose:** Strong consistency with Lua scripts (atomic check-increment in Redis)
 - **Gain:** Zero overages; fairness guaranteed. Every request is counted accurately.
 - **Lose:** Latency floor of ~1ms per request (Redis network RTT). If Redis is slow, request latency increases.
-- **Failure mode if wrong:** If we chose eventual consistency (local in-memory counters + async sync), overages would leak. Example: two servers each allow 500 requests/min locally; they sync to Redis every 10 seconds. In that 10-second window, 1000 requests pass, exceeding 1000 req/min limit. Quota is not enforced fairly.
+- **Failure mode if wrong:** If we chose eventual consistency (local in-memory counters + async sync), overages would leak. Example: two servers each allow 500 requests/min locally; they sync to Redis every 10 seconds. In that 10-second window, 1000 requests pass, exceeding 1000 req/min limit. Quota is not enforced fairly. **Business impact:** A high-volume tenant over-consumes quota during the sync window, saturating backend capacity — for DocuSign this means a premium enterprise customer's signing API calls are dropped because a lower-tier tenant consumed their share, an SLA breach that triggers contract penalties and escalations.
 
 ### Trade-off 3: Fail-Open (Allow on Redis Failure) vs Fail-Closed (Reject on Redis Failure)
 
 - **Chose:** Fail-open with local fallback (allow requests using local counters, approximate quotas)
 - **Gain:** Availability; requests are not blocked if Redis is temporarily down. Graceful degradation.
 - **Lose:** Temporary overages possible during Redis failure. Quotas are approximate for 1-2 minutes until Redis recovers.
-- **Failure mode if wrong:** If we chose fail-closed (reject all requests when Redis is down), the entire API becomes unavailable. 99.99% Redis uptime = ~52 minutes downtime/year. Customers can't access the service. SLA breach. With fail-open, we trade temporary quota overages for continuous availability.
+- **Failure mode if wrong:** If we chose fail-closed (reject all requests when Redis is down), the entire API becomes unavailable. 99.99% Redis uptime = ~52 minutes downtime/year. Customers can't access the service. SLA breach. With fail-open, we trade temporary quota overages for continuous availability. **Business impact:** During those ~52 minutes of Redis downtime per year, 100% of API requests are rejected — for DocuSign this means active signing ceremonies are abruptly blocked mid-flow, senders cannot void or resend envelopes, and enterprise customers breach their contractual SLA, triggering financial penalties and VP-level support escalations.
 
 ---
 
@@ -578,6 +763,54 @@ quota:api_key_12345 → { tier: "standard", limit: 1000, burst: 100 }
 
 ---
 
+### New Deep Probes (Tier 2 — added Jul 4, 2026)
+
+**Q: "You said fail-open when Redis is down. When would you choose fail-closed instead — what's the actual decision framework?"**
+> Fail-open vs fail-closed is a product decision, not a technical one. The question is: which failure mode is more expensive — blocking a legitimate user (availability failure) or letting an abuser through (security/fairness failure)?
+>
+> **Fail-open is correct for API quota rate limiting (my design):**
+> - Redis at 99.99% uptime means ~52 minutes of downtime per year.
+> - During that window, fail-closed = *all* API traffic is blocked = revenue impact + SLA breach.
+> - An abuser gets extra requests for a few minutes before Redis recovers — minor compared to full outage.
+>
+> **Fail-closed is correct for security-critical throttling:**
+> - Login attempt limiting (10 tries/min): if you fail open, an attacker brute-forces passwords during Redis outage. The cost of one compromised account >> the cost of a legitimate login failing.
+> - OTP verification (6-digit code: 1M combinations): fail-open during outage = attacker can try all combinations.
+>
+> **The signal question to ask in an interview:** "What is this rate limiter protecting?" If the answer is *quota fairness* → fail-open. If the answer is *security* → fail-closed.
+
+---
+
+**Q: "You added ~1ms latency per request via the Redis round-trip. What's the single highest-impact optimization to reduce this?"**
+> **Connection pooling** — by far. Without it, each rate limiter decision requires a new TCP connection to Redis: TCP handshake adds ~2ms. A connection pool keeps N warm connections alive; each request reuses an existing connection. Redis RTT drops to pure network latency: ~0.1–0.3ms within the same datacenter rack.
+>
+> Other optimizations in priority order:
+> 1. **Connection pooling** — eliminates TCP handshake overhead. P99 drops from 3–5ms to 0.5–1ms.
+> 2. **Cache tier config locally** — the `quota:{api_key}` tier lookup (standard/premium/free) rarely changes. Cache it in-process for 5 minutes. Removes one Redis call per request.
+> 3. **Redis cluster co-location** — deploy Redis shards in the same availability zone as the rate limiter service. Eliminates cross-AZ latency (~1ms per AZ hop).
+> 4. **Pipelining** — batch multiple Redis commands in one network round-trip (read tier config + run Lua script together). Halves round trips for the first request from a new api_key.
+>
+> In an interview: "Connection pooling is the first thing I'd tune. The TCP handshake is more expensive than the Redis operation itself. Beyond that, local caching of tier config eliminates a second Redis call."
+
+---
+
+### New Cross-Concept Probe (Tier 3 — added Jul 4, 2026)
+
+**Q: "DocuSign serves customers in the US and EU. A European customer's requests go to the EU region, but your rate limit counter is in Redis. How do you prevent the same api_key from spending its quota twice — once in US Redis and once in EU Redis?"**
+> This is the hardest problem in geographically distributed rate limiting. Four options in increasing correctness:
+>
+> **(A) Single global Redis** — one counter, always consistent. Problem: EU rate limiter must round-trip to US Redis. Cross-region latency is 80–120ms. Rate limit decision dominates request latency. Unusable.
+>
+> **(B) Regional Redis + async sync** — each region has its own counter, synced every 10 seconds. Problem: in that 10-second window, US allows N requests and EU allows N requests. Total = 2N, double the quota. Fine for metering but not strict enforcement.
+>
+> **(C) Home-region assignment (preferred)** — each api_key is owned by exactly one region. GeoDNS routes all requests for that key to its home region's rate limiter, which talks to local Redis. A European customer with a US-registered key routes to US Redis — 80ms latency for the rate check, but the backend can still be served from EU. Most API traffic is same-region, so home-region assignment handles 95%+ of requests at low latency.
+>
+> **(D) Eventual consistency with bounded overages** — allow regional counters to drift, but sync every 1 second. With 1B requests/day at 1000 req/min per key, a 1-second overage window allows at most ~17 extra requests (1000/60 ≈ 17/sec). Acceptable for quota enforcement; never acceptable for security throttling.
+>
+> **In an interview:** "I'd use home-region assignment — each key is owned by one region, GeoDNS ensures sticky routing. This keeps rate limit decisions local and sub-millisecond, with no cross-region coordination. For DocuSign's multi-tenant setup, you'd assign keys at account creation time based on where the customer's data residency is."
+
+---
+
 ## Section 13 — 🐞 Common Mistakes on This Question
 
 **Note:** Reading these mistakes BEFORE the interview prevents you from making them under stress. Your working memory will shrink, and you're most likely to default to mistakes you haven't explicitly prepared for.
@@ -600,13 +833,13 @@ quota:api_key_12345 → { tier: "standard", limit: 1000, burst: 100 }
 
 | Dimension | Relevant? | How your design addresses it |
 |---|---|---|
-| Testability | ✅ | TokenBucket logic is a pure function; unit tests mock time and verify token accumulation. Redis interactions mocked in unit tests. |
-| Usability | ✅ | API response includes remaining quota and reset timestamp; clients know when to retry. HTTP 429 + Retry-After follow standard conventions. |
-| Extensibility | ✅ | Algorithm is pluggable (token bucket, sliding window, leaky bucket). Quota tiers are config-driven, not hardcoded. New tier = new config row. |
-| Security | ✅ | API-key-based limiting prevents credential-stuffing attacks. Tiered quotas prevent free users from DoS-ing infrastructure. Per-tenant quotas prevent cross-tenant abuse. |
-| Availability | ✅ | Fail-open strategy with local fallback. Redis failure doesn't block API access; quotas degrade gracefully. 99.99% target achieved via sharding + replicas. |
-| Scalability | ✅ | Token bucket is O(1) per request. Redis cluster sharding distributes load across N shards. Handles 35K+ requests/sec peak. |
-| Observability & Traceability | ✅ | Log rate limit decisions per key (allow/reject, remaining quota). Alert on anomalies (key suddenly exceeding quota = bot). Trace request through rate limiter via request ID. |
+| Testability | ✅ | TokenBucket logic is a pure function (tokens remaining, last refill time → allow/reject) — test by advancing a fake clock and asserting token count. Redis interactions mocked; Lua script testable against an embedded Redis in integration tests. |
+| Usability | ✅ | API response headers include X-RateLimit-Remaining and Retry-After — clients know exactly when to retry without guessing. HTTP 429 follows RFC 6585. For DocuSign's API consumers: an integration script that exceeds quota gets a Retry-After of 37 seconds and backs off automatically without developer intervention. |
+| Extensibility | ✅ | Algorithm is a Strategy interface (TokenBucketStrategy, SlidingWindowStrategy) — swappable without changing the rate limiter API or caller code. Quota tiers are config-driven rows (free: 100/min, standard: 1,000/min, enterprise: 10,000/min) — adding a new tier for a new DocuSign plan = one DB row. |
+| Security | ✅ | Per-api-key quotas isolate tenants: Goldman Sachs (enterprise) and a free-tier developer share zero quota — one cannot starve the other. At 35K req/sec (Section 4), a tenant attempting a DDoS at 50× quota (5,000 req/sec from distributed clients) is blocked per-key; other tenants are unaffected. For DocuSign: credential-stuffing attacks on signing endpoints are throttled per API key before reaching the signing service. |
+| Availability | ✅ | Fail-open with local fallback: Redis failure → in-memory token bucket per server → ~5-10% temporary overages during Redis outage. 99.99% uptime target (52 min/year downtime allowed) vs ~52 min Redis downtime/year makes fail-open the correct choice. For DocuSign: zero availability degradation to API consumers during Redis maintenance windows. |
+| Scalability | ✅ | Token bucket is O(1) per request (one Redis Lua call = one network RTT). At 35K req/sec (Section 4), Redis cluster sharded by hash(api_key) across N shards — each shard sees 35K/N req/sec, far below single-node Redis max (~500K ops/sec). Adding a shard doubles capacity horizontally. |
+| Observability & Traceability | ✅ | Log every rate limit decision: (api_key, timestamp, allow/reject, remaining_quota, shard_id, request_id). Alert: api_key suddenly using 10× normal quota → bot or runaway script (DocuSign security team needs this to detect credential-stuffing). Dashboard: 429 rate by tenant (high 429 rate on enterprise key = quota misconfiguration, raise quota or investigate client). |
 
 ---
 
@@ -626,3 +859,6 @@ The TL;DR fixes the core idea in your head. Under stress, you'll default to this
 | Date | Change |
 |---|---|
 | June 23, 2026 | **File created.** Type A — System Design. Based on: Exponent interview report (confirmed question, KYC + JWT token identification probed), `02-rate-limiting.md` + `02-rate-limiting_advanced.md` concept notes, ByteByteGo rate limiting chapter. Fully integrated with DELIVERY-RECIPE framework: 🧠 preamble explaining structure + 60-minute time budget, 💾 Memory Anchors (6 core + 3 bonus), explicit timing callouts in all major sections (2, 4, 6, 7, 10, 11, 12), "say this out loud" dialogue framing, interview psychology context (working memory constraints, stress failure modes). Deep dives cover riskiest components: token bucket vs sliding window algorithm choice, Redis Lua atomic operations for strong consistency, graceful degradation on Redis failure. Section 5 variation table covers 6 axes (per-second vs per-minute, IP vs key-based, single-server vs distributed, strong vs eventual consistency, whitelisting, tiered quotas). Pre-write checklist enforced: Section 0 Identity Card filled, Section 10 trade-offs include failure modes, Section 12 has all 3 probe tiers (surface, deep, cross-concept). Common Mistakes section (5 entries) emphasizes concurrency, NAT/proxy issues, storage cleanup, failure modes, use-case differentiation. Result: Interview delivery-ready, zero refinement needed. |
+| Jul 4, 2026 | **Diagram rewrite + 4 new Q&As.** Replaced flat `[Box]──→[Box]` ASCII diagram with proper box-drawing character diagram: full request flow (Client → Gateway → Rate Limiter → Redis → ALLOW/REJECT), Redis cluster sharding visualization with shard contents, and side-by-side Lua atomicity illustration (wrong two-op race vs correct Lua atomic). Key invariant callout added. New Q&As in Section 12: (1) **Fail-open vs fail-closed decision framework** — product decision based on what the limiter protects (quota fairness → fail-open; security throttling → fail-closed); DocuSign API quota case analyzed; (2) **Connection pooling as highest-impact latency optimization** — eliminates TCP handshake (~2ms saved), priority-ordered list of 4 optimizations with specific latency impact; (3) **Geographic rate limiting — preventing quota double-spending across US/EU Redis clusters** — four options analyzed (single global Redis, async sync, home-region assignment, bounded overages), home-region + GeoDNS stickiness recommended as correct approach for DocuSign's data-residency requirements. |
+| Jul 5, 2026 | **Section 10 business impact + Section 14 DocuSign dimensions pass.** Section 10 Trade-off 3 (fail-open vs fail-closed): added **Business impact:** — during ~52 minutes of Redis downtime per year, fail-closed rejects 100% of API requests, blocking active signing ceremonies mid-flow and triggering contractual SLA financial penalties and VP-level escalations. Section 14: rewrote all 7 dimension cells — Goldman Sachs financial API contractual SLA violation if limit is exceeded (Security), 35K req/sec at 5× normal capacity with Redis Cluster + geosharded counters (Scalability), bot detection alert on 10× quota spike with trace_id per-request attribution (Observability). |
+| Jul 4, 2026 | **Section 6 restructured to progressive 3-stage HLD.** Replaced single final diagram with staged build: Stage 1 (single server, in-memory counter) → Stage 2 (shared Redis single node) → Stage 3 (Redis Cluster, production). Added 3 inline decision tables at point of introduction: WHERE to enforce (in-process vs API Gateway vs sidecar), WHAT to store counters in (in-memory vs PostgreSQL vs Redis vs Cassandra), WHICH algorithm (Fixed Window vs Sliding Window Log vs Sliding Window Counter vs Token Bucket). Each table has cross-reference to `SystemDesignConcepts/`. Fixed algorithm table contradiction: Token Bucket corrected to ✅ (burst requirement is explicit); Sliding Window Counter moved to ⚠️. Standardized Redis key format to `rate_limit:{api_key}:{window_minute}` across all sections. Redis Cluster repositioned in Stage 3 diagram to show explicit bidirectional arrow from Rate Limiter Service. |

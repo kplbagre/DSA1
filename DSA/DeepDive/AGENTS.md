@@ -322,8 +322,27 @@ Is this "learn from zero" (new topic not yet internalized)?
          ├─ YES → Reference (300–700 lines, method syntax, cheatsheet tables, speed drills)
          └─ NO  → Is this "one specific problem walkthrough"?
                   ├─ YES → Pattern (250–400 lines, single LC problem, brute→optimal approaches)
-                  └─ NO  → Clarify with Kapil
+                  └─ NO  → Is this a HashMap + second-DS design problem (LRU, LFU, Rate Limiter, etc.)?
+                           ├─ YES → ADD TO hybrid-design-problems.md (see Special Files below)
+                           └─ NO  → Clarify with Kapil
 ```
+
+---
+
+## 📂 Special Files in DSA/DeepDive/
+
+Some files in this folder don't follow the standard DeepDive format — they serve a specific purpose. Read this table before creating a new file to avoid duplicating content.
+
+| File | Type | What it covers | When to use it |
+| --- | --- | --- | --- |
+| **`hybrid-design-problems.md`** | Hybrid Design (DSA + LLD) | Problems that pair a HashMap with a second data structure for ordering: LRU Cache (DLL), LFU Cache (frequency buckets), Hit Counter (deque/circular array), Leaderboard (TreeMap), Rate Limiter (4 algorithms). Pattern: "HashMap gives O(1) lookup; second DS gives the ordering the problem needs." | When the problem says "design a [X]" and requires both O(1) access AND ordering/eviction/windowing logic |
+| **`notes-standards-deepdive.md`** | Meta / Standards | Format and section rules for every DeepDive file | Read before writing any new DeepDive note |
+
+**hybrid-design-problems.md — extended context for AI assistants:**
+- Every problem in this file follows: problem statement → DS Combo (what the two structures are) → Visual/Trace → Steps + full Java → Edge Cases → Variants → Try these
+- The mental model is "HashMap + X": HashMap handles O(1) lookup; the second DS handles the behavioral requirement (recency, frequency, time window, value ranking)
+- New problems belong here if they fit the "HashMap + X" pattern AND have more DSA depth than system design depth
+- Problems with more system design depth (distributed rate limiting, consistent hashing) belong in SystemDesignConcepts/ (separate folder, planned)
 
 ---
 
@@ -362,3 +381,4 @@ Is this "learn from zero" (new topic not yet internalized)?
 | --- | --- |
 | June 2026 | **Initial AGENTS.md for DeepDive folder created.** Codifies AI workflow: sourcing strategy, pattern-structure requirements (with problem motivation mandate), resource attribution, and validation checklist. Clarifies relationship to notes-standards-deepdive.md. |
 | June 2026 | **Added D.1 Pattern Application Gallery section.** Specifies format for gallery problems (problem statement + selective naive approach + insight + code structure), inclusion rules for when to explain naive approach (Complement Lookup, Prefix Sum patterns only), and emphasis on "most-asked problems" not arbitrary ones. |
+| July 2026 | **Added Special Files section + hybrid-design-problems.md to Decision Tree.** Registers `hybrid-design-problems.md` as a non-standard special file covering HashMap+X design problems (LRU, LFU, Hit Counter, Leaderboard, Rate Limiter). Extended Decision Tree with a "Hybrid Design" branch so future AI assistants route new design problems to the correct file instead of creating a separate DeepDive. |

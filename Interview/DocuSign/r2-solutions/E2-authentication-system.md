@@ -6,6 +6,27 @@
 
 ---
 
+## 🎯 What Is This System?
+
+**In plain English:** An authentication & authorization system verifies who you are (authentication) and decides what you're allowed to do (authorization). It issues short-lived credentials (JWT tokens) after verifying identity, and validates those credentials on every API request — without hitting the database each time.
+
+**Real-world examples:**
+
+| System / Company | What they built |
+|---|---|
+| **Auth0** | Hosted identity-as-a-service; OAuth 2.0 + OIDC + MFA out of the box |
+| **Okta** | Enterprise SSO and identity platform (used by FedEx, T-Mobile, DocuSign) |
+| **AWS Cognito** | Auth for AWS apps — user pools, federated identity, JWT issuance |
+| **Keycloak** | Open-source identity provider; self-hostable OIDC/SAML server |
+| **Google Identity Platform** | Powers "Sign in with Google" for millions of apps |
+| **Firebase Authentication** | Simple auth for mobile/web with social providers + email/password |
+
+**Core user journey:** User submits email + password → server verifies against bcrypt hash → issues a signed JWT (15-min TTL) plus a refresh token (7-day TTL) → client attaches JWT to every API request header → server validates the signature without any DB lookup → when JWT expires, client silently exchanges the refresh token for a new JWT.
+
+**Why it's hard to build at scale:** JWTs are stateless by design — you cannot "revoke" one without a token blacklist (which requires a DB lookup, defeating the point); refresh token rotation must be atomic to prevent race conditions on concurrent refreshes from multiple devices; and MFA must be optional, per-tenant, and pluggable without rewiring the core login flow.
+
+---
+
 ## Section 0 — Question Identity Card
 
 | | |
@@ -103,6 +124,49 @@ Then pivot to Section 2.
 
 ---
 
+## Section 8 — 🌐 API Design (Minutes 8–13) ⭐ Type B Primary Deliverable
+
+> **Why here, not later:** For Type B (Product Architecture), the API contract is the primary deliverable. Authentication endpoints are the system's public face — state them before the internals.
+
+### 🧠 How to Derive These Endpoints
+
+Authentication flows are state machines: unauthenticated → credential-checked → MFA-verified → token-issued → token-expired → refreshed → logged-out. Each state transition is an endpoint.
+
+"Users can log in with email + password" → state transition: unauthenticated → credential-checked → `POST /auth/login`. What does the response need to handle? If MFA is enabled, the caller isn't authenticated yet — you can't issue a token. Return `{mfa_required: true, request_id: "..."}` and wait for the MFA step. If MFA is disabled, issue tokens immediately. One endpoint, two response shapes based on tenant config.
+
+"MFA is required for enterprise tenants" → state transition: credential-checked → MFA-verified → `POST /auth/verify-mfa`. This is a separate endpoint, not an additional field on login, because the client goes to a different screen, waits for user input, and makes a second call. The `request_id` from login links the two calls without re-sending the password.
+
+"Access tokens expire in 15 minutes" → state transition: expired → refreshed → `POST /auth/refresh`. Takes the long-lived refresh token, issues a new short-lived access token. Refresh token rotation on every call: each refresh invalidates the old refresh token and issues a new one — detecting replay attacks is then easy (a reused refresh token means the old one was stolen).
+
+"Logout" → state transition: authenticated → logged-out → `POST /auth/logout`. Takes the refresh token in the body and blacklists it in Redis. The JWT itself is stateless — you can't "revoke" it — but you can prevent refresh. `jti` of the access token also goes to the blacklist; every request checks Redis for the `jti` in the Bearer token. This is the only hole in stateless JWT: you must tolerate up to 15 minutes of access after logout. Acceptable tradeoff.
+
+Validation check: "service accounts need programmatic access" → `client_credentials` OAuth grant. No endpoint to add — this is handled by `POST /auth/login` with a different request body (`client_id` + `client_secret` instead of email + password). One endpoint, two grant types.
+
+### Core Endpoints
+
+| Method | Path | Auth | Request | Response | Status Codes |
+|---|---|---|---|---|---|
+| POST | `/auth/login` | — | `{email, password}` | `{mfa_required?, request_id, access_token?, refresh_token?}` | 200, 401, 429 |
+| POST | `/auth/verify-mfa` | — | `{request_id, mfa_code}` | `{access_token, refresh_token, expires_in}` | 200, 401, 423 |
+| POST | `/auth/refresh` | — | `{refresh_token}` | `{access_token, expires_in}` | 200, 401 |
+| POST | `/auth/logout` | JWT Bearer | `{refresh_token}` | `{success: true}` | 200 |
+| GET | `/auth/user` | JWT Bearer | — | `{user_id, email, roles, permissions}` | 200, 401 |
+| GET | `/auth/keys` | — | — | `{keys: [{kid, public_key}]}` | 200 |
+
+### 🔍 Endpoint Stories
+
+**`POST /auth/login`** has two response shapes and that's the interview probe. If `mfa_enabled = false`, the response body contains `access_token` and `refresh_token` — login is complete in one call. If `mfa_enabled = true`, the response body contains `mfa_required: true` and a `request_id` (a short-lived nonce stored in Redis for 5 minutes). The `request_id` is how the MFA step proves it's continuing the same login flow — without re-sending the password. Most candidates miss this: they issue a partial JWT or put MFA inline. The two-step design keeps login clean and security boundaries clear.
+
+**`POST /auth/verify-mfa`** completes the MFA flow. `423 Locked` is the status code for "account locked after too many wrong attempts" — not `401` (wrong credentials) and not `429` (rate limit). `423` is the right HTTP status for "temporarily locked by security policy." The `request_id` is consumed on success — replaying it returns `401`. The full token pair (access + refresh) is issued only here; the previous login step issues nothing token-like.
+
+**`POST /auth/refresh`** is where refresh token rotation happens. Old refresh token in → new access token + new refresh token out. The old refresh token is immediately blacklisted. If an attacker steals the old refresh token and tries to use it after the legitimate client already refreshed, the system detects the replay: both the legitimate client and the attacker now have different valid refresh tokens from the same parent — when the attacker's old token arrives, it's already in the blacklist.
+
+**`POST /auth/logout`** is the most misunderstood endpoint. The access token cannot be revoked because it's stateless. What logout does: (1) blacklists the `jti` of the current access token in Redis with TTL = remaining access token lifetime, (2) blacklists the refresh token so no new access tokens can be issued. For up to 15 minutes, the access token technically still validates — but it won't refresh. This "eventual revocation" window is the accepted tradeoff for stateless JWTs at scale.
+
+**`GET /auth/keys`** — the JWKS (JSON Web Key Set) endpoint (the standard for publishing public key material so downstream services can verify JWTs without calling the auth service). Every service that needs to validate a JWT fetches this endpoint once on startup and caches the public key. When the auth service rotates its signing key, it publishes the new key at a new `kid` (key ID) alongside the old one. JWTs signed with the old key still validate until they expire; new JWTs use the new key. Zero-downtime key rotation. Most candidates miss that key rotation without JWKS causes all services to fail validation simultaneously.
+
+---
+
 ## Section 4 — 🔢 Scale Estimation (Minutes 5–10)
 
 **Traffic:**
@@ -144,228 +208,220 @@ Then pivot to Section 2.
 
 ## Section 6 — 🏗️ High-Level Architecture (Minutes 10–25)
 
-### 🎨 ASCII Architecture Diagram
+### 🎨 Visual — Auth System Architecture (3-Stage Evolution)
 
 ```
-  AUTHENTICATION & AUTHORIZATION SYSTEM — HIGH-LEVEL ARCHITECTURE
-  ────────────────────────────────────────────────────────────────
+── Stage 1: Session-Based Auth (Stateful) ────────────────────────
 
-  CLIENT (Web, Mobile, API)
-         │
-         ├─→ POST /auth/login (email, password) [with optional MFA]
-         │
-         ▼
-  ┌──────────────────────────────────────────────┐
-  │         Auth Service (Stateless)             │
-  │  (can run 10 instances, load balanced)      │
-  │                                              │
-  │  1. Hash password, compare with DB          │
-  │  2. Check if MFA required, if yes send code │
-  │  3. Generate JWT (access + refresh tokens)  │
-  │  4. Add to token blacklist if needed        │
-  └─────────────┬────────────────────────────────┘
-                │
-    ┌───────────┼───────────────────────┐
-    │           │                       │
-    ▼           ▼                       ▼
-┌─────────┐ ┌──────────┐         ┌──────────────┐
-│Postgres │ │  Redis   │         │ Email/SMS    │
-│(users)  │ │ (session │         │ Provider     │
-│(roles)  │ │  + token │         │ (MFA codes)  │
-│(audit)  │ │ blacklist)         │              │
-└─────────┘ └──────────┘         └──────────────┘
+Client sends credentials; server creates a session; every subsequent
+request sends the session cookie and the server looks up the session.
 
+ ┌──────────┐  POST /auth/login   ┌────────────────────────┐
+ │  Client  │ ──────────────────→ │     Auth Service       │
+ └──────────┘  {email, password}  │  1. bcrypt verify      │
+                                  │  2. create session     │
+                                  └──────┬─────────────────┘
+                                         │
+                                ┌────────▼────────┐
+                                │  Redis Session  │
+                                │  session:{id} → │
+                                │  {user_id,      │
+                                │   roles, tenant}│
+                                └─────────────────┘
 
-  AUTHORIZATION PATH (validate request)
-  ══════════════════════════════════════════════════════════════
+ ┌──────────┐  GET /v1/documents   ┌────────────────────────┐
+ │  Client  │  Cookie: sid=abc ──→ │   API Gateway          │
+ └──────────┘                      │  1. GET session:{sid}  │◀────▶ Redis
+                                   │     from Redis         │
+                                   │  2. Extract user_id    │
+                                   │  3. Forward to service │
+                                   └────────────────────────┘
 
-  Client (has JWT token from login)
-    │
-    ├─→ GET /v1/documents/doc-123
-    ├─→ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
-    │
-    ▼
-  ┌──────────────────────────────────────┐
-  │      API Gateway / Middleware        │
-  │  (validate JWT on every request)    │
-  │                                      │
-  │  1. Extract JWT from header         │
-  │  2. Verify signature with public key│
-  │  3. Check expiry (exp claim)         │
-  │  4. Check token blacklist (Redis)  │
-  │  5. Extract user_id + roles         │
-  └─────────────┬──────────────────────┘
-                │
-                ├─→ If valid: continue to service
-                └─→ If invalid: return 401 Unauthorized
+BREAKING POINT 1: At 35K API requests/sec, every request does a Redis
+   session lookup (10–50ms each). Redis session store becomes the
+   hot bottleneck: 35K reads/sec × 50ms = ~1,750 CPU-seconds/sec.
+   Even with horizontal Redis, this limits request throughput.
 
+BREAKING POINT 2: Session state is tied to Redis. If Redis is unavailable
+   (even for a failover), no request can be validated — auth is down.
+   Horizontal scaling requires all Auth Service instances to share session state.
 
-  FINE-GRAINED AUTHORIZATION (per-document)
-  ══════════════════════════════════════════════════════════════
+BREAKING POINT 3: Single-factor login — if Alice's password is leaked,
+   her account is fully compromised. DocuSign cannot accept this risk for
+   high-value e-signature workflows.
+```
 
-  Document Service receives authenticated request (user_id + roles in JWT)
-    │
-    │ Check if user can access document:
-    │ (1) If user has admin role → grant access
-    │ (2) If user is document owner → grant access
-    │ (3) If user has explicit permission in role_assignments → grant access
-    │ (4) Otherwise → deny (403 Forbidden)
-    │
-    ▼
-  ┌────────────────────────────────────────────┐
-  │    Role Assignments Table (Postgres)      │
-  │  (user_id, resource_id, role)             │
-  │                                            │
-  │  alice, doc-123, SIGNER                   │
-  │  bob, doc-123, VIEWER                     │
-  │  charlie, doc-456, APPROVER               │
-  └────────────────────────────────────────────┘
+**DECISION — WHICH token/session strategy?**
 
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Stateful session (opaque session ID, Redis lookup on every request) | Simple; instant revocation (delete session row) | 35K session lookups/sec → Redis bottleneck; shared state complicates horizontal Auth Service scaling | ❌ Bottleneck at scale |
+| Stateless JWT (RSA-signed claims; signature verification only; no server lookup) | ~1-2ms CPU-bound validation; scales to 35K/sec easily; Auth Service is fully stateless | Revocation requires a separate blacklist (token valid until expiry without it) | ✅ Best |
+| Hybrid (JWT for most requests + session store for revocation events only) | Fast validation + near-instant revocation; best of both | Both systems to operate; added complexity | ⚠️ Viable but operationally heavier |
 
-FLOW: Login Request
-═════════════════════════════════════════════════════════════════
+> 📖 Full: **`SystemDesignConcepts/Production-Grade/Auth-and-Security/27-auth-authz-fundamentals.md`**
 
-Client                  Auth Service          Postgres            Redis
-──────                  ────────────          ────────            ─────
-POST /login
-{email, password} ──→   Check password ──→   Query users
-                        table
-                        ◀─ {password_hash,
-                           roles: [EDITOR],
-                           mfa_enabled: true}
+```
+── Stage 2: Stateless JWT (No Blacklist, No MFA) ─────────────────
 
-                        Generate JWT ──→     [store session]
-                        (exp: 15 min)
-                        ◀─── {access_token,
-                              refresh_token,
-                              expires_in: 900}
+Auth Service issues RSA-signed JWTs. API Gateway validates the signature
+locally — no session store lookup. Fast. But no revocation, no second factor.
 
-◀─── {access_token, refresh_token}
+ ┌──────────┐  POST /auth/login    ┌──────────────────────────┐
+ │  Client  │ ──────────────────→ │      Auth Service        │
+ └──────────┘  {email, password}  │  1. bcrypt verify (200ms)│
+                                   │  2. generate JWT         │
+                                   │     RS256 signed         │
+                                   │     exp: +15min          │
+                                   │     claims: user+roles   │
+                                   └───────────┬──────────────┘
+                                               │ JWT returned
+                                               ▼
+                                         ┌──────────┐
+                                         │  Client  │
+                                         │  stores  │
+                                         │  JWT     │
+                                         └────┬─────┘
+                                              │  Bearer JWT on every request
+                                              ▼
+                                   ┌──────────────────────────┐
+                                   │   API Gateway            │
+                                   │  1. Parse JWT            │
+                                   │  2. Verify RS256 sig     │◀─ public key
+                                   │     with public key      │   (no DB call)
+                                   │  3. Check exp claim      │
+                                   │  4. Extract user_id+roles│
+                                   └──────────────────────────┘
 
-[Client stores JWT in localStorage/secure cookie]
+BREAKING POINT 1: No revocation. User logs out → JWT remains valid for
+   up to 15 minutes. If JWT is stolen (XSS, device theft), the attacker
+   has a 15-minute window with no way to close it. At DocuSign scale,
+   15 minutes of unauthorized document access is unacceptable.
 
+BREAKING POINT 2: No MFA. A compromised password = immediate full account
+   access. DocuSign cannot accept single-factor auth for high-value
+   e-signature workflows where legal non-repudiation is required.
+```
 
-FLOW: API Request (Authorization)
-═════════════════════════════════════════════════════════════════
+**DECISION — WHICH revocation strategy for JWTs?**
 
-Client
-GET /v1/documents/doc-123
-Authorization: Bearer {access_token}
-       │
-       ▼
-API Gateway / Middleware
-[1] Verify JWT signature using public key
-    - Hash header.payload with private key signature
-    - Compare: should match JWT's signature
-    - If no match → token forged → 401
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| No revocation (accept up-to-15-min window after logout) | Zero infra overhead; fastest validation | Stolen or admin-revoked token remains valid for full TTL — security gap unacceptable for DocuSign | ❌ Security gap |
+| Very short TTL (1-minute tokens, high refresh rate) | Smaller attack window | Client must refresh every 60s; 35K × more refresh requests/sec; poor UX | ⚠️ Impractical |
+| Redis blacklist (jti → revoked flag, TTL = token's remaining expiry; O(1) lookup) | Revocation is immediate; entries auto-expire (no cleanup job); adds only 1–2ms per request | Redis failure must be handled safely (fail-closed = deny access; fail-open = security risk); must choose | ✅ Best |
 
-[2] Check expiry (exp claim)
-    - If exp < now() → 401
+> 📖 Full: **`SystemDesignConcepts/Production-Grade/Auth-and-Security/27-auth-authz-fundamentals.md`**
 
-[3] Check token blacklist (Redis)
-    - Key: "blacklist:{token_jti}" (jti = unique token ID)
-    - If exists → token was revoked → 401
+```
+── Stage 3: JWT + Redis Blacklist + MFA + RBAC (Production) ──────
 
-[4] Extract claims
-    - user_id = JWT sub claim
-    - roles = JWT roles claim
-    - tenant_id = JWT tenant claim
+Adds: (1) Redis blacklist for instant revocation, (2) MFA second factor
+for login, (3) fine-grained RBAC + per-document ACL for authorization.
 
-[5] Pass to Document Service with (user_id, roles) in context
+LOGIN FLOW (with MFA):
 
+ ┌──────────┐  POST /auth/login    ┌──────────────────────────────┐
+ │  Client  │ ──────────────────→ │        Auth Service          │
+ └──────────┘  {email, password}  │  1. bcrypt verify            │
+                                   │  2. MFA enabled?             │
+                                   │     yes → send OTP via email │──→ Email Provider
+                                   │     return {mfa_required: true}│
+                                   └──────────────────────────────┘
+ POST /auth/verify-mfa {code}              │
+ ──────────────────────────────────────────▼
+                                   ┌──────────────────────────────┐
+                                   │  Auth Service (continued)    │
+                                   │  3. Verify OTP from Redis    │◀────▶ Redis
+                                   │     (mfa:{userId}, TTL 5min) │
+                                   │  4. Generate JWT             │
+                                   │     RS256, exp 15 min, jti   │
+                                   │  5. Log to audit_log         │──→ Postgres
+                                   └──────────────────────────────┘
 
-Document Service
-Check authorization:
-    IF role = "ADMIN"
-        Grant access ✓
-    ELSE IF user_id = document.owner_id
-        Grant access ✓
-    ELSE
-        Query: SELECT role FROM role_assignments
-               WHERE user_id = ? AND resource_id = ?
-        IF role IN [SIGNER, EDITOR, VIEWER]
-            Grant access ✓
-        ELSE
-            Return 403 Forbidden
+API REQUEST FLOW (validation + authorization):
 
+ ┌──────────┐  GET /v1/documents/doc-123
+ │  Client  │  Authorization: Bearer {JWT}
+ └────┬─────┘
+      │
+      ▼
+ ┌─────────────────────────────────────────┐
+ │          API Gateway / Middleware       │
+ │  1. Parse JWT → header.payload.sig     │
+ │  2. Verify RS256 sig (public key)      │
+ │  3. Check exp claim (< now() → 401)    │
+ │  4. Redis: blacklist:{jti} exists?     │◀────▶ Redis (1-2ms)
+ │     yes → 401 (token revoked)          │
+ │  5. Extract user_id, roles, tenant_id  │
+ └──────────────────┬──────────────────────┘
+                    │  authenticated context
+                    ▼
+ ┌──────────────────────────────────────────────────────┐
+ │               Document Service                       │
+ │  1. Check: user is admin role → grant               │
+ │  2. Check: user is document owner → grant           │
+ │  3. Query: resource_permissions WHERE               │
+ │     resource_id = doc-123 AND user_id = alice       │◀── Postgres (1-2ms)
+ │  4. If row exists and role ∈ {signer, viewer, ...}  │
+ │     → grant; else → 403 Forbidden                   │
+ │  5. Log to access_audit_log (immutable)             │──→ Postgres
+ └──────────────────────────────────────────────────────┘
 
 KEY INVARIANT:
-   JWT contains claims (user_id, roles, tenant_id, exp).
-   Signature proves JWT was issued by auth service (can't be forged).
-   Token validation is O(1) (verify signature + check blacklist in Redis).
-   Authorization checks are O(1) for simple RBAC, O(log N) for fine-grained (DB lookup).
+   Login = bcrypt verify + optional MFA OTP (Redis TTL 5min).
+   JWT = RS256 signature proves it came from Auth Service (unforgeable).
+   Validation = 2-4ms total: RS256 verify (CPU) + Redis blacklist (1-2ms).
+   Revocation = Redis SET blacklist:{jti} EX {remaining_TTL} on logout.
+   Authorization = RBAC role claim in JWT + per-document ACL in Postgres.
+   Audit = every login + every access (granted or denied) → immutable log.
 ```
+
+**DECISION — WHICH authorization model?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Simple RBAC (admin/user/editor, system-wide roles only) | O(1) lookup; roles embedded in JWT | Can't handle per-document permissions — admin sees ALL documents; can't make Alice a signer on doc-123 only | ❌ Insufficient for DocuSign |
+| ABAC — Attribute-Based Access Control (policy engine evaluates attributes of user + resource + environment at runtime) | Maximum flexibility; can encode complex policies | Policy engine adds 10-50ms per request; complex to debug; overkill for DocuSign's relatively stable permission model | ❌ Overkill |
+| RBAC + fine-grained ACL (system roles in JWT + per-document resource_permissions table) | Role check is O(1) from JWT; per-document lookup is O(log N) with (resource_id, user_id) index; balances simplicity and precision | One extra DB query per document access (1-2ms, acceptable) | ✅ Best |
+
+> 📖 Full: **`SystemDesignConcepts/Production-Grade/Auth-and-Security/27-auth-authz-fundamentals.md`**
+
+**DECISION — WHICH MFA method?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| No MFA (password only) | Zero friction UX | Compromised password = immediate full account access; unacceptable for legal e-signature | ❌ Too risky |
+| SMS OTP | No app install; familiar | Per-SMS cost; SIM swap attacks (attacker transfers victim's phone number to own SIM, intercepts OTP codes) | ❌ Attackable |
+| Email OTP (default) + TOTP authenticator app (optional upgrade) | Email: accessible to all users, no extra install; TOTP: offline, phishing-resistant, instant codes | Email: delivery can be delayed (5-min OTP window mitigates this); TOTP: requires app install, device loss = lockout | ✅ Best |
+
+> 📖 Full: **`SystemDesignConcepts/Production-Grade/Auth-and-Security/13-security-pki.md`**
 
 **Data flow walkthrough (say this out loud):**
 
-**Flow 1 — Login:**
-1. Client calls `POST /auth/login { email: alice@docusign.com, password: "secret123" }`
-2. Auth Service hashes password with bcrypt, compares with DB (slow: ~200ms)
-3. If mismatch → return 401 Unauthorized
-4. If match → check if MFA enabled
-5. If MFA enabled → generate MFA code, send via email, return 202 (waiting for MFA)
-6. Client calls `POST /auth/verify-mfa { email, mfa_code }`
-7. If mfa_code matches → generate JWT:
-   ```json
-   {
-     "alg": "RS256",
-     "typ": "JWT"
-   }
-   .
-   {
-     "sub": "user-alice-uuid",
-     "email": "alice@docusign.com",
-     "tenant_id": "tenant-123",
-     "roles": ["EDITOR"],
-     "iat": 1719241200,
-     "exp": 1719242100,  // 15 minutes
-     "jti": "token-id-xyz"  // unique token ID for revocation
-   }
-   .
-   [signature = RSA-SHA256(header.payload, private_key)]
-   ```
-8. Return `{ access_token: "eyJ...", refresh_token: "eyJ...", expires_in: 900 }`
-9. Log to audit table: `{user_id, email, login_timestamp, ip, user_agent, success: true}`
+**Flow 1 — Login (with MFA):**
+1. Client calls `POST /auth/login { email, password }`
+2. Auth Service bcrypt-verifies password against DB (slow: ~200ms by design — brute-force resistance)
+3. If mismatch → 401 Unauthorized
+4. If match and MFA enabled → generate 6-digit code, store in Redis (`mfa:{userId}`, TTL 5 min), send via email
+5. Client calls `POST /auth/verify-mfa { code }`; Auth Service checks Redis key, deletes on success (one-time use)
+6. Auth Service generates JWT: RS256-signed, exp +15 min, claims: `sub`, `roles`, `tenant_id`, `jti`
+7. Returns `{ access_token, refresh_token (7-day), expires_in: 900 }`
+8. Writes to `access_audit_log` (user, IP, timestamp, success)
 
-**Flow 2 — API Request (Authorization):**
-1. Client calls `GET /v1/documents/doc-123` with `Authorization: Bearer {access_token}`
-2. API Gateway middleware extracts JWT:
-   - Splits on "." → header, payload, signature
-   - Verifies signature: `RSA_SHA256_VERIFY(header.payload, signature, public_key)`
-   - Checks expiry: `exp > now()`
-   - Checks blacklist: `redis.exists("blacklist:{jti}")` (if user logged out)
-3. If any check fails → return 401
-4. If valid → extract `sub`, `roles`, `tenant_id` from JWT
-5. Document Service receives request + (user_id=alice, roles=[EDITOR], tenant_id=123) in context
-6. Check authorization:
-   ```sql
-   SELECT owner_id, status FROM documents WHERE id = 'doc-123'
-   ```
-7. If `owner_id == alice` → grant access
-8. Else: `SELECT role FROM role_assignments WHERE user_id = alice AND resource_id = 'doc-123'`
-9. If role IN [SIGNER, EDITOR, VIEWER] → grant access
-10. Else → return 403 Forbidden
+**Flow 2 — API Request (validation + authorization):**
+1. Client sends `Authorization: Bearer {JWT}` on every request
+2. API Gateway: split on `.`, verify RS256 signature with public key (~1ms CPU), check `exp`, check Redis blacklist on `jti` (~1ms I/O)
+3. Any check fails → 401
+4. Extracts `user_id`, `roles`, `tenant_id` — passes as request context
+5. Document Service checks: admin role in claims? owner? explicit row in `resource_permissions`?
+6. Access granted → serve; denied → 403; all outcomes written to `access_audit_log`
 
-**Flow 3 — Logout (Token Revocation):**
-1. Client calls `POST /auth/logout { refresh_token: "..." }`
-2. Auth Service adds JWT to blacklist: `redis.set("blacklist:{jti}", true, ttl=exp-now())`
-3. After TTL expires, blacklist entry is automatically deleted (no need for cleanup job)
-4. Future requests with revoked token will fail the blacklist check
-
-**Flow 4 — Refresh Token (Extend Session):**
-1. Client's access token is about to expire
-2. Client calls `POST /auth/refresh { refresh_token: "eyJ..." }`
-3. Auth Service validates refresh token (same JWT validation)
-4. Issues new access token (15-min exp) + new refresh token (7-day exp)
-5. Old access token becomes invalid (user must use new one)
-
-**Why each component:**
-- **Auth Service**: Handles login, token generation, MFA verification; stateless (can scale horizontally)
-- **JWT tokens**: Stateless validation (no server lookup); fast (~1-2ms signature verification)
-- **Redis (token blacklist)**: Fast revocation check on every request; O(1) lookup
-- **Postgres (roles/permissions)**: Source of truth for user data; indexed for fast queries
-- **Email/SMS provider**: Send MFA codes; decoupled from auth service (retryable)
-- **API Gateway middleware**: Intercepts every request; validates JWT before reaching service layer
+**Flow 3 — Logout (Revocation):**
+1. Client calls `POST /auth/logout { refresh_token }`
+2. Auth Service: `redis.set("blacklist:{jti}", 1, EX remaining_ttl)` — TTL = token's remaining lifetime
+3. Future requests with this `jti` → Redis key exists → 401 immediately
+4. After TTL, Redis auto-expires the entry (no cleanup job needed)
 
 ---
 
@@ -450,8 +506,9 @@ public class JwtTokenValidator {
 
             // Step 4: Check token blacklist (revocation)
             String jti = claims.getStringClaim("jti");
-            Boolean isBlacklisted = redis.opsForValue().get("blacklist:" + jti, Boolean.class);
-            if (isBlacklisted != null && isBlacklisted) {
+            // hasKey() is O(1), returns Boolean (nullable) — Boolean.TRUE.equals is NPE-safe
+            // Prefer hasKey over get() to avoid type-cast issues with generic RedisTemplate
+            if (Boolean.TRUE.equals(redis.hasKey("blacklist:" + jti))) {
                 throw new JWTException("Token was revoked (logged out)");
             }
 
@@ -772,29 +829,6 @@ public class MFAService {
 
 ---
 
-## Section 8 — 🌐 API Design
-
-### Core Endpoints
-
-| Method | Path | Auth | Request | Response | Status |
-|---|---|---|---|---|---|
-| POST | `/auth/login` | — | `{email, password}` | `{mfa_required?, request_id, access_token?, refresh_token?}` | 200, 401, 429 |
-| POST | `/auth/verify-mfa` | — | `{request_id, mfa_code}` | `{access_token, refresh_token, expires_in}` | 200, 401, 423 |
-| POST | `/auth/refresh` | — | `{refresh_token}` | `{access_token, expires_in}` | 200, 401 |
-| POST | `/auth/logout` | JWT Bearer | `{refresh_token}` | `{success: true}` | 200 |
-| GET | `/auth/user` | JWT Bearer | — | `{user_id, email, roles, permissions}` | 200, 401 |
-| GET | `/auth/keys` | — | — | `{keys: [{kid, public_key}]}` | 200 |
-
-### Key Design Decisions
-
-- **MFA optional but configurable**: Users can enable (enterprise) or skip (free tier)
-- **Refresh token rotation**: Each refresh issues a new refresh token (reduces risk of token theft)
-- **Key rotation**: Auth Service publishes public keys at `/auth/keys`; kid (key ID) in JWT header
-- **Rate limiting**: 10 failed login attempts = lock account for 15 min; prevent brute force
-- **Token lifetime**: Access token (15 min, short-lived), Refresh token (7 days, long-lived)
-
----
-
 ## Section 9 — 🗄️ Data Model
 
 See **Deep Dive 2** for complete schema. Key tables:
@@ -815,7 +849,7 @@ See **Deep Dive 2** for complete schema. Key tables:
 
 **Lose:** Revocation has latency (user logs out, but token stays valid until expiry or blacklist check). Requires token blacklist (Redis) for revocation.
 
-**Failure mode if wrong:** If you use stateful sessions (Redis) at 35K validations/sec, Redis becomes bottleneck (typical capacity: 50K ops/sec; you're at 70% of max). Adds 10-50ms latency per request.
+**Failure mode if wrong:** If you use stateful sessions (Redis) at 35K validations/sec, Redis becomes bottleneck (typical capacity: 50K ops/sec; you're at 70% of max). Adds 10-50ms latency per request. **Business impact:** Every API call in a signing ceremony must validate the session — 50ms added latency × 35K req/sec means all API calls degrade simultaneously — for DocuSign this means the signing ceremony UX (where a signer is waiting to click "Adopt & Sign" — the moment of highest legal significance) adds a 50ms penalty to every page interaction, degrading the experience at exactly the wrong moment and increasing ceremony abandonment rate.
 
 ---
 
@@ -827,7 +861,7 @@ See **Deep Dive 2** for complete schema. Key tables:
 
 **Lose:** Email can be delayed (SLA: 5 minutes); users without authenticator app are vulnerable if email is compromised.
 
-**Failure mode if wrong:** If only authenticator app, 30% of users (non-technical, older age group) won't set it up; adoption drops. If only email, account takeover risk higher (email can be intercepted/delayed).
+**Failure mode if wrong:** If only authenticator app, 30% of users (non-technical, older age group) won't set it up; adoption drops. If only email, account takeover risk higher (email can be intercepted/delayed). **Business impact:** For DocuSign: a 30% non-adoption rate for authenticator-only MFA leaves 30% of signers unprotected against SIM-swapping and email compromise — an attacker who gains account access can forge signing events, redirect envelopes to themselves, and the resulting fraudulent contracts carry real legal weight — a critical reputational and regulatory liability for DocuSign in regulated industries (finance, healthcare, legal).
 
 ---
 
@@ -839,7 +873,7 @@ See **Deep Dive 2** for complete schema. Key tables:
 
 **Lose:** Redis adds 1-2ms latency to every validation; requires Redis uptime for logout to work.
 
-**Failure mode if wrong:** If no blacklist, user logs out but token is still valid (until expiry). User thinks they're logged out but aren't (security hole). If Redis is down, logout fails (availability issue).
+**Failure mode if wrong:** If no blacklist, user logs out but token is still valid (until expiry). User thinks they're logged out but aren't (security hole). If Redis is down, logout fails (availability issue). **Business impact:** A signer uses a public computer, logs out, and believes their session is terminated — but the JWT remains valid for its remaining 60-minute lifetime — for DocuSign this means the next person at that computer clicks "back" and can view, download, or interact with in-progress contracts and signed PDFs, a serious legal privacy violation that exposes PII and confidential agreement terms without the account holder's consent.
 
 ---
 
@@ -855,6 +889,60 @@ Auth is the first line of defense. A single bypass could expose 10M users' priva
 2. **Multi-party signing**: Each signer has a role (signer, approver, reviewer) per document
 3. **Key rotation**: Auth Service rotates signing keys quarterly; old keys remain for token validation (backward compatibility)
 4. **Revocation during signing**: If a signer is removed mid-process, their permissions are immediately revoked (token blacklist)
+
+5. **CSRF (Cross-Site Request Forgery) — must name this at SDE-3:**
+
+CSRF (Cross-Site Request Forgery — an attack where a malicious website tricks a logged-in user's browser into making an unintended request to your site; because the browser automatically includes cookies with every request, the victim's authenticated session is used without their knowledge; classic example: user logged into DocuSign, visits attacker's site, attacker's page triggers `<form action="https://docusign.com/documents/123/sign" method="POST">` — browser sends request with DocuSign's session cookie, signing happens without the user's intent) is a live threat for any application that uses cookies for session management.
+
+**Why it matters for DocuSign:** A signed contract is legally binding. If an attacker can forge a signature request using the victim's session cookie, they can sign legally binding documents on behalf of the victim. This is a catastrophic attack surface.
+
+**The defense — three layers:**
+
+1. **Use JWT Bearer tokens in the `Authorization` header, not cookies.** Browsers don't auto-attach `Authorization` headers to cross-origin requests. CSRF only works when the browser automatically attaches credentials (cookies). JWT in `Authorization` header does not auto-attach → CSRF is structurally eliminated for pure API clients.
+
+2. **For any session cookie-based path (web UI, SSO callback):** Use the `SameSite=Strict` cookie attribute. This instructs the browser: "only send this cookie when the request originates from the same domain." Cross-origin form submissions or fetch requests from attacker's domain → browser withholds the cookie → CSRF fails.
+
+3. **CSRF token (Double Submit Cookie pattern) for legacy or browser-based flows:**
+   - Server issues a random CSRF token in a non-HttpOnly cookie (readable by JS)
+   - Client JS reads the cookie, sends it as a custom header `X-CSRF-Token: <value>`
+   - Server validates the header matches the cookie value
+   - Cross-origin attackers can't read the cookie (SOP) → can't set the header → CSRF fails
+
+**In an interview:** "For our API endpoints, CSRF is mitigated by using JWT Bearer tokens in the Authorization header — browsers don't auto-attach these cross-origin, so there's no vector. For the web UI login flow that sets a session cookie, I'd use `SameSite=Strict` as a defense-in-depth layer. For the SAML SSO callback endpoint (must accept POST from a third-party IdP), I'd use the Double Submit Cookie pattern. At DocuSign, any CSRF bypass on signing endpoints would allow an attacker to forge legally binding contracts on behalf of victims — this must be addressed, not assumed to be handled by the framework."
+
+6. **Session fixation — must name this in any auth design:**
+
+Session fixation (an attack where the attacker pre-sets the victim's session ID before they log in, then waits for the victim to authenticate; since the session ID is fixed by the attacker, the attacker knows the ID of the now-authenticated session and can hijack it without ever stealing a cookie) is a classic attack that predates JWT.
+
+**Example attack:**
+1. Attacker visits DocuSign, gets a new session ID: `session_abc`
+2. Attacker sends the victim a link: `docusign.com/login?session_id=session_abc` (or sets a session cookie via XSS)
+3. Victim logs in using that session ID — the server elevates it to an authenticated session
+4. Attacker now knows `session_abc` is authenticated → hijacks the session
+
+**The fix (one line of code):** **On every successful login, invalidate the existing session and issue a brand new session ID.** Never elevate a pre-login session to post-login.
+
+```java
+// WRONG — session fixation vulnerability:
+public String login(String email, String password, String existingSessionId) {
+    User user = authenticate(email, password);
+    session.setUserId(existingSessionId, user.getId()); // attacker knew existingSessionId
+    return existingSessionId;
+}
+
+// CORRECT — rotate session ID on login:
+public String login(String email, String password, String existingSessionId) {
+    User user = authenticate(email, password);
+    sessionStore.invalidate(existingSessionId);        // destroy pre-login session
+    String newSessionId = UUID.randomUUID().toString(); // generate new, unpredictable ID
+    sessionStore.create(newSessionId, user.getId());
+    return newSessionId;
+}
+```
+
+**Why JWT avoids this by design:** JWTs are stateless — there's no pre-auth token to fixate on. The token is generated for the first time post-authentication. Session fixation is structurally impossible with JWTs. Name this as a reason to prefer JWT over session cookies, not just as a performance argument.
+
+**In an interview:** "Session fixation is mitigated by rotating the session ID on successful login — the pre-auth session is invalidated and a new one is issued. This is why JWT is preferable for our use case: the access token only exists post-authentication, so there's no session for an attacker to pre-set. For any cookie-based flows (e.g., web UI), I'd enforce session rotation as a matter of Spring Security baseline configuration — `SessionManagementConfigurer.sessionFixation().newSession()`."
 
 **Your answer should include:**
 
@@ -886,6 +974,80 @@ Auth is the first line of defense. A single bypass could expose 10M users' priva
 
 ---
 
+### New Deep Probes (Tier 2 — added Jul 4, 2026)
+
+**Q: "Your mobile app needs to perform OAuth login. But mobile apps can't safely store a client_secret (an attacker can decompile the APK). How do you secure the OAuth flow for native apps?"**
+> The standard solution is **PKCE** (Proof Key for Code Exchange — pronounced "pixy"; an OAuth 2.0 extension where the client proves it started the flow without needing a client_secret, making it safe for public clients like mobile apps that can't store secrets securely):
+>
+> **Flow:**
+> 1. Mobile app generates a random `code_verifier` (43–128 character random string, e.g., `s7n4r2k...`)
+> 2. App computes `code_challenge = BASE64URL(SHA256(code_verifier))` — a one-way hash
+> 3. App sends `GET /authorize?code_challenge={hash}&code_challenge_method=S256` to auth server
+> 4. User logs in; auth server stores the challenge, returns an authorization code
+> 5. App sends `POST /token {code, code_verifier}` — note: sends the ORIGINAL verifier, not the hash
+> 6. Auth server hashes the received verifier and checks it matches the stored challenge
+> 7. If match: issues JWT. If no match: reject.
+>
+> **Why this prevents attacks:** If an attacker intercepts the authorization code (via URL redirect sniffing on a rooted device), they can't exchange it for a token — they don't know the `code_verifier` (it was never transmitted, only its hash was). The one-way hash ensures knowledge of the challenge doesn't reveal the verifier.
+>
+> **In an interview:** "For mobile OAuth, I'd use PKCE. No client_secret needed — the code_verifier proves the token requester is the same client that started the flow. It's the RFC-recommended approach (RFC 7636) for all public clients — mobile apps, SPAs, and CLI tools."
+
+---
+
+**Q: "Your refresh token lasts 7 days. If it's stolen (e.g., by malware reading app storage), the attacker has 7 days of silent access. How do you detect and limit this?"**
+> **Refresh token rotation** — every time a refresh token is used, the auth server issues a NEW refresh token and immediately invalidates the old one. Tokens form a "family" (a chain of one-time-use refresh tokens for one session).
+>
+> **Why this detects theft:**
+> - User legitimately uses RT1 → gets AT + RT2 (RT1 invalidated)
+> - Attacker also has RT1 (stolen), uses it → auth server sees RT1 is already invalidated (reuse detected!)
+> - Auth server detects anomaly: revokes the ENTIRE token family → forces re-login for everyone holding tokens in this session
+>
+> **Implementation:**
+> ```sql
+> -- token_family table: tracks one session's token chain
+> token_family_id, user_id, current_rt_hash, parent_rt_hash, status
+>
+> -- On refresh token use:
+> -- 1. Find row by current_rt_hash
+> -- 2. If status = USED → token reuse detected → revoke entire family (UPDATE ... SET status = REVOKED WHERE token_family_id = ?)
+> -- 3. If status = ACTIVE → mark this row USED, insert new row with new RT hash
+> ```
+>
+> **Trade-off:** If the legitimate user's refresh request fails mid-flight (network error before they receive the new RT), they effectively lose their session (old RT invalidated, new RT never received). Fix: implement retry with idempotency key on the token endpoint — same request twice returns same RT.
+>
+> **In an interview:** "Refresh token rotation limits the attack window from 7 days to 'one legitimate use.' The first time the attacker uses the stolen RT, both the attacker and the legitimate user are forced to re-login. It's not perfect (attacker might use the RT first), but it guarantees detection on first use."
+
+---
+
+### New Cross-Concept Probe (Tier 3 — added Jul 4, 2026)
+
+**Q: "DocuSign supports enterprise SSO via SAML 2.0. An enterprise customer's Okta sends a SAML assertion when their employee logs in. How does your auth service trust and process that assertion, and how do you prevent a forged SAML assertion?"**
+> SAML 2.0 (Security Assertion Markup Language — the XML-based protocol that enterprise Identity Providers like Okta and Azure AD use to send signed "proof of identity" assertions to Service Providers like DocuSign; an assertion is an XML document saying "User john@acme.com authenticated successfully at 2026-07-04T10:30:00Z, here are their groups") works via XML digital signatures:
+>
+> **Trust setup (one-time, per customer):**
+> - Enterprise IT admin provides their IdP's X.509 certificate (public key) to DocuSign
+> - DocuSign stores it: `saml_identity_providers(tenant_id, idp_entity_id, idp_certificate_pem)`
+>
+> **Login flow:**
+> 1. User visits DocuSign → redirected to their company's Okta (IdP)
+> 2. Okta authenticates user, generates SAML assertion XML (contains: user email, groups, timestamp, expiry)
+> 3. Okta signs the assertion with their private key (RSA signature over the XML)
+> 4. Okta redirects user back to DocuSign's assertion consumer service URL with the signed XML
+>
+> **DocuSign validation (critical steps):**
+> 1. Look up the tenant's IdP certificate from DB
+> 2. Verify the XML signature using the IdP's public key — if tampered, signature fails
+> 3. Check `NotOnOrAfter` (assertion expiry timestamp) — reject if in the past (replay attack prevention)
+> 4. Check `InResponseTo` (ties assertion to a specific auth request) — prevents cross-site assertion injection
+> 5. Extract `NameID` (user's email), look up or provision the user in DocuSign's DB
+> 6. Issue DocuSign JWT for this user (now they're authenticated in DocuSign's system)
+>
+> **Forgery prevention:** Steps 2, 3, 4 are non-negotiable. A forged assertion fails step 2 (wrong signature). A replayed assertion fails step 3 (expired). A stolen assertion from another SP fails step 4 (wrong InResponseTo).
+>
+> **In an interview:** "SAML trust is bootstrapped by exchanging certificates. At assertion time, we verify the XML signature cryptographically — an attacker would need to compromise the customer's Okta private key to forge a valid assertion. Additionally, the assertion has a short TTL (5 min) and is tied to a specific request, preventing replay and cross-site attacks."
+
+---
+
 ## Section 13 — 🐞 Common Mistakes on This Question
 
 - **Mistake 1:** "Every request validates token by querying the session table in Postgres." → **Why it's wrong:** At 35K validations/sec, DB becomes bottleneck (typical capacity: 1-2K queries/sec). → **What to say instead:** "Stateless JWT: signature verification is CPU-bound (~1-2ms), not I/O. No DB lookup needed per request. Revocation via Redis blacklist (O(1) lookup)."
@@ -900,13 +1062,13 @@ Auth is the first line of defense. A single bypass could expose 10M users' priva
 
 | Dimension | Relevant? | How your design addresses it |
 |---|---|---|
-| **Testability** | ✅ | JWT validation is deterministic (same signature = always valid). Mock signing key for unit tests. No randomness in signature verification. |
-| **Usability** | ✅ | Simple login API: `POST /login { email, password }`. MFA is optional (doesn't slow down non-MFA users). Transparent token refresh (client handles automatically). |
-| **Extensibility** | ✅ | New roles are added to role table; existing code doesn't change. New permission types (read, write, sign, approve) are extensible. TOTP and new MFA methods can be added. |
-| **Security** | ✅ | RSA signature prevents token forgery. Bcrypt passwords are slow to hash (brute-force resistant). JWT exp claim prevents replay after expiry. Revocation via blacklist. MFA prevents account takeover. |
-| **Availability** | ✅ | Token validation is local (no external service call). Auth Service can run on 10 instances (stateless). Session store (Redis) is replicated (HA). If Redis down, fail closed (deny access safely). |
-| **Scalability** | ✅ | Stateless JWT handles 35K validations/sec. Token generation (bcrypt ~200ms) needs 3-4 parallel instances (3.5K logins/sec ÷ 5 logins/instance/sec). Authorization queries are O(log N) with indexes. |
-| **Observability & Traceability** | ✅ | Audit log captures every login + access attempt. Metrics: login latency, MFA success rate, token validation rate. Failed login patterns trigger alerts. |
+| **Testability** | ✅ | JWT validation is deterministic (same RS256 signature + same token → always VALID or always INVALID). Unit test: sign a test token with a test private key, verify with the public key — no live auth service needed. RBAC authorization logic (hasPermission(user, resource, action)) is a pure function testable with mock user + mock resource. |
+| **Usability** | ✅ | POST /login → {access_token (15min), refresh_token (7 days)} — transparent token refresh via POST /auth/refresh means users never see a re-login prompt during normal usage. MFA is opt-in: non-MFA users see no friction. For DocuSign: a signer who clicks an envelope link is auto-authenticated via the signing ceremony URL token — no separate login screen interrupts the signing flow. |
+| **Extensibility** | ✅ | New permission types (sign, view, approve, manage_team) are new rows in resource_permissions — no code changes. New MFA methods (hardware FIDO2 key, magic link) = new MFAStrategy implementation injected via Spring bean. For DocuSign: adding a new role "Notary" with a specific permission set = one INSERT into roles + role_permissions, zero code deployment. |
+| **Security** | ✅ | RS256 signature prevents token forgery (private key never leaves Auth Service; all validators use public key). Bcrypt (cost factor 12, ~200ms) makes brute-force of 1M passwords take ~57 hours per attacker request. Redis blacklist (jti → revoked, TTL = token's remaining lifetime) ensures immediate revocation on logout. For DocuSign: a stolen JWT from a leaked log file is immediately invalidated once the user logs out — the blacklist closes the replay window. |
+| **Availability** | ✅ | JWT signature validation is CPU-only (RSA verify ~1-2ms, no external call) — at 35K validations/sec (Section 4), 10 stateless auth service instances handle validation in parallel. Redis blacklist checked via GET (< 1ms). If Redis is down: fail-closed (deny access) — correct for security. Redis HA via Sentinel prevents unplanned downtime. |
+| **Scalability** | ✅ | Stateless JWT handles 35K validations/sec (Section 4) across 10 horizontally scaled instances — no session store bottleneck. Bcrypt login throughput: 200ms/hash × 10 instances = 50 logins/sec capacity (Section 4: 3.5K logins/sec peak → scale to 70 instances during peak). RBAC authorization: O(log N) index lookup on (user_id, resource_id) — sub-5ms even at 10M permission rows. |
+| **Observability & Traceability** | ✅ | Immutable access_audit_log captures every login (user_id, timestamp, ip_address, user_agent, mfa_used, success/fail) — for DocuSign's 7+ year legal retention requirement, this is the tamper-proof record of "who logged in before the contested envelope was signed." Alert: > 5 consecutive failed logins for one user_id → brute-force attempt → temporarily lock + notify security. MFA adoption rate metric (alert if < 70% enterprise users enrolled). |
 
 ---
 
@@ -921,3 +1083,6 @@ Auth is the first line of defense. A single bypass could expose 10M users' priva
 | Date | Change |
 |---|---|
 | June 24, 2026 | **E2-authentication-system.md created.** Final solution file. Full 15-section solution framework for Type B Product Architecture. Covers: JWT tokens with RSA signature verification, token blacklist (revocation), MFA (email OTP + TOTP), fine-grained RBAC+ACL authorization, audit trails (immutable), key rotation. Scale: 10M users, 100M logins/day = 3.5K logins/sec peak, 35K token validations/sec. Prerequisites: `13-security-pki.md`, `11-api-design.md`. |
+| Jul 5, 2026 | **Section 6 restructured: single final-state diagram → 3-stage progressive HLD.** Stage 1 (Session-Based Auth): stateful session cookie, Redis session lookup on every request — BREAKING POINTs: 35K session lookups/sec saturates Redis; single-factor login too risky for DocuSign. Stage 2 (Stateless JWT, no blacklist): RS256-signed JWT; validation is CPU-only (1-2ms); no session store — BREAKING POINTs: no revocation (stolen token valid for 15 min); no MFA (compromised password = full access). Stage 3 (JWT + Redis Blacklist + MFA + RBAC — production): Redis blacklist (jti → revoked, TTL = token's remaining lifetime); email OTP + optional TOTP MFA; RBAC roles in JWT + per-document resource_permissions table (fine-grained ACL); immutable access_audit_log. Four inline decision tables: (1) token strategy — session ❌ / JWT ✅ / hybrid ⚠️; (2) revocation — none ❌ / very short TTL ⚠️ / Redis blacklist ✅; (3) authorization model — simple RBAC ❌ / ABAC ❌ / RBAC+ACL ✅; (4) MFA method — none ❌ / SMS OTP ❌ / Email OTP+TOTP ✅. All Section 6 verdicts verified against Section 7 deep dive choices — no contradictions. |
+| Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **PKCE for mobile OAuth** — code_verifier generated by app, code_challenge = BASE64URL(SHA256(verifier)) sent during authorization, original verifier sent at token exchange; auth server hashes verifier and checks against stored challenge; prevents intercepted auth codes from being exchanged by attackers who don't know the verifier; RFC 7636 recommended approach for all public clients; (2) **Refresh token rotation for theft detection** — every RT use issues new RT + invalidates old; stored as token family chain with `current_rt_hash`; RT reuse (already-used RT presented) → revoke entire family; detects theft on first use but requires retry-with-idempotency for network failures; (3) **SAML 2.0 SSO trust and forgery prevention** — trust bootstrapped via customer's IdP X.509 certificate; at assertion time: XML signature verification, NotOnOrAfter expiry check, InResponseTo cross-site injection prevention; forged assertions fail signature; replayed assertions fail expiry; cross-site assertions fail InResponseTo. |
+| Jul 5, 2026 | **Section 10 business impact + Section 14 DocuSign dimensions pass.** Section 10: added **Business impact:** to all 3 trade-offs — signing ceremony latency degradation at the "Adopt & Sign" moment (auth service dependency at highest legal significance), 30% non-MFA-adoption leaving users vulnerable to SIM-swapping with fraudulent contracts carrying full legal weight (enforcement cost), public computer 60-minute JWT validity post-logout exposing in-progress contracts (token lifetime). Section 14: rewrote all 7 dimension cells — FIDO2 and notary role RBAC extensibility (Extensibility), stolen JWT 15-minute blacklist closure window (Security), 70% enterprise MFA adoption rate alert + 7-year legal retention for `access_audit_log` (Observability). |

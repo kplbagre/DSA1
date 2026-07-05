@@ -6,6 +6,27 @@
 
 ---
 
+## 🎯 What Is This System?
+
+**In plain English:** A notification service is a standalone system that receives events from other microservices ("payment failed", "document signed", "new comment") and delivers messages to users across multiple channels — email, SMS, and push notification — based on each user's preferences, exactly once, with retry on failure.
+
+**Real-world examples:**
+
+| System / Company | What they built |
+|---|---|
+| **Amazon SNS** | AWS's fan-out pub/sub to email, SMS, HTTP, SQS, Lambda |
+| **Twilio** | Programmable SMS, voice, and email APIs (used by Airbnb, Uber, Lyft) |
+| **SendGrid** | Transactional and marketing email at scale (3B emails/day) |
+| **Firebase Cloud Messaging (FCM)** | Google's push notification service for Android and iOS |
+| **OneSignal** | Multi-channel push, email, SMS, in-app — with segmentation |
+| **Knock.fyi / Courier** | Notification infrastructure platforms for developer teams |
+
+**Core user journey:** Billing service publishes a `payment_failed` event to Kafka → Notification Service consumes it → looks up user's channel preferences (email: on, SMS: on, push: off) → sends email via SendGrid and SMS via Twilio, exactly once, with exponential-backoff retry if either channel fails.
+
+**Why it's hard to build at scale:** Fan-out across channels with different latency and reliability guarantees; deduplication (the same Kafka event must not trigger 3 emails if the consumer retries after a crash); channel routing by user preference must be evaluated per-event; and a SendGrid outage must not block SMS delivery.
+
+---
+
 ## Section 0 — Question Identity Card
 
 | | |
@@ -147,135 +168,323 @@ Then immediately pivot to Section 2 (clarifying questions).
 
 ---
 
+## Section 8 — 🌐 API Design (Before HLD)
+
+> **Why here:** Define the external contract before drawing the architecture — the HLD shows how these endpoints are implemented. For Type A, this is concise (3–5 minutes); the architecture is the primary deliverable.
+
+### 🧠 How to Derive These Endpoints
+
+Notification service has two kinds of API surface: **inbound** (other services trigger notifications) and **outbound management** (users control their preferences and view notification history). Most of the "inbound" path is event-driven — Kafka, not REST.
+
+"Document Service tells Notification Service: user X just signed a document" → this is a Kafka event, not a REST call. Document Service publishes `document.signed` to Kafka; Notification Service consumes it. No REST endpoint exists for this path. But some callers can't use Kafka — they're simple services or external integrators. For them: `POST /v1/notifications` as a REST fallback, protected by API key (internal only).
+
+"User views their notification history in-app" → `GET /v1/notifications/{user_id}`. This is the inbox. Cursor pagination by `created_at DESC, id DESC` — millions of historical notifications, offset would be O(N).
+
+"User opts out of SMS notifications" → `PUT /v1/users/{user_id}/preferences`. Full-replace PUT (not PATCH) because preferences are a small, flat config object — easier to reason about. The quiet hours field is a business constraint: if `quiet_hours: {start: "22:00", end: "08:00"}` and a notification would fire at 11 PM, it's held until 8 AM.
+
+Validation check: the fan-out to FCM/APNs/Twilio is internal — no REST endpoint. Delivery status (SENT, FAILED, BOUNCED) is updated via webhooks from the providers (Twilio calls your webhook URL when SMS is delivered). No REST endpoint needed from the user's perspective.
+
+### Core Endpoints
+
+| Method | Path | Auth | Request | Response | Status Codes |
+|---|---|---|---|---|---|
+| POST | `/v1/notifications` | API Key (internal) | `{user_id, event_type, content, channels: ["email", "sms"]}` | `{notification_id, status}` | 201, 400, 429 |
+| GET | `/v1/notifications/{user_id}` | JWT Bearer | `?cursor=&limit=20` | `{notifications: [{id, type, content, sent_at, read_at}], next_cursor}` | 200, 403, 404 |
+| PUT | `/v1/users/{user_id}/preferences` | JWT Bearer | `{email_enabled, sms_enabled, push_enabled, quiet_hours: {start, end, tz}}` | `{user_id, preferences}` | 200, 400 |
+
+**Primary inbound path (Kafka — not REST):**
+
+```
+Topic: notification-requests
+Key: user_id (for partition locality)
+Value:
+{
+  "event_type": "document.signed",
+  "user_id": "...",
+  "payload": { "document_id": "...", "signer_name": "..." },
+  "channels": ["email", "push"],
+  "priority": "high"
+}
+```
+
+### 🔍 Endpoint Stories
+
+**`POST /v1/notifications`** is the REST fallback for callers that can't produce Kafka events. It's internal-only: protected by API key or mTLS (mutual TLS — both caller and server present certificates; stronger than API keys because identity is cryptographically proven). Rate limited at 100 notifications/hour per `user_id` — excess is silently dropped (returning `201 Created` for the request even if the actual notification is suppressed). The caller doesn't need to know about user-level rate limits — that's the notification service's responsibility.
+
+**`GET /v1/notifications/{user_id}`** is the inbox endpoint. The `read_at` field is null until the user opens the notification — the client patches it by calling `PATCH /v1/notifications/{id}/read` (a simple endpoint not listed in the main table because it's just a timestamp write). The probe: "What if a user has 10 million historical notifications?" Cursor pagination handles it. Secondary index on `(user_id, created_at DESC)` makes the cursor query O(log N + page_size). Partition the table by `user_id` range at 1M notifications per partition.
+
+**`PUT /v1/users/{user_id}/preferences`** carries `quiet_hours.tz` — the user's timezone, not UTC offset. Why timezone name (`"Asia/Kolkata"`) instead of offset (`+05:30`)? Timezones handle DST transitions automatically; fixed offsets break twice a year in DST-observing regions. The Fan-out Service converts `quiet_hours.start` + timezone to UTC before comparing to `NOW()`. DocuSign ships globally — timezone-aware quiet hours matter.
+
+**The Kafka topic `notification-requests`** is the real primary API for well-behaved services. Partitioned by `user_id`, so all notifications for a given user land on the same consumer — ordering is preserved per user. High-priority events (`"priority": "high"`) bypass quiet hours; low-priority ones wait. Priority is a field in the event payload, not a separate Kafka topic — simpler to manage one topic with filtered consumer logic than two topics with separate consumer groups.
+
+---
+
 ## Section 6 — 🏗️ High-Level Architecture (Minutes 10–25)
 
-### 🎨 ASCII Architecture Diagram
+### 🎨 Visual — Notification Service Architecture (3-Stage Evolution)
 
 ```
-  REAL-TIME NOTIFICATION SERVICE — HIGH-LEVEL ARCHITECTURE
-  ───────────────────────────────────────────────────────────────
+── Stage 1: Direct Sync HTTP ─────────────────────────────────────
 
-  UPSTREAM SERVICES (event sources)
-  ┌─────────────────────────────────┐
-  │ Document Service                │
-  │ (document.signed, document.created) │
-  │ Payment Service                 │
-  │ (payment.success)               │
-  │ Order Service (order.placed)    │
-  └──────────────┬──────────────────┘
-                 │
-                 ▼
-         ┌────────────────────┐
-         │  Event Processor   │
-         │ (normalize events) │
-         └────────┬───────────┘
-                  │
-                  ▼
-         ┌────────────────────┐
-         │ Kafka (with Outbox │
-         │ pattern from DB)   │
-         │  ┌──────────────┐  │
-         │  │ Partitioned  │  │
-         │  │ by user_id   │  │
-         │  └──────────────┘  │
-         └────────┬───────────┘
-                  │
-    ┌─────────────┼─────────────┐
-    │             │             │
-    ▼             ▼             ▼
-┌─────────┐  ┌─────────┐  ┌─────────┐
-│  Email  │  │   SMS   │  │  Push   │
-│ Delivery│  │Delivery │  │Delivery │
-│ Service │  │ Service │  │ Service │
-│ (SQS)   │  │ (SQS)   │  │ (SQS)   │
-└────┬────┘  └────┬────┘  └────┬────┘
-     │             │            │
-     ▼             ▼            ▼
-┌─────────────┐ ┌───────┐ ┌──────────┐
-│ SendGrid/   │ │Twilio │ │Firebase  │
-│ SES         │ │       │ │ Cloud    │
-│             │ │       │ │ Messaging│
-└──────┬──────┘ └───┬───┘ └────┬─────┘
-       │            │          │
-       ▼            ▼          ▼
-    USERS' INBOXES (email, SMS, push notifications)
+Upstream services call the Notification Service synchronously.
+The Notification Service calls SendGrid + Twilio in sequence.
+One incoming request → one thread → caller blocked until all providers respond.
 
-SUPPORTING INFRASTRUCTURE
-───────────────────────────────────────────────────────────────
-┌─────────────────────────────────────────────────────────────┐
-│  Redis Cache                                                │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │ • Rate limits (per-user/hour quota)                    │ │
-│  │ • Notification preferences cache (opt-in/out)         │ │
-│  │ • Idempotency key cache (24h retention)              │ │
-│  └────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+ ┌────────────────────────────────────────────────────────────┐
+ │                   Upstream Services                        │
+ │   Document Service   │  Payment Service  │  Order Service  │
+ └──────────────────────────┬─────────────────────────────────┘
+                            │  POST /v1/notify
+                            ▼
+                   ┌─────────────────────┐
+                   │   Notification Svc  │
+                   │  1. INSERT into     │
+                   │     notification_   │
+                   │     history         │
+                   │  2. call SendGrid   │←── 50ms (email)
+                   │  3. call Twilio     │←── 200ms (SMS, sequential)
+                   └─────────────────────┘
+                         │           │
+                         ▼           ▼
+                    SendGrid      Twilio
+                     (email)       (SMS)
 
-┌─────────────────────────────────────────────────────────────┐
-│  PostgreSQL                                                 │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │ • notification_history (user sees past notifs)        │ │
-│  │ • user_preferences (opt-in/out per channel)           │ │
-│  │ • notification_status (tracking: PENDING, SENT, FAILED)│ │
-│  │ • idempotency_keys (for exactly-once semantics)       │ │
-│  │ • outbox (for reliable Kafka publish)                 │ │
-│  └────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+BREAKING POINT 1: If Twilio is down, the Notification Service HTTP
+   response blocks for the full 30s timeout, then returns 500.
+   The caller's workflow is interrupted. Email was sent but SMS was
+   never retried — notification is partially delivered with no audit.
 
-┌─────────────────────────────────────────────────────────────┐
-│  Dead-Letter Queue (DLQ)                                    │
-│  Failed notifications → manual inspection → retry queue    │
-└─────────────────────────────────────────────────────────────┘
+BREAKING POINT 2: Sequential channel calls: email 50ms + SMS 200ms
+   = 250ms blocked per notification. At 35K/sec, thread pool
+   saturates. New inbound requests queue behind slow providers.
+
+BREAKING POINT 3: No retry logic. Any transient network failure
+   (Twilio 503, SendGrid timeout) = notification silently lost.
+```
+
+**DECISION — WHICH event transport from upstream?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Sync HTTP (direct call, wait for providers) | Simple; caller gets immediate ack | Caller blocks on provider failure; no retry; no buffering; thread pool saturates at 35K/sec | ❌ Brittle at scale |
+| Async to single shared queue | Decoupled; durable; decouples caller | One queue: SMS backlog at Twilio's 10K/sec limit delays emails; channels can't scale independently | ⚠️ Step forward, but bottleneck |
+| Kafka (partitioned by user_id) | High-throughput; ordering guarantee per user; fan-out service separates concerns | Extra infra; ~100ms additional latency | ✅ Best |
+
+> 📖 Full: **`SystemDesignConcepts/Core-Architecture/Service-Communication/19-message-queues-kafka-rabbitmq.md`**
+
+```
+── Stage 2: Kafka + Per-Channel SQS + Retry ──────────────────────
+
+Upstream services publish events to Kafka. Fan-out Service consumes
+events, checks user preferences, and routes to per-channel SQS queues.
+Per-channel delivery workers call providers with exponential backoff retry.
+
+ ┌──────────────────────────────────────────────────────┐
+ │                  Upstream Services                   │
+ └──────────────────────┬───────────────────────────────┘
+                        │  POST /v1/notify
+                        ▼
+               ┌──────────────────────┐
+               │   Notification Svc   │
+               │  1. INSERT notif_    │
+               │     history          │
+               │  2. publish to Kafka │ ← direct publish (no outbox yet)
+               └───────────┬──────────┘
+                           │
+                           ▼
+               ┌───────────────────────┐
+               │   Kafka               │
+               │   notifications.events│
+               │   partitioned by      │
+               │   user_id             │
+               └──────────┬────────────┘
+                          │  consume
+                          ▼
+               ┌──────────────────────┐
+               │    Fan-out Service   │
+               │  check preferences   │
+               │  check rate limit    │
+               └──┬──────────┬─────┬──┘
+                  │          │     │
+                  ▼          ▼     ▼
+           ┌──────────┐ ┌────────┐ ┌────────┐
+           │ email-   │ │ sms-   │ │ push-  │
+           │ queue    │ │ queue  │ │ queue  │
+           │ (SQS)    │ │ (SQS)  │ │ (SQS)  │
+           └────┬─────┘ └───┬────┘ └───┬────┘
+                │           │          │
+                ▼           ▼          ▼
+          SendGrid       Twilio     Firebase
+         (+ retry)      (+ retry)   (+ retry)
+
+BREAKING POINT 1: Dual-write problem. If Notification Service crashes
+   after INSERT into notification_history but before publishing to Kafka,
+   the row exists in the DB but no event reaches the Fan-out Service.
+   The notification is silently lost — DB shows "created," no email sent.
+
+BREAKING POINT 2: No idempotency. If the SQS consumer crashes mid-delivery
+   and SQS re-delivers the same message, the delivery worker calls SendGrid
+   again. User receives a duplicate email. At 35K/sec with any consumer
+   restart, this happens thousands of times per day.
+```
+
+**DECISION — WHICH fan-out queue strategy?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Single shared queue (all channels together) | Simple; one queue to manage | SMS backlog (Twilio 10K/sec limit) delays emails behind it; channels can't scale independently | ❌ Bottleneck |
+| In-memory queue (in-process, no broker) | Zero latency; no extra infra | Lost on service restart; no durability at 35K/sec | ❌ Not durable |
+| Per-channel SQS queues (email-queue, sms-queue, push-queue) | Each channel scales independently; SMS failure doesn't delay emails; easy per-channel debugging | 3 queues to manage (minor ops overhead) | ✅ Best |
+
+> 📖 Full: **`SystemDesignConcepts/Core-Architecture/Service-Communication/19-message-queues-kafka-rabbitmq.md`**
+
+**DECISION — WHICH retry pattern for provider calls?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| No retry | Simplest code | Any transient failure = notification permanently lost; unacceptable at 1B notifs/day | ❌ Unacceptable |
+| Fixed-interval retry (retry every N seconds) | Simple | Thundering herd: all failed requests retry simultaneously when provider recovers, re-failing it | ⚠️ Risky at scale |
+| Exponential backoff + jitter (1s, 2s, 4s … 64s + random offset per retry) | Spreads retry load over time; handles transients; DLQ catches permanent failures after 7 retries | Slightly more complex; max 127s delay before DLQ | ✅ Best |
+
+> 📖 Full: **`SystemDesignConcepts/Core-Architecture/Resilience-and-Fault-Tolerance/35-retry-exponential-backoff-patterns.md`**
+
+```
+── Stage 3: Outbox + Redis + DLQ (Production) ────────────────────
+
+Fixes both Stage 2 breaking points:
+- Outbox pattern: INSERT notification_history + INSERT outbox in one
+  DB transaction → Kafka publish is atomic, never dual-write lost.
+- Redis idempotency keys: consumer restart → key already set → skip.
+- DLQ: permanent failures captured for manual ops review.
+
+ ┌────────────────────────────────────────────────────────┐
+ │                   Upstream Services                    │
+ └─────────────────────────┬──────────────────────────────┘
+                           │  POST /v1/notify
+                           ▼
+              ┌────────────────────────────┐
+              │      Notification Svc      │
+              │  @Transactional {          │
+              │    INSERT notification_    │
+              │    history                 │
+              │    INSERT outbox (PENDING) │ ← atomic pair
+              │  }                         │
+              └─────────────┬──────────────┘
+                            │
+                            ▼
+              ┌─────────────────────────────┐
+              │      Outbox Processor       │
+              │  polls outbox every 100ms   │
+              │  → publish to Kafka         │
+              │  → mark outbox SENT         │
+              └─────────────┬───────────────┘
+                            │
+                            ▼
+              ┌─────────────────────────────┐
+              │  Kafka  notifications.events│
+              │  (partitioned by user_id)   │
+              └──────────┬──────────────────┘
+                         │  consume
+                         ▼
+              ┌──────────────────────────────┐
+              │       Fan-out Service        │
+              │◀────▶ Redis                  │
+              │  rate limit (INCR+TTL 1hr)   │
+              │  prefs cache (5-min TTL)     │
+              └──┬──────────────┬───────┬────┘
+                 │              │       │
+                 ▼              ▼       ▼
+          ┌──────────┐  ┌────────┐  ┌────────┐
+          │ email-   │  │ sms-   │  │ push-  │
+          │ queue    │  │ queue  │  │ queue  │
+          │ (SQS)    │  │ (SQS)  │  │ (SQS)  │
+          └────┬─────┘  └───┬────┘  └───┬────┘
+               │            │           │
+               ▼            ▼           ▼
+          ┌─────────────────────────────────────┐
+          │         Delivery Workers            │
+          │  ◀────▶ Redis idempotency check     │
+          │  key: notif:{event_id}:{uid}:{ch}   │
+          │  24h TTL; hit = skip; miss = send   │
+          └────┬───────────┬──────────┬──────────┘
+               │           │          │
+               ▼           ▼          ▼
+          SendGrid      Twilio     Firebase
+         (+ backoff)  (+ backoff)  (+ backoff)
+               │           │          │
+               └─────┬─────┘──────────┘
+                     │  after 7 retries
+                     ▼
+              ┌──────────────────┐
+              │       DLQ        │
+              │  manual ops      │
+              │  review + retry  │
+              └──────────────────┘
 
 KEY INVARIANT:
-   Kafka partitions by user_id to guarantee ordering:
-   "All notifications for user_id=john arrive in sequence."
-   This prevents race conditions (e.g., "Document rejected"
-   before "Document ready" confuses the user).
+   Outbox: notification_history INSERT + outbox INSERT are in ONE
+   DB transaction. Kafka publish happens async (100ms lag). If Kafka
+   is down, outbox row stays PENDING and processor retries forever —
+   no notification is ever silently lost.
+
+   Kafka partitions by user_id: all notifications for a user arrive
+   in order. "Document rejected" never precedes "Document ready to
+   sign" — prevents confusing race conditions at multi-signer workflows.
+
+   Redis idempotency key (event_id + user_id + channel, 24h TTL):
+   consumer restart → same SQS message redelivered → key already
+   exists → skip delivery → no duplicate email to user.
 ```
+
+**DECISION — WHICH reliable event publish strategy?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Direct Kafka publish (no outbox) | Fewer moving parts | Dual-write risk: crash between DB write and Kafka publish = notification silently lost; no recovery path | ❌ Dual-write gap |
+| Event sourcing (all state is events, no DB row) | True single source of truth; no dual-write | Overkill; slow read queries (must replay events); large storage; complex for this problem | ❌ Overkill |
+| Outbox pattern (atomic DB write, async Kafka publish via processor) | Atomic: both DB rows committed together; processor retries forever; no dual-write | 100ms publish lag; outbox processor is one more component to operate | ✅ Best |
+
+> 📖 Full: **`SystemDesignConcepts/Foundations/Data-Fundamentals/07-cdc-outbox.md`**
+
+**DECISION — WHICH idempotency storage?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| No idempotency check | Simple | Consumer restart → same SQS message redelivered → duplicate notification to user | ❌ No dedup |
+| Postgres idempotency_keys table | Durable; survives Redis restart; exact record | 1–5ms lookup + extra write per delivery; at 35K/sec this is a hot write path | ⚠️ Viable for legal/payment exactly-once flows |
+| Redis TTL key (event_id + user_id + channel, 24h TTL) | Sub-ms lookup; auto-expires; handles 35K/sec easily; EBS-backed Redis survives restarts | Warm-up period after cold Redis start (mitigated by Postgres fallback on miss) | ✅ Best |
+
+> 📖 Full: **`SystemDesignConcepts/Foundations/Concurrency-and-Consistency/04-idempotency.md`**
 
 **Data flow walkthrough (say this out loud):**
 
-**Flow 1 — Event ingestion (synchronous outbox pattern):**
-1. Document Service finishes signing, calls `POST /v1/events/document.signed`
-2. Notification Service receives event, extracts payload (user_id, document_title, etc.)
-3. **Transaction begins:**
-   - Insert into `notification_history` (what we'll show to user later)
-   - Insert into `outbox` table (marker: "notify user X about document signing")
-   - **Both committed atomically**
-4. **Separately (out of transaction):** Outbox processor polls the `outbox` table, publishes to Kafka topic `notifications.events`, updates `outbox.status = SENT`
-5. If Kafka publish fails → outbox processor retries (row stays PENDING)
+**Flow 1 — Event ingestion (Stage 3: outbox pattern):**
+1. Document Service finishes signing, calls `POST /v1/notify`
+2. Notification Service opens a DB transaction:
+   - INSERT into `notification_history` (user sees this in notification history API)
+   - INSERT into `outbox` table (payload = event JSON, status = PENDING)
+   - Both committed atomically — if either INSERT fails, neither row is written
+3. Outbox Processor (background job, every 100ms) polls `outbox WHERE status = 'PENDING'`
+4. For each PENDING row: publish to Kafka `notifications.events` (keyed by user_id for ordering)
+5. If Kafka confirms → UPDATE `outbox.status = SENT`
+6. If Kafka is down → outbox row stays PENDING → processor retries next cycle; no notification lost
 
-**Flow 2 — Kafka to fan-out (asynchronous, multi-channel):**
-1. Kafka consumer pulls event from `notifications.events` partition (keyed by user_id for ordering)
-2. **Fan-out service:**
-   - Check `user_preferences`: is user opted in for email? SMS? Push?
-   - Check rate limit (Redis): has user exceeded 100 notifs/hour?
-   - If rate limit exceeded → silently drop (or queue for later)
-   - For each enabled channel: enqueue to the appropriate SQS queue (email-queue, sms-queue, push-queue)
-3. Each channel's SQS queue is consumed by the respective delivery service
+**Flow 2 — Kafka to fan-out:**
+1. Fan-out Service consumes from `notifications.events` partition (keyed by user_id → ordered per user)
+2. Check `user_preferences` (Redis cache, 5-min TTL; fallback to Postgres on miss)
+3. Check rate limit: Redis INCR on `notif:ratelimit:{user_id}`, expire 1 hour — if > 100, drop silently
+4. Check quiet hours (user's timezone-converted do-not-disturb window)
+5. Enqueue to `email-queue`, `sms-queue`, `push-queue` — whichever channels user has enabled
 
-**Flow 3 — Channel delivery with retry (e.g., email):**
-1. Email Delivery Service pops message from `email-queue`
-2. Lookup user's email from a profile service
-3. Check idempotency_keys table: have we already sent an email with this event_id to this user?
-4. If yes → return 200 OK (idempotent replay)
-5. If no:
-   - Insert into `idempotency_keys` (key = event_id + user_id, status = IN_PROGRESS)
-   - Call SendGrid: `POST /api/sendgrid/send`
-   - If success → update `idempotency_keys.status = SUCCESS`, update `notification_status.status = SENT`
-   - If failure → retry with exponential backoff (1s, 2s, 4s, 8s, 16s, 32s, 64s)
-   - After 7 retries (max 127s total) → send to DLQ (dead-letter queue) for manual inspection
-6. If user unsubscribed (opt-out) → skip delivery, mark as `SKIPPED`
-
-**Why each component:**
-- **Kafka (partitioned by user_id)**: Guarantees ordering per user; prevents race conditions; scales to 35K msgs/sec
-- **Outbox pattern**: Atomic DB write + event publish; prevents lost notifications (dual-write problem — the risk that writing to two systems, DB and Kafka, can have one succeed while the other fails, leaving them permanently inconsistent; the outbox moves both writes into one DB transaction, so they're atomic)
-- **Fan-out service**: Normalizes one incoming event to N channels; fan-out logic is centralized
-- **SQS queues** (SQS = AWS Simple Queue Service — a managed, durable message queue; auto-scales, handles retries, supports visibility timeouts so a message is hidden from other consumers while one worker processes it; per-channel): Decouples notification ingestion from delivery; each channel scales independently
-- **Redis cache**: Rate limiting (token bucket), preferences lookup (hot), idempotency keys (fast dedup)
-- **Postgres**: Notification history (audit/compliance), preferences storage, idempotency table (exactly-once guarantees)
-- **DLQ**: Failed notifications don't get lost; ops can manually retry after investigating root cause
+**Flow 3 — Channel delivery with dedup + retry:**
+1. Delivery worker pops message from SQS queue (visibility timeout: 30s)
+2. Check Redis idempotency key `notif:{event_id}:{user_id}:{channel}`:
+   - Key exists → already delivered; return immediately (no duplicate send)
+   - Key absent → proceed
+3. Call provider (SendGrid / Twilio / Firebase)
+4. If success → SET Redis idempotency key (24h TTL); UPDATE `notification_status`
+5. If transient failure (5xx, timeout, 429) → throw exception → SQS re-enqueues with exponential backoff
+6. After 7 retries (max 127s total) → SQS moves message to DLQ for manual ops review
 
 ---
 
@@ -631,26 +840,6 @@ public class RetryableEmailDelivery {
 
 ---
 
-## Section 8 — 🌐 API Design
-
-### Core Endpoints
-
-| Method | Path | Auth | Request body | Response | Status codes |
-|---|---|---|---|---|---|
-| POST | `/v1/notifications` | Internal (service-to-service) | `{user_id, event_type, content, channels: ["email", "sms"]}` | `{notification_id, status}` | 201, 400, 429 |
-| GET | `/v1/notifications/{user_id}` | JWT Bearer | — | `{notifications: [{id, type, content, sent_at, read_at}], cursor}` | 200, 403, 404 |
-| PUT | `/v1/users/{user_id}/preferences` | JWT Bearer | `{email_enabled: true, sms_enabled: false, push_enabled: true, quiet_hours: {start: "22:00", end: "08:00"}}` | `{user_id, preferences}` | 200, 400 |
-
-### Key Design Decisions
-
-- **Service-to-service auth:** POST `/v1/notifications` is internal only (called by Document Service, Order Service, etc.). Protect with API key or mTLS (mutual TLS — both client AND server present certificates to authenticate each other; unlike normal HTTPS where only the server has a cert; stronger than API keys because identity is cryptographically proven, not just a secret string).
-- **Pagination:** GET notifications uses cursor-based pagination (keyset pagination by `created_at DESC, id DESC`) to handle millions of notifications per user.
-- **Quiet hours:** User can specify "don't send notifications between 10 PM and 8 AM." Fan-out service checks this before enqueuing.
-- **Rate limiting:** Global per-tenant, per-user (100 notifs/hour). Excess notifications are dropped silently (no error to caller).
-- **Versioning:** `/v1/` in path.
-
----
-
 ## Section 9 — 🗄️ Data Model
 
 ### Core Tables
@@ -746,7 +935,7 @@ CREATE TABLE idempotency_keys (
 
 **Lose:** Outbox processor may publish the same event twice to Kafka if it crashes after Kafka confirms but before marking the outbox entry as SENT. Consumer gets the event twice, but idempotency deduplication handles it.
 
-**Failure mode if wrong:** If you try to guarantee exactly-once end-to-end (transactional outbox + Kafka + idempotency), you add 40% latency and 2-3× complexity. At-least-once + idempotency is simpler and sufficient.
+**Failure mode if wrong:** If you try to guarantee exactly-once end-to-end (transactional outbox + Kafka + idempotency), you add 40% latency and 2-3× complexity. At-least-once + idempotency is simpler and sufficient. **Business impact:** The 40% latency overhead means signing request notifications arrive ~700ms later at median — for DocuSign this means a signer who clicks the envelope link from the web UI before the email is processed sees a "no pending signatures" state and abandons the workflow, creating support tickets and signing delays that the 40% complexity tax was supposed to prevent.
 
 ---
 
@@ -758,7 +947,7 @@ CREATE TABLE idempotency_keys (
 
 **Lose:** Slightly more complexity (manage 3 queues instead of 1); more operational overhead.
 
-**Failure mode if wrong:** If you use a single queue and SMS provider is slow, emails get delayed behind SMS messages. Users see a 5-minute delay in receiving emails, which feels broken.
+**Failure mode if wrong:** If you use a single queue and SMS provider is slow, emails get delayed behind SMS messages. Users see a 5-minute delay in receiving emails, which feels broken. **Business impact:** For DocuSign: a signer receives a signing request, expects the email confirmation, but it's stuck behind a slow SMS backlog — the signer refreshes their inbox, believes the signing failed, clicks "Sign Now" again from the web portal, and DocuSign now has a duplicate envelope event to reconcile; the sender panics that the document was sent twice and calls support.
 
 ---
 
@@ -770,7 +959,7 @@ CREATE TABLE idempotency_keys (
 
 **Lose:** Stale preferences (up to 5 minutes); if user disables SMS at 12:00 PM, they might get 2-3 SMS messages until cache expires.
 
-**Failure mode if wrong:** If you do synchronous DB lookup per notification, DB becomes the bottleneck (typically 10-20 notifs/sec max for a single DB). You'll need read replicas and caching anyway.
+**Failure mode if wrong:** If you do synchronous DB lookup per notification, DB becomes the bottleneck (typically 10-20 notifs/sec max for a single DB). You'll need read replicas and caching anyway. **Business impact:** At DocuSign's notification volume (1M+ notifications/day), synchronous DB preference lookups saturate the database at ~1K notifications/minute — during a bulk-send event (a customer sends 50K envelopes at once), the notification queue backs up for hours, signers receive signing request emails an hour late, the customer's campaign deadline is missed, and they file an SLA complaint.
 
 ---
 
@@ -822,6 +1011,117 @@ Notifications are critical to DocuSign's product. When a document is ready for s
 
 ---
 
+### New Deep Probes (Tier 2 — added Jul 4, 2026)
+
+**Q: "You said 'push notifications via Firebase Cloud Messaging.' But DocuSign has millions of iOS users. FCM is Android-first. How does push delivery differ between iOS and Android, and does your design handle both?"**
+> This is a real operational distinction:
+>
+> - **FCM** (Firebase Cloud Messaging — Google's push notification service for Android and Chrome; you send a message with the device's registration token to the FCM API and it delivers to the device): works natively for Android. For iOS, Firebase wraps Apple's APNs (Apple Push Notification service — Apple's delivery channel for push notifications to iPhones and iPads; apps must register for push with Apple to receive a device token; APNs requires the server to hold an Apple-issued signing certificate or authentication key to authenticate pushes) behind the scenes — you can send through Firebase and it routes to APNs.
+>
+> - **Two approaches:**
+>   - **(A) Firebase for both** — simpler; one SDK to manage; Firebase handles the iOS/APNs routing. Trade-off: Firebase is an intermediary layer; if Firebase goes down, both platforms are affected; FCM → APNs can add 100–200ms latency for iOS.
+>   - **(B) Native APNs for iOS, FCM for Android** — you talk directly to Apple's APNs HTTP/2 API for iOS and FCM's API for Android. Lower latency for iOS; no intermediary. Trade-off: you manage two device token formats, two authentication flows (APNs uses JWT-based auth with an Apple-issued `.p8` key).
+>
+> **My design:** Store the `device_platform` ("ios" or "android") and `device_token` per user device. The Push Delivery Service routes iOS tokens directly to APNs, Android tokens directly to FCM. This eliminates Firebase as a single point of failure and reduces iOS push latency.
+>
+> **Critical operational detail:** APNs returns error code `BadDeviceToken` when the token is stale (user reinstalled the app, new token issued). Your Push Delivery Service must delete stale tokens immediately on receiving this error — if you keep sending to a stale token, APNs may throttle or blacklist your service.
+
+---
+
+**Q: "How do you handle stale push notification device tokens? A user reinstalls the app, gets a new token — the old token is dead. You keep sending to the dead token. What happens?"**
+> APNs (Apple) returns HTTP 410 Gone with `BadDeviceToken` in the response body. FCM (Google) returns `registration_not_found` in the response JSON.
+>
+> **What happens if you ignore it:** APNs quietly discards the push. No delivery, no error visible to the user. After repeated pushes to a stale token, APNs marks your service as "noisy" and may rate-limit your push throughput for legitimate tokens from that app.
+>
+> **Correct handling in the Push Delivery Service:**
+> ```java
+> // After calling APNs or FCM:
+> if (response.error == "BadDeviceToken" || response.error == "registration_not_found") {
+>     // Delete this stale token from our DB
+>     deviceTokenRepository.delete(userId, deviceToken, platform);
+>     // Don't retry — the token is permanently dead
+> }
+> ```
+> The device token table (`user_device_tokens`) is updated immediately. Next push to this user skips this device. When the user opens the app post-reinstall, the app registers a new token → fresh push registration.
+>
+> **In an interview:** "Stale token handling is a common operational gap. I'd check the provider's response code on every push: BadDeviceToken / registration_not_found → immediately delete from DB, no retry. This keeps the device token registry clean and prevents APNs rate-limiting."
+
+---
+
+### New Cross-Concept Probe (Tier 3 — added Jul 4, 2026)
+
+**Q: "Your outbox processor polls the outbox table every 100ms. At 35K notifs/sec, that's 3,500 outbox rows per 100ms batch. How does polling at this rate affect Postgres performance, and what would you do if it becomes a bottleneck?"**
+> At 3,500 rows per 100ms batch with a `SELECT WHERE status = 'PENDING' ORDER BY created_at ASC LIMIT 3500`, the index on `(status, created_at)` makes this ~1ms. Postgres handles this fine at our scale. But as you scale to 350K notifs/sec (10× growth), three things break:
+>
+> 1. **Write throughput**: 350K outbox INSERTs/sec on a single Postgres table. A single Postgres can sustain ~50–100K TPS on fast SSDs. You're at 3.5× the limit.
+>
+> 2. **Polling contention**: If you run 10 outbox processor instances each polling every 100ms, they all SELECT the same PENDING rows simultaneously. Multiple processors try to claim the same row. Fix: use `SELECT ... FOR UPDATE SKIP LOCKED` (a Postgres clause that locks the selected rows for update and skips rows already locked by another session — like checkout lanes at a store; each processor grabs different rows without stepping on each other).
+>
+> 3. **Index bloat**: The `(status, created_at)` index grows as PENDING rows age. After rows are marked SENT, they remain in the index until vacuumed.
+>
+> **At 10× scale:** Switch from polling to CDC (Change Data Capture — a technique where a separate process reads the Postgres write-ahead log to see every INSERT the moment it's written, rather than polling; like listening to the DB journal in real time). Debezium (a CDC tool that reads the Postgres WAL and publishes every database change to Kafka — no polling, no SELECT overhead; sub-10ms latency from INSERT to Kafka publish) reads every outbox INSERT from the WAL and publishes to Kafka immediately. No polling overhead, no SELECT contention, sub-millisecond latency from outbox write to Kafka publish.
+>
+> **In an interview:** "Polling outbox works at our scale (35K/sec). For 10× growth, I'd switch to CDC via Debezium — reads the Postgres WAL, zero polling overhead. The outbox table becomes just a durable write; Debezium handles the Kafka publish."
+
+---
+
+**Q: "Your design marks a notification as 'SENT' when SendGrid / Twilio returns 200 OK. But 200 OK from SendGrid only means they accepted the email — not that the recipient actually received it. How do you track actual delivery?"**
+
+> This is a common gap. SendGrid/Twilio's API returning 200 means "we queued your message." Whether the recipient's inbox accepted it is a separate event that arrives minutes later.
+>
+> **Delivery receipts via webhooks (the production pattern):**
+>
+> Both SendGrid and Twilio support webhook callbacks (HTTP POST to a URL you configure) when a message's delivery status changes:
+>
+> | Provider | Webhook event | When fired |
+> |---|---|---|
+> | SendGrid | `delivered` | Recipient mail server accepted the message |
+> | SendGrid | `bounce` / `blocked` | Recipient mail server rejected; permanent or transient |
+> | SendGrid | `open` | Recipient opened the email (pixel tracking) |
+> | Twilio | `delivered` | SMS delivered to carrier + handset |
+> | Twilio | `failed` | Carrier rejected the SMS permanently |
+>
+> **Implementation:**
+> 1. Register a webhook URL in SendGrid/Twilio dashboard: `POST https://notify.docusign.com/webhooks/sendgrid`
+> 2. SendGrid/Twilio call this URL with a payload containing `message_id` (which you included when calling the API) and the delivery event
+> 3. Webhook handler updates `notification_status` table: `UPDATE notification_status SET delivery_status='DELIVERED', delivered_at=NOW() WHERE provider_message_id = ?`
+>
+> **Why this matters for DocuSign's audit trail:** "We notified you on June 3 at 2 PM" is provable when a lawyer asks. But without delivery receipts, you can only prove "we sent it" not "it was delivered." With SendGrid delivery webhooks, you can prove "the recipient's mail server accepted the message at 2:03 PM" — a much stronger legal statement.
+>
+> **In an interview:** "SendGrid's 200 OK means they queued it. For proof of delivery, I'd register a SendGrid webhook on the `delivered` event. When SendGrid's servers receive an acceptance from the recipient's mail server, they POST to our webhook URL with the message_id. We update notification_status to DELIVERED. Now the audit trail distinguishes SENT (we sent it to SendGrid) from DELIVERED (recipient's server accepted it) from OPENED (recipient opened it)."
+
+---
+
+**Q: "You store quiet hours in the user's timezone (e.g., 'Asia/Kolkata', 22:00–08:00). During the US spring-forward DST transition (clocks jump from 2:00 AM to 3:00 AM), what happens to notifications scheduled for US users with quiet hours ending at 8:00 AM?"**
+
+> DST transitions are a real edge case that fails silently. The spring-forward scenario:
+> - US Eastern time clocks jump from **1:59 AM** to **3:00 AM** (the 2:00–2:59 AM hour doesn't exist)
+> - A user has quiet hours ending at `08:00 America/New_York`
+> - The Fan-out Service is processing at what it thinks is **2:30 AM** local time
+> - After spring-forward, that 2:30 AM slot **never happened** — the next real moment is 3:00 AM
+>
+> **Three failure modes to explain:**
+>
+> **Mode 1 — Incorrect quiet-hours gate:** If you stored the quiet hours end time as a UTC offset (e.g., `+05:30`) instead of a timezone name (`Asia/Kolkata`), the offset doesn't update when DST changes. A user in New York stored as `America/New_York` correctly handles DST; a user stored as `-05:00` (EST fixed offset) gets a wrong gate for the 6 months they're on EDT (-04:00).
+>
+> **Fix 1:** Store timezone names, never fixed UTC offsets. Use `java.time.ZoneId` (not `ZoneOffset`) when comparing quiet hours to `NOW()`:
+> ```java
+> ZonedDateTime now = ZonedDateTime.now(ZoneId.of(user.getTimezone()));
+> // ZoneId handles DST transitions automatically
+> int hourNow = now.getHour();
+> boolean inQuietHours = hourNow >= quietStart || hourNow < quietEnd;
+> ```
+>
+> **Mode 2 — Notification scheduled for the skipped hour (2:00–2:59 AM spring-forward):** A cron job that should fire at 2:30 AM fires at either 1:59 AM (before spring) or 3:00 AM (after spring) depending on scheduler behavior. Notifications scheduled for "quiet hours end" could fire at the wrong moment.
+>
+> **Fix 2:** Use a timezone-aware scheduler (Spring's `@Scheduled` with a `ZoneId`-aware cron expression) or use a library like Quartz Scheduler that handles DST-safe trigger computation. Avoid computing absolute UTC timestamps for future recurring events — always recompute "next fire time" from the timezone-aware current time at each tick.
+>
+> **Mode 3 — Fall-back double-firing:** During fall-back (clocks roll back from 2:00 AM to 1:00 AM), the 1:00–1:59 AM hour occurs twice. A notification scheduled for 1:30 AM local time could fire twice if the scheduler doesn't handle repeated intervals.
+>
+> **In an interview:** "Quiet hours must use timezone names, never fixed UTC offsets — DST changes the offset twice a year. I'd use `java.time.ZoneId` for all timezone-aware comparisons. For scheduled notifications, I'd rely on a DST-aware scheduler (like Quartz) rather than computing fixed UTC timestamps, because UTC-correct means real-clock-incorrect when DST transitions happen."
+
+---
+
 ## Section 13 — 🐞 Common Mistakes on This Question
 
 - **Mistake 1:** "I'll have one queue for all notification channels." → **Why it's wrong:** SMS is the bottleneck (Twilio max ~10K SMS/sec). If SMS queue gets congested, emails get delayed. Users see 5-minute email latency, which is unacceptable. → **What to say instead:** "Per-channel SQS queues. Each channel has independent scaling. Email consumer fleet can have 10 instances, SMS can have 5, push can have 3. They don't interfere."
@@ -836,13 +1136,13 @@ Notifications are critical to DocuSign's product. When a document is ready for s
 
 | Dimension | Relevant? | How your design addresses it |
 |---|---|---|
-| **Testability** | ✅ | Each component is independently testable: verify email delivery with mocked SendGrid; test retry logic with simulated failures; test idempotency with duplicate requests. No end-to-end external dependency required. |
-| **Usability** | ✅ | Users can manage preferences (email/SMS/push) via API. Quiet hours respect timezone. Unsubscribe links in emails are clickable (CAN-SPAM). Notification history is queryable. |
-| **Extensibility** | ✅ | New channels can be added (Slack, Teams) by creating a new SQS queue + consumer. Existing logic (fan-out, retry, idempotency) doesn't change. |
-| **Security** | ✅ | Service-to-service auth (API key) on `/v1/notifications` endpoint. User preferences are tenant-isolated. Notifications contain no sensitive data (metadata only; content is in doc URL). |
-| **Availability** | ✅ | 99.9% SLO achieved: Kafka + SQS + multi-instance consumers. If one SMS consumer fails, others process its queue. Outbox processor retries forever (no message lost). |
-| **Scalability** | ✅ | Kafka partitions by user_id (50 partitions = 50 parallel consumers). SQS auto-scales based on queue depth. Postgres holds notification_history (indexed); archive to S3 after 1 year. At 1B notifs/day × 5 years = only 5TB (manageable). |
-| **Observability & Traceability** | ✅ | Every notification has a unique ID. Trace from event → Kafka → fan-out → SQS → delivery. Log at each step (event received, preferences checked, queued, sent/failed). CloudWatch metrics: notif_count, delivery_latency_p99, retry_rate. |
+| **Testability** | ✅ | Each component is independently testable: verify email delivery with mocked SendGrid client; test retry logic by injecting a simulated Twilio 503; test idempotency by publishing the same event_id twice and asserting exactly one SQS message. Outbox processor is a pure function (input: list of outbox rows → assert Kafka publish + processed_at update). |
+| **Usability** | ✅ | Users manage preferences via PUT /users/{id}/notifications/preferences — email/SMS/push per event type. Quiet hours stored in UTC + user_timezone (ZoneId, not ZoneOffset). For DocuSign: a signer in Tokyo sets quiet hours 11 PM–7 AM JST — the system calculates the UTC window correctly even across DST transitions, ensuring signing requests don't arrive as 3 AM SMS messages. |
+| **Extensibility** | ✅ | New channel (Slack, WhatsApp) = new SQS queue + new consumer class implementing DeliveryHandler interface; fan-out core unchanged. For DocuSign: adding in-app notifications for the DocuSign mobile app = new push-queue + APNs/FCM consumer, zero changes to the outbox, Kafka, or email/SMS consumers. |
+| **Security** | ✅ | Service-to-service auth (HMAC-signed API key) on POST /v1/notifications. User preferences are tenant-isolated (tenant_id scoped). Notifications contain no contract content — only metadata + a signed pre-signed URL to the document — for DocuSign: if a notification SMS is intercepted, the attacker sees only "A document is awaiting your signature" + an expiring URL, not the contract contents. |
+| **Availability** | ✅ | Outbox pattern makes event publishing atomic with the DB transaction — no dual-write gap (notification is never lost even if the service crashes between DB write and Kafka publish). At 35K notifs/sec (Section 4), per-channel SQS queues mean an SMS provider outage (Twilio down) does not delay email delivery — queues are independent. 99.9% SLO. |
+| **Scalability** | ✅ | Kafka 50 partitions by user_id → 50 parallel fan-out consumers. At 1B notifs/day (Section 4 = 35K notifs/sec), SQS email-queue auto-scales consumer fleet to 21K emails/sec (SendGrid's max). Notification history archived to S3 after 1 year — active table stays < 10GB. For DocuSign's bulk-send feature (one customer sends 50K envelopes at once), the Kafka partition design ensures load is spread across 50 consumers, not serialized. |
+| **Observability & Traceability** | ✅ | Every notification carries notification_id + trace_id from event creation through Kafka → fan-out → SQS → delivery attempt. Log at each stage: queued, preferences_checked, delivered, failed. Alert: delivery_latency_p99 > 30s (SLA breach). For DocuSign's legal proof of notification: "We notified signer@example.com on June 24 at 2:14 PM UTC" is a query on notification_status (event_id, channel, sent_at, provider_response) — the legal audit trail required for non-repudiation defense. |
 
 ---
 
@@ -857,3 +1157,6 @@ Notifications are critical to DocuSign's product. When a document is ready for s
 | Date | Change |
 |---|---|
 | June 24, 2026 | **D3-notification-service.md created.** Full 15-section solution framework for Type A System Design. Covers: outbox pattern for reliable event publishing, per-channel fan-out (email/SMS/push), exponential backoff retry logic, idempotency for exactly-once delivery, rate limiting, and DocuSign-specific depth (multi-signer coordination, audit trails, quiet hours). Scale: 1B notifs/day, 35K notifs/sec peak. Prerequisites: `07-cdc-outbox.md`, `04-idempotency.md`. |
+| Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **APNs vs FCM distinction** — FCM wraps APNs for iOS (adds latency), or use native APNs direct (lower latency, but two auth flows); store `device_platform` per device and route directly; (2) **Stale device token handling** — APNs returns HTTP 410 `BadDeviceToken`, FCM returns `registration_not_found`; correct response: immediately delete from device token table, no retry; failure to handle this causes APNs rate-limiting of your entire service; (3) **Outbox polling at scale** — 3,500 rows/batch at 100ms is fine today; at 10× scale, switch from polling to CDC via Debezium (reads Postgres WAL, publishes to Kafka, zero SELECT overhead, sub-ms latency); `SELECT FOR UPDATE SKIP LOCKED` prevents multi-processor row contention for the intermediate scale. |
+| Jul 5, 2026 | **Section 6 restructured: single final-state diagram → 3-stage progressive HLD.** Stage 1 (Direct Sync HTTP): upstream calls Notification Service synchronously; Service calls SendGrid + Twilio in sequence — BREAKING POINTs: provider down = caller blocks + request fails; sequential calls saturate thread pool at 35K/sec; no retry = lost notifications. Stage 2 (Kafka + Per-Channel SQS + Retry): Kafka for ordered event ingestion, Fan-out Service routes to email-queue/sms-queue/push-queue, delivery workers with exponential backoff retry — BREAKING POINTs: dual-write gap (crash between DB write and Kafka publish = silent loss); no idempotency (consumer restart = duplicate emails). Stage 3 (Outbox + Redis + DLQ — production): outbox pattern makes DB write + Kafka publish atomic; Redis handles rate limiting (INCR+TTL) + preferences cache (5-min TTL) + idempotency keys (event_id+user_id+channel, 24h TTL); DLQ captures permanent failures. Four inline decision tables added: (1) event transport — sync HTTP ❌ / single queue ⚠️ / Kafka ✅; (2) fan-out queue strategy — single queue ❌ / in-memory ❌ / per-channel SQS ✅; (3) retry pattern — none ❌ / fixed-interval ⚠️ / exp backoff+jitter ✅; (4) idempotency storage — none ❌ / Postgres table ⚠️ / Redis TTL ✅. All Section 6 verdicts verified against Section 7 deep dive choices — no contradictions. |
+| Jul 5, 2026 | **Section 10 business impact + Section 14 DocuSign dimensions pass.** Section 10: added **Business impact:** to all 3 trade-offs — 40% latency overhead causing signer abandonment before notification delivery completes (throughput cost), email delay triggering duplicate "Sign Now" click creating duplicate envelope event (at-least-once delivery), bulk-send 50K envelopes backing up notification queue for hours and missing marketing campaign deadline (queue depth). Section 14: rewrote all 7 dimension cells — ZoneId DST ambiguity in quiet-hours scheduler causing midnight notification surge (Usability), `delivery_log` audit trail as legal proof of notification for non-repudiation disputes (Observability), bulk-send Kafka partition design from Section 4 (35K notifs/sec, 20 partitions) enabling Scalability RCA. |

@@ -4,6 +4,26 @@
 
 ---
 
+## 🎯 What Is This System?
+
+**In plain English:** An expense reporting system lets employees submit reimbursement claims (hotel, meals, travel, software) by entering details and uploading receipts. Claims flow through a multi-step approval workflow — manager, then finance — with validation rules where different employee roles have different spending limits per expense category.
+
+**Real-world examples:**
+
+| System / Company | What they built |
+|---|---|
+| **SAP Concur** | Used by 95% of Fortune 500; processes 63M expense reports/year |
+| **Expensify** | SmartScan (OCR receipts) with real-time reimbursement |
+| **Coupa** | Spend management with complex approval policy engines |
+| **Workday Expenses** | Integrated with HR so roles and spend limits update automatically |
+| **Brex / Ramp** | Corporate card + expense tracking with per-category spending controls |
+
+**Core user journey:** Employee snaps a photo of a $450 hotel receipt → submits the claim → manager gets an approval notification → approves it → finance processes the reimbursement → employee sees "Approved — payment in 3 business days."
+
+**Why it's hard to build at scale:** Validation rules are role-specific and category-specific (a director can claim $500/night hotels; a junior employee cannot; entertainment has different approval chains than travel) — the rule engine must be flexible and enforceable at both API and DB layers, not hardcoded per role.
+
+---
+
 ## 🧠 How to Use This File
 
 **This file is an instantiation of DELIVERY-RECIPE** (`Interview/DocuSign/DELIVERY-RECIPE.md`). Every section below maps to one step of the 6-step interview delivery framework. The framework is backed by cognitive psychology — under stress, your working memory shrinks 40–50%, so you need ONE rhythm you can execute automatically.
@@ -179,6 +199,63 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
+## Section 8 — 🌐 API Design (Minutes 8–13) ⭐ Type B Primary Deliverable
+
+> **Why here:** The Core Entities table above just named your nouns. Each noun becomes a URL path. Now derive the operations on those nouns from your FRs — before drawing any boxes.
+
+### 🧠 How to Derive These Endpoints (Reconstruct, Don't Recall)
+
+The move is: **FR → operation → resource (from your entities table) → HTTP method → contract.**
+
+**"Employees can create expense reports and add line items"** → Two separate CREATE operations, not one. First: POST /v1/reports — creates the container (report) with just title + period, returns a draft. Then: POST /v1/reports/{id}/expenses — adds a line item to a specific report. Why nested? Because a line item has no identity outside its parent report. The parent path makes ownership explicit and lets you enforce "only the owner can add items to this report" at the routing layer.
+
+**"System enforces business rules: expense limits per category per employee type"** → This FR tells you something about a specific endpoint's error contract. When an employee posts a line item that exceeds their category limit, what do you return? `422 Unprocessable Entity` — not `400 Bad Request`. `400` means the JSON is malformed. `422` means the JSON is valid but the business won't accept it. Name this distinction in the interview; most candidates collapse both into 400.
+
+**"Managers can approve or reject"** → action on existing resource → two design choices: (A) `PATCH /v1/reports/{id}` with `{"state": "approved"}`, or (B) `PATCH /v1/reports/{id}/approve` with `{"decision": "approved", "reason": "..."}`. Choose B — the `/approve` sub-resource makes the action explicit, adds the `reason` field naturally, and is easier to restrict to manager-only at the permission layer. The `403` status code means "you are authenticated but not the right manager for this employee's report."
+
+**Validation check:** Map each FR back to an endpoint. "Finance can audit" → handled by GET /v1/reports with role-based filtering, no separate endpoint needed. "Audit trail" → not an API endpoint — it's a DB-layer concern (AuditLog entity), not a caller-facing route.
+
+---
+
+### Core Endpoints
+
+| Method | Path | Auth | Request Body | Response | Status Codes |
+|---|---|---|---|---|---|
+| POST | `/v1/reports` | JWT (employee) | `{title, period}` | `{id, state: "draft"}` | 201, 400 |
+| GET | `/v1/reports` | JWT (any) | `?state=submitted&page=...` | `[{id, employee, state, total_amount}]` (paginated) | 200, 401 |
+| POST | `/v1/reports/{id}/submit` | JWT (owner) | — | `{id, state: "submitted"}` | 200, 400, 409 |
+| POST | `/v1/reports/{id}/expenses` | JWT (owner) | `{date, category, amount_cents, purpose, location}` | `{id, line_item_id}` | 201, 400, 422 |
+| GET | `/v1/reports/{id}/expenses` | JWT (owner or manager) | — | `[{id, category, amount_cents, receipt_url}]` | 200, 404 |
+| PATCH | `/v1/reports/{id}/approve` | JWT (manager) | `{decision: "approved"/"rejected", reason}` | `{id, state}` | 200, 400, 403 |
+
+---
+
+### 🔍 Endpoint Stories — Why Each One Exists
+
+**`POST /v1/reports`** — Creates an empty draft container. Employees don't add line items at creation — they create the report first, then attach expenses. This two-step flow maps directly to the UI mockup. The response returns `state: "draft"` which signals to the client that the report is still editable.
+
+**`POST /v1/reports/{id}/submit`** — A dedicated submission action, not a generic PATCH. This is a deliberate choice: a dedicated `/submit` endpoint is explicit about the business operation, easy to validate (is the report in "draft" state? does it have at least one line item?), and unambiguous in permission checks. The `409` fires if the report is already submitted — idempotency guard.
+
+**`POST /v1/reports/{id}/expenses`** — Where business rule validation fires. At POST time, the system looks up the `ExpensePolicy` for `(employee.tier, line_item.category)` and rejects if the amount exceeds the limit. The `422` status code is the interview probe: it means "syntactically valid request, semantically rejected." Most candidates return `400` here — name the distinction.
+
+**`PATCH /v1/reports/{id}/approve`** — Handles both approve and reject in one endpoint via `decision` field. One approval resource, two values. The `403` is not "you're not logged in" (that's `401`) — it's "you ARE the right kind of user (manager) but you're NOT this employee's manager." Role-based access is enforced at the application layer, not just authentication.
+
+**`GET /v1/reports?state=submitted`** — The manager's approval queue. Without the `state` filter, a manager at DocuSign would receive every expense report in the system on every call. The filter by state is what makes the approval workflow navigable. Cursor-based pagination is needed if an approver has hundreds of pending reports.
+
+---
+
+### Key Design Decisions
+
+**State machine for report lifecycle:** DRAFT → SUBMITTED → PENDING_APPROVAL → APPROVED / REJECTED. The `submit` and `approve` endpoints drive state transitions. Invalid transitions (e.g., approving a DRAFT) return `409`.
+
+**PATCH /approve vs PATCH /v1/reports/{id} with state field:** `/approve` sub-resource wins — it's explicit, easier to permission-check (manager-only route), and makes the audit trail cleaner (the action is named, not inferred from a state diff).
+
+**422 vs 400:** Business rule violations (limit exceeded, missing receipt for amounts > $X) → `422`. Malformed JSON, missing required fields → `400`. Never conflate them.
+
+> 📖 Full: `SystemDesignConcepts/Foundations/Data-Fundamentals/11-api-design.md`
+
+---
+
 ## Section 4 — 🔢 Scale Estimation (Minutes 5–10)
 
 **What to do:** Do envelope math out loud. These numbers justify every architecture choice you make in Section 6+. The interviewer wants to see your *thinking*, not just your conclusion.
@@ -211,6 +288,7 @@ Then immediately go to Section 2. Do NOT start drawing.
 | "Manager can override limits (e.g., approve $5000 flight)" | Add override_reason to expense. Add system rule: if manager approves, bypass limit checks. Audit log the override. | Policy flexibility requires explicit override tracking. Audit trail shows who bypassed what rule and why. |
 | "Expense submission to finance only after manager approves" | Change approval workflow: add approval_state column (submitted → manager_approved → finance_approved → reimbursed). Move manager approval as prerequisite. | Sequential approval states control the workflow. Finance approval can only happen after manager sign-off. |
 | "Self-employed contractors with no manager (submit directly to finance)" | Add employee_type enum: employee, contractor, director. Contractor reports skip manager approval (state: submitted → finance_approved). | Different employee types have different workflows. State machine is parameterized by employee type. |
+| "Employees submit expenses in multiple currencies (USD, EUR, GBP, JPY)" | Add `currency_code CHAR(3)` + `amount_local NUMERIC` to line_items; add `fx_rate_at_submission NUMERIC` + `amount_usd NUMERIC` (the converted base currency amount, locked at submission time); fetch current rate from an FX provider (ECB, OpenExchangeRates) at `POST /expenses/line-items` time; store locked rate immutably — never recalculate at approval time. | FX rates change hourly; if you recalculate at approval time, the approved amount differs from what the employee submitted — this causes reimbursement disputes. Rate-locking at submission time makes the amount deterministic throughout the workflow. |
 
 ---
 
@@ -225,31 +303,151 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
-### Logical Architecture
+### 🎨 Visual — Schema Evolution (3-Stage Progression)
+
+> **Note:** This is a Type B (data model design) question. The "architecture" is always web API → PostgreSQL — that's not the insight. The insight is *how the schema evolves* as requirements get richer.
 
 ```
-[Web Client]
-    ↓
-[API Gateway / Web Server]
-    ↓
-[Expense Report Service]
-    ↓
-[PostgreSQL Database]
-    ├── employees table
-    ├── expense_reports table
-    ├── expense_line_items table
-    ├── approvals table
-    ├── audit_log table
-    └── categories table (optional)
+── Stage 1: Minimal CRUD Schema ──────────────────────────────────
+
+Web API → PostgreSQL. Two tables. No workflow. No policy enforcement.
+
+PostgreSQL
+├── employees          (id, name, email, employee_type, manager_id)
+└── expense_reports    (id, employee_id, title, period, created_at,
+                        updated_at)
+    └── expense_line_items  (id, report_id, date, category, amount,
+                              purpose, location, receipt_url)
+
+Flow: employee creates report → adds line items → submits.
+Manager receives nothing. Finance receives nothing. No approval
+state tracks where the report is in the process.
+
+BREAKING POINT 1: No approval state. Manager cannot see which
+   reports need their review. Employee cannot track where their
+   report is. There is no "submitted" vs "approved" — all reports
+   look the same in the DB.
+
+BREAKING POINT 2: No policy enforcement. An employee can enter
+   $10,000 for a meal with no rejection. Business spending limits
+   are completely unenforced.
 ```
 
-**Data flow (say this out loud):**
+**DECISION — WHICH state tracking approach?**
 
-1. **Create report:** Employee creates report (POST /reports). System creates record with state=DRAFT.
-2. **Add expenses:** Employee adds line items (POST /reports/{id}/expenses). Each item stored as separate row.
-3. **Submit:** Employee submits report (PATCH /reports/{id}, state=SUBMITTED). System validates expenses against limits.
-4. **Manager approval:** Manager views report (GET /reports?filter=pending_approval). Approves or rejects (PATCH /reports/{id}/approve).
-5. **Audit:** All state changes logged to audit_log (who, what, when, before, after).
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| No state (only created_at/updated_at timestamps) | Simplest schema | No workflow visibility; managers can't filter reports awaiting approval; compliance fails | ❌ Not enterprise-ready |
+| Enum column (approval_state CHECK constraint; app validates transitions) | Simple; current state in one column; fast filter by state | DB does not enforce valid transitions — app must validate (draft→submitted, not draft→approved) | ✅ Right for 10K-employee scale |
+| Separate state machine table (workflow_transitions rows per state change) | DB-enforced transitions; transition history built in | Complex JOINs to get current state; overkill for sequential single-path approval | ❌ Overkill at this scale |
+
+> 📖 Full: **`SystemDesignConcepts/Foundations/Data-Fundamentals/12-data-modeling.md`**
+
+```
+── Stage 2: Add Approval Workflow + Policy Engine ────────────────
+
+Add approval_state to expense_reports. Add approvals table for
+approval decisions. Add expense_limits table for category rules.
+
+PostgreSQL
+├── employees          (id, name, email, employee_type, manager_id)
+├── expense_reports    (id, employee_id, title, period,
+│                       approval_state CHECK IN ('draft','submitted',
+│                       'manager_approved','finance_approved',
+│                       'reimbursed','rejected'),
+│                       submitted_at, approved_at)
+├── expense_line_items (id, report_id, date, category, amount,
+│                       purpose, location, receipt_url)
+├── approvals          (id, report_id, approver_id, approval_type,
+│                       decision, reason, created_at)
+└── expense_limits     (employee_type, category,
+                        limit_per_transaction, limit_per_report,
+                        PK: (employee_type, category))
+
+Valid state transitions (enforced in application, CHECK at DB level):
+  draft → submitted
+  submitted → manager_approved | rejected
+  manager_approved → finance_approved | rejected
+  finance_approved → reimbursed | rejected
+
+When employee submits → validate each line item against expense_limits
+for their employee_type × category combination.
+
+BREAKING POINT 1: No audit trail. If a manager changes a line item
+   amount or an approval is disputed, there is no record of what the
+   original value was. "Who approved this?" requires querying the
+   approvals table — but "what was the amount before the manager
+   edited it?" has no answer.
+
+BREAKING POINT 2: No duplicate detection. An employee can submit
+   the same $50 lunch receipt twice (same date, same merchant, same
+   amount) — the system inserts two rows with no warning.
+
+BREAKING POINT 3: No concurrency control. Two people opening and
+   editing the same line item simultaneously will silently overwrite
+   each other (lost update problem).
+```
+
+**DECISION — WHICH business rule enforcement approach?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Hardcoded limits in application code (`MEAL_LIMIT = 50`) | Fast; zero DB overhead; simple | Rule change = code redeploy + restart; finance cannot adjust limits without engineering | ❌ Not flexible |
+| Rules table (`expense_limits`) with app-level cache (invalidate on rule change) | Change rules with a DB UPDATE; no code deploy; cache keeps validation fast | Cache invalidation when rules change | ✅ Best |
+| Drools / external rules engine | Most flexible; non-technical users can define rules | Overkill for straightforward category-based limits; adds a new system to operate | ❌ Overkill |
+
+> 📖 Full: **`SystemDesignConcepts/Foundations/Data-Fundamentals/12-data-modeling.md`**
+
+```
+── Stage 3: Add Audit Trail + Optimistic Locking + Dedup ─────────
+
+Production schema. Adds: append-only audit_log for compliance,
+version_number for concurrent edit protection, SHA256 fingerprint
+for duplicate expense detection, sla_deadline for escalation.
+
+PostgreSQL
+├── employees          (id, name, email, employee_type, manager_id)
+├── expense_reports    (id, employee_id, title, period,
+│                       approval_state, submitted_at, approved_at,
+│                       sla_deadline)  ← SLA escalation deadline
+├── expense_line_items (id, report_id, date, category, amount,
+│                       purpose, location, receipt_url,
+│                       version_number,    ← optimistic locking
+│                       fingerprint)       ← dedup: SHA256(employee+
+│                                             date+merchant+amount)
+├── approvals          (id, report_id, approver_id, approval_type,
+│                       decision, reason, created_at)
+├── expense_limits     (employee_type, category, limit_per_transaction,
+│                       limit_per_report)
+└── audit_log          (id SERIAL, resource_type, resource_id,
+                        action, user_id, before_value JSONB,
+                        after_value JSONB, reason, created_at)
+                        ← append-only; NEVER updated or deleted
+
+Every state transition → INSERT into audit_log(before, after).
+On line item update → check version_number unchanged (optimistic lock).
+On line item insert → fingerprint check for 90-day duplicate window.
+On report submit → query expense_limits for validation.
+On approval → INSERT approvals row + INSERT audit_log row.
+```
+
+**DECISION — WHICH audit trail approach?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| No audit trail (only current state in main tables) | Simple; no extra storage | Cannot prove who approved/changed what; compliance fails; disputes unresolvable | ❌ Compliance violation |
+| Soft deletes only (deleted_at column, no change history) | Simple; preserves rows from deletion | Captures *that* a row was deleted but not *what* changed between edits | ⚠️ Insufficient alone |
+| Append-only audit_log (before/after JSONB) + soft deletes | Full change history; queryable; compliance proof; JSONB flexible for any resource type | Audit table grows unbounded (manageable: ~1M rows/year at 1GB; archive to S3 after 1 year) | ✅ Best |
+
+> 📖 Full: **`SystemDesignConcepts/Foundations/Data-Fundamentals/12-data-modeling.md`**
+
+**Data flow walkthrough (say this out loud):**
+
+1. **Create report:** Employee calls `POST /v1/reports`. System inserts expense_report with `approval_state = 'draft'`, logs to audit_log.
+2. **Add expenses:** Employee calls `POST /v1/reports/{id}/expenses`. On insert, compute SHA256 fingerprint; check 90-day duplicate window — warn if match; system inserts with `version_number = 1`.
+3. **Submit:** Employee calls `PATCH /v1/reports/{id} { state: submitted }`. System validates each line item against `expense_limits[employee_type][category]`. On pass → update `approval_state = 'submitted'`, set `sla_deadline = now() + 5 days`, log to audit_log.
+4. **Manager approval:** Manager calls `PATCH /v1/reports/{id}/approve { decision: approved, reason: ... }`. App validates transition (submitted → manager_approved), inserts into `approvals` table, updates `approval_state`, logs to audit_log.
+5. **Concurrent edit protection:** If two users both read `version_number = 3` and try to write back, first write succeeds with `version_number = 4`. Second write does `UPDATE ... WHERE version = 3` — finds 0 rows → returns 409 Conflict → client retries with fresh data.
 
 ---
 
@@ -442,28 +640,6 @@ public void logAudit(String resourceType, UUID resourceId, String action,
 
 ---
 
-## Section 8 — 🌐 API Design
-
-### Core Endpoints
-
-| Method | Path | Auth | Request body | Response | Status codes |
-|---|---|---|---|---|---|
-| POST | `/v1/reports` | JWT (employee) | `{ "title": "...", "period": "2026-06" }` | `{ "id": "...", "state": "draft" }` | 201, 400 |
-| GET | `/v1/reports` | JWT (any) | ?filter=draft/submitted/pending_approval | `[{ "id", "employee", "state", "total_amount" }]` | 200, 401 |
-| PATCH | `/v1/reports/{id}` | JWT (owner or manager) | `{ "state": "submitted" }` | `{ "id", "state" }` | 200, 400, 409 |
-| POST | `/v1/reports/{id}/expenses` | JWT (owner) | `{ "date", "category", "amount", "purpose" }` | `{ "id", "lineItemId" }` | 201, 400, 422 |
-| GET | `/v1/reports/{id}/expenses` | JWT (owner or manager) | — | `[{ "id", "category", "amount", "receipt_url" }]` | 200, 404 |
-| PATCH | `/v1/reports/{id}/approve` | JWT (manager) | `{ "decision": "approved"/"rejected", "reason": "..." }` | `{ "id", "state" }` | 200, 400, 403 |
-
-### Key Design Decisions:
-- **Verb semantics:** PATCH for state changes (approve, reject); POST for creation.
-- **Filter parameter:** GET /reports?filter=pending_approval allows filtering by approval state. Cleaner than separate endpoints.
-- **Role-based access:** Manager can only approve reports from their team. Enforced in API layer.
-- **Idempotency:** POST /reports is idempotent if client sends idempotencyKey header. Prevents duplicate submissions on retry.
-- **Error handling:** 409 Conflict if state transition is invalid; 422 Unprocessable Entity if business rule violated (e.g., expense over limit).
-
----
-
 ## Section 9 — 🗄️ Data Model
 
 ### Core Tables
@@ -566,21 +742,21 @@ CREATE TABLE expense_limits (
 - **Chose:** Enum column (approval_state VARCHAR) with app-level validation
 - **Gain:** Simple schema, fast queries (no joins). Easy to understand current state.
 - **Lose:** State transitions not validated at DB layer; app must check validity. Hard to add complex rules (e.g., "can only reject if finance hasn't approved yet").
-- **Failure mode if wrong:** If we chose a full state machine table (separate workflow_state table), every query to get current state requires a JOIN. Schema is overly complex for this use case. At 10K employees, simplicity is more valuable than extensibility.
+- **Failure mode if wrong:** If we chose a full state machine table (separate workflow_state table), every query to get current state requires a JOIN. Schema is overly complex for this use case. At 10K employees, simplicity is more valuable than extensibility. **Business impact:** Every expense status check adds a JOIN — during a quarterly finance close with 50K concurrent approval queue checks, JOIN latency causes the approval dashboard to visibly slow — for DocuSign's internal expense system this means managers miss approval deadlines, finance close is delayed by hours, and the CFO escalates the tooling complaint.
 
 ### Trade-off 2: Hardcoded Limits vs Rules Table
 
 - **Chose:** Rules table (expense_limits) with app-level caching
 - **Gain:** Business rules can change without code redeployment. Finance can adjust meal limits on the fly.
 - **Lose:** DB lookup latency on every expense validation. Must implement cache invalidation (when rules change, invalidate cache).
-- **Failure mode if wrong:** If we chose hardcoded limits in code (constant MEAL_LIMIT = 50), every rule change requires a code redeployment and app restart. Business can't be agile. Rules table is the right choice here.
+- **Failure mode if wrong:** If we chose hardcoded limits in code (constant MEAL_LIMIT = 50), every rule change requires a code redeployment and app restart. Business can't be agile. Rules table is the right choice here. **Business impact:** Finance raises the meal limit from $50 to $75 for a conference week — without the rules table, compliant expenses are auto-rejected for the 2-3 days it takes to ship a code change — for DocuSign this means employees submit valid receipts that bounce, creating a manual reconciliation backlog that finance must clear during an already-busy period.
 
 ### Trade-off 3: Audit Log Table vs Event Sourcing
 
 - **Chose:** Audit log table (append-only) + soft deletes for current state
 - **Gain:** Simple to query ("who approved this report?"). Current state is in the latest row; no need to replay events.
 - **Lose:** Two sources of truth (current state in main tables + audit log). Audit log only captures that changes happened, not *how* to reconstruct state.
-- **Failure mode if wrong:** If we chose full event sourcing (state = replay all events), every query would need to replay events from the beginning. At 1M reports/year, replaying becomes slow. Hybrid approach (current state + audit log) is a good balance.
+- **Failure mode if wrong:** If we chose full event sourcing (state = replay all events), every query would need to replay events from the beginning. At 1M reports/year, replaying becomes slow. Hybrid approach (current state + audit log) is a good balance. **Business impact:** An auditor investigating a disputed expense must replay 1M events to reconstruct state — what should be a 200ms lookup becomes a multi-minute query — for DocuSign's legal or compliance team this delays responding to an HR investigation or regulatory audit, increasing legal exposure.
 
 ---
 
@@ -633,6 +809,115 @@ CREATE TABLE expense_limits (
 
 ---
 
+### New Deep Probes (Tier 2 — added Jul 4, 2026)
+
+**Q: "Your approval state machine has one fixed chain: manager → finance. But what if expenses over $5,000 need VP approval, and expenses from contractors skip manager approval entirely? How do you model threshold-based, role-based routing?"**
+> The state machine needs to be data-driven (policy-as-data), not hard-coded in the application.
+>
+> **Add a `workflow_rules` table:**
+> ```sql
+> CREATE TABLE workflow_rules (
+>     id UUID PRIMARY KEY,
+>     employee_type VARCHAR(50),    -- 'EMPLOYEE', 'CONTRACTOR', 'ANY'
+>     expense_category VARCHAR(50), -- 'MEALS', 'TRAVEL', 'ANY'
+>     min_amount NUMERIC,           -- NULL = no lower bound
+>     max_amount NUMERIC,           -- NULL = no upper bound
+>     required_approvers JSONB,     -- e.g. ["manager", "vp_finance"]
+>     priority INT NOT NULL         -- which rule wins if multiple match
+> );
+>
+> -- Example rows:
+> -- (CONTRACTOR, ANY, NULL, NULL, ["finance"]) → contractors skip manager
+> -- (EMPLOYEE, ANY, 5000, NULL, ["manager", "vp_finance"]) → high-value needs VP
+> -- (EMPLOYEE, ANY, NULL, 5000, ["manager", "finance"]) → standard
+> ```
+>
+> When a report is submitted, the Approval Engine queries all matching rules (employee_type + category + amount), collects the union of required approvers, and creates one `approval_tasks` row per required approver. The report only advances to `FULLY_APPROVED` when all tasks are `APPROVED`.
+>
+> **In an interview:** "I'd use a workflow_rules table — policy as data. Adding a new threshold or role exemption is a new DB row, not a code change. The Approval Engine looks up rules at submit time and generates the correct tasks. This is how enterprise workflow systems like ServiceNow and Workday work."
+
+---
+
+**Q: "An employee submits the same $50 lunch receipt twice — same date, same merchant, same amount. How does your system detect and handle duplicate expense line items?"**
+> **Probabilistic fingerprint-based deduplication.** For each new line item, compute a fingerprint at insert time:
+>
+> ```java
+> String fingerprint = sha256(
+>     employeeId + "|" +
+>     expenseDate.toString() + "|" +
+>     merchantName.toLowerCase().trim() + "|" +
+>     amount.toPlainString()
+> );
+> ```
+>
+> Store `fingerprint VARCHAR(64)` on `expense_line_items`. Before accepting a new line item, check:
+> ```sql
+> SELECT id FROM expense_line_items
+> WHERE employee_id = ? AND fingerprint = ?
+>   AND state NOT IN ('REJECTED', 'CANCELLED')
+>   AND expense_date > NOW() - INTERVAL '90 days';
+> ```
+>
+> If a match exists → return HTTP 409 with message: "This expense looks like a duplicate of item #{existing_id} submitted on {date}. Is this intentional?"
+>
+> The system warns but does NOT auto-reject — legitimate duplicates exist (two meals at the same restaurant same day). The employee must explicitly confirm: "Yes, this is a separate expense" → system adds a `duplicate_confirmed_by` flag and accepts it.
+>
+> **In an interview:** "I'd use a fingerprint composite key: employee + date + merchant + amount. 90-day lookback prevents false positives for recurring expenses. A warning-not-rejection UX preserves employee agency while surfacing genuine mistakes."
+
+---
+
+**Q: "Your design stores amounts in USD only. An employee in Germany submits a €150 dinner receipt. How do you handle multi-currency?"**
+
+> **Rate-locking at submission time** is the critical design decision. Two wrong approaches and why:
+>
+> - **Wrong 1 — convert at approval time:** The rate on submission day vs. approval day differs. The manager approves "€150 = $162", but by approval the rate moved and the reimbursement is "$159". The employee is reimbursed less than what the manager approved. Support ticket guaranteed.
+> - **Wrong 2 — store only the local amount, convert at display time:** Every UI query hits the FX API. Rate changes hourly; the same approved amount shows different USD values to different viewers. Finance can't close their books on a moving number.
+>
+> **Correct schema:**
+> ```sql
+> ALTER TABLE expense_line_items ADD COLUMN currency_code CHAR(3) NOT NULL DEFAULT 'USD';
+> ALTER TABLE expense_line_items ADD COLUMN amount_local NUMERIC(12,2) NOT NULL;
+> ALTER TABLE expense_line_items ADD COLUMN fx_rate_at_submission NUMERIC(10,6); -- NULL if USD
+> ALTER TABLE expense_line_items ADD COLUMN amount_usd NUMERIC(12,2) NOT NULL;   -- canonical amount
+> ```
+>
+> **On `POST /expenses/line-items`:**
+> 1. Receive `{amount: 150, currency: "EUR"}`
+> 2. Call FX provider (OpenExchangeRates / ECB) to get current EUR→USD rate (e.g., 1.083)
+> 3. Store: `amount_local=150, currency_code='EUR', fx_rate_at_submission=1.083, amount_usd=162.45`
+> 4. The `amount_usd` is immutable from this point forward — the FX rate is locked at submission time
+>
+> **Policy limit enforcement:** always compare `amount_usd` against the limit (e.g., meal limit $75 USD). The employee sees their local-currency amount; the system enforces limits in USD. This is deterministic regardless of when the manager approves.
+>
+> **In an interview:** "Multi-currency requires rate-locking at submission time. I store both the original local amount and the USD equivalent computed at submission. All downstream logic — limit enforcement, approval, reimbursement — uses the locked USD amount. This eliminates FX drift between submission and reimbursement."
+
+---
+
+### New Cross-Concept Probe (Tier 3 — added Jul 4, 2026)
+
+**Q: "A manager goes on vacation. The employee's expense report has been PENDING_MANAGER_APPROVAL for 8 days. The employee is waiting for reimbursement. What does your system do?"**
+> **SLA enforcement with escalation chain.** When a report transitions to `PENDING_MANAGER_APPROVAL`, record the SLA deadline: `sla_deadline = submitted_at + 5 days` (configurable per company policy).
+>
+> **Scheduled job runs daily:**
+> ```sql
+> SELECT r.id, r.manager_id, r.employee_id
+> FROM expense_reports r
+> WHERE r.state = 'PENDING_MANAGER_APPROVAL'
+>   AND r.sla_deadline < NOW()
+>   AND r.escalation_level = 0;
+> ```
+>
+> For each SLA breach:
+> - **Day 5 (escalation level 1):** Email reminder to manager + employee ("Your expense report is overdue")
+> - **Day 7 (escalation level 2):** Auto-escalate to manager's manager; record in `audit_log` with action = `SLA_ESCALATED`; update `approval_tasks.assigned_to = manager_of_manager_id`
+> - **Day 10 (escalation level 3):** Business policy decision — options: (a) auto-approve with compliance flag, (b) route to a dedicated expense ops team
+>
+> The `audit_log` records every escalation step: timestamp, trigger, assigned_to, reason. The employee can query their report history and see "Manager auto-escalated after 7 days."
+>
+> **In an interview:** "SLA enforcement is a scheduled job + escalation chain. The state machine's `PENDING_MANAGER_APPROVAL` state has a TTL. Escalation is a state machine extension — not a separate feature but another valid transition path triggered by time, not user action. The audit log makes every escalation visible for compliance."
+
+---
+
 ## Section 13 — 🐞 Common Mistakes on This Question
 
 **Note:** Reading these mistakes BEFORE the interview prevents you from making them under stress.
@@ -655,13 +940,13 @@ CREATE TABLE expense_limits (
 
 | Dimension | Relevant? | How your design addresses it |
 |---|---|---|
-| Testability | ✅ | Business logic (validation, approval) is testable in isolation. Mock database; test state transitions independently. |
-| Usability | ✅ | API is RESTful with clear resource hierarchy (/reports/{id}/expenses). State filtering (?filter=pending_approval) makes filtering easy. |
-| Extensibility | ✅ | New workflows parameterized by employee_type. New categories = new row in expense_limits. New validation rules = new Strategy implementation. |
-| Security | ✅ | Role-based access control (manager can only approve their team's reports). Audit trail captures who did what. |
-| Availability | ✅ | Single PostgreSQL with replication. No distributed consensus needed. Downgrades gracefully if replicas lag. |
-| Scalability | ✅ | Schema handles 10K+ employees, millions of reports. Indexes on key columns (employee_id, approval_state). No sharding needed at this scale. |
-| Observability & Traceability | ✅ | Audit log captures all state changes with timestamps and user IDs. Can reconstruct workflow history of any report. |
+| Testability | ✅ | State machine transitions are pure functions (input: current_state + event → output: next_state) — testable with no DB. Expense validation (category limit check) is mockable with a fake RulesRepository. Stage-by-stage: Stage 1 schema testable with INSERT + query; Stage 3 audit log testable with append-only insert + before/after JSONB assertion. |
+| Usability | ✅ | RESTful hierarchy: GET /reports/{id}/expenses, POST /reports/{id}/submit, POST /reports/{id}/approve. `?filter=pending_approval` for manager queue. Every response includes `approval_state` + `next_action` field so the UI knows what button to show next without client-side state logic. |
+| Extensibility | ✅ | New expense categories = new row in expense_limits (no code deploy). New approval tier (VP threshold for > $5K) = new enum value + new routing row. For DocuSign's global team: different countries have different reimbursement tax rules — all configurable as expense_limits rows parameterized by `(employee_type, category, country_code)` without re-deployment. |
+| Security | ✅ | RBAC: managers approve only their direct reports' submissions (enforced by employee_id → manager hierarchy query on every approval). Audit log is append-only (DB trigger blocks UPDATE/DELETE) — for DocuSign's HR/legal team this is the tamper-proof record of "who approved Kapil's $800 client dinner on June 15?" required during internal investigations and SOX audits. |
+| Availability | ✅ | At 6 writes/sec peak (Section 4: 10K employees, 1M reports/year, distributed across 250 working days), a single Postgres primary has ~5,000 writes/sec capacity — no sharding needed for this scale. Read replicas serve manager approval queues. Graceful degradation if replica lags: primary handles all queries at the cost of higher CPU. |
+| Scalability | ✅ | Indexes on (employee_id, approval_state) and (approval_state, sla_deadline) keep per-manager approval queue fetches under 10ms even at 1M reports. For DocuSign's quarterly finance close (50K concurrent approval-queue dashboard refreshes from finance managers across time zones), indexed queries sustain < 200ms response time without DB saturation. |
+| Observability & Traceability | ✅ | Audit log (append-only, JSONB before/after state) reconstructs the full approval history of any report — for DocuSign's compliance team, "show me every approver and timestamp for report #12345" is a 200ms query returning the exact chain-of-custody. SLA deadline alerts fire when reports sit > 5 days unapproved (finance close escalation). |
 
 ---
 
@@ -681,3 +966,6 @@ The TL;DR fixes the core idea in your head. Under stress, you'll default to this
 | Date | Change |
 |---|---|
 | June 23, 2026 | **File created.** Type B — Product Architecture. Based on: InterviewQuery actual interview report (given UI mockup, candidate designed schema with validation rules). Concept notes: `12-data-modeling.md`, `01-optimistic-pessimistic-locking.md`. Fully integrated with DELIVERY-RECIPE framework: 🧠 preamble + 60-minute time budget, 💾 Memory Anchors (6 core + 3 bonus), explicit timing callouts in sections 2/4/6/7/10/11/12, "say this out loud" dialogue framing, interview psychology context. Deep dives: state machine (enum vs table), business rule validation (hardcoded vs rules table), audit trail (log table vs event sourcing). Section 5 variation table covers 6 axes (single vs multi-user, sequential vs parallel approval, customizable categories, manager overrides, different approval workflows, contractor vs employee workflows). Section 8 (API) and Section 9 (Data Model) are primary deliverables (Type B emphasis). Pre-write checklist enforced: Identity Card, clarifying questions with WHY, API endpoints + schema with justifications, 3 deep dives on riskiest components, trade-offs with failure modes, 3-tier probes (surface/deep/cross-concept). Common Mistakes (5 entries) emphasize audit trails, concurrency, state machine flexibility, SOLID principles, FK constraints. Result: Interview delivery-ready, zero refinement needed. |
+| Jul 5, 2026 | **Section 6 restructured: flat logical architecture → 3-stage schema evolution.** This is a Type B (data model design) question — the evolution is in the schema, not infrastructure. Stage 1 (Minimal CRUD): employees + expense_reports + expense_line_items — BREAKING POINTs: no approval_state (workflow invisible); no expense_limits (policy unenforced). Stage 2 (Approval Workflow + Policy Engine): add approval_state enum column, approvals table, expense_limits (employee_type × category); state transitions validated at app level with CHECK constraint — BREAKING POINTs: no audit trail (can't reconstruct who changed what); no duplicate detection; no optimistic locking (lost update on concurrent edits). Stage 3 (Production): add audit_log (JSONB before/after, append-only), version_number on line_items (optimistic locking), SHA256 fingerprint (90-day duplicate window), sla_deadline (escalation). Three inline decision tables: (1) state tracking — no state ❌ / enum column ✅ / state machine table ❌; (2) business rules — hardcoded ❌ / rules table ✅ / Drools ❌; (3) audit trail — none ❌ / soft deletes only ⚠️ / audit_log JSONB ✅. All Section 6 verdicts verified against Section 7 deep dive choices — no contradictions. |
+| Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **Threshold-based approval routing** — `workflow_rules` table with `(employee_type, expense_category, min_amount, max_amount, required_approvers JSONB)` enables policy-as-data; Approval Engine reads rules at submit time, generates tasks for each required approver; adding VP-threshold = new DB row, no code change; (2) **Duplicate expense detection** — SHA256 fingerprint of (employee_id + date + merchant + amount) stored on line item; 90-day lookback check before insert; warning-not-rejection UX (employee confirms intentional duplicates); legitimate duplicates marked with `duplicate_confirmed_by` flag; (3) **SLA enforcement with escalation chain** — `sla_deadline = submitted_at + N days`; daily scheduler queries overdue reports; escalation levels: Day 5 = email reminder, Day 7 = auto-escalate to manager's manager (audit_log entry), Day 10 = route to ops team; every escalation visible in audit trail. |
+| Jul 5, 2026 | **Section 10 business impact pass.** Added **Business impact:** sentence to all 3 trade-offs — quarterly-close join latency blocking manager approvals of legitimate expenses (normalization denormalization cost), conference meal category hardcoded requiring 2-3 day code deployment to fix (hardcoded business rules), auditor replay of 1M expense events with no upper-bound pagination causing TimeoutException during SOX audit (event sourcing recovery cost). |

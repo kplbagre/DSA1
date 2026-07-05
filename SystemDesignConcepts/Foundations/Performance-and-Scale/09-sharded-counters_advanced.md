@@ -105,7 +105,7 @@ APPROXIMATE COUNTING (Cardinality Estimation)
 
 Exact count: "unique visitors today?"
   Store: set of {visitor IDs} → 1 million unique
-  Memory: 1 million * 16 bytes (UUID) = 16 GB ❌
+  Memory: 1 million * 16 bytes (UUID) = 16 MB ❌
 
 Approximate count (HyperLogLog):
   Store: compact sketch
@@ -454,3 +454,4 @@ public class AdaptiveShardingService {
 | Date | Change |
 |---|---|
 | June 23, 2026 | Companion file created. Covers: CRDT counters (G-Counter, PN-Counter for coordination-free distributed systems), time-series buckets (spike detection), adaptive sharding (auto-split/merge based on load), approximate counting (HyperLogLog). Real-world patterns from Cassandra/Prometheus/DynamoDB. 3 Q&As (all advanced scenarios). Pairs with core `09-sharded-counters.md`. |
+| Jul 3, 2026 | **Math error fix.** Cardinality estimation example: `1 million * 16 bytes = 16 GB` → `16 MB` (was off by 1000×; 1M × 16 B = 16,000,000 B = ~16 MB). |

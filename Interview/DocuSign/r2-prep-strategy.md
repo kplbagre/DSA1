@@ -219,9 +219,40 @@ Can you design reliable async systems? Delivery guarantees, idempotency on consu
 
 ---
 
+## July 2026 Research Validation — All 8 Questions Cross-Checked
+
+> **Research basis:** 20 web searches + 8 page fetches (Jul 4, 2026) across Glassdoor, Blind, 1Point3Acres, LeetCode Discuss, Exponent, DesignGurus, InterviewQuery.
+> **Verdict: Zero questions dropped. All 8 confirmed or still plausible.**
+
+| Saved question | Confirmed again? | New evidence found |
+|---|---|---|
+| A1 — URL Shortener | ✅ | DocuSign PDF + multiple aggregators |
+| A2 — Facebook Chat / Messenger | ✅ ⭐ **Strongest signal** | Blind P4 candidate (NetApp→DocuSign, 2025): *"design a Facebook messenger type App"* — confirmed the exact HLD approach interviewer used |
+| C1 — Rate Limiter (JWT + KYC) | ✅ ⭐ | Exponent candidate report — same deep probe on KYC + JWT reported again |
+| C2 — Expense Report Data Model | ✅ ⭐ | InterviewQuery confirmed again |
+| C3 — Pagination API + Data Model | ✅ ⭐ | 1Point3Acres Dec 2025 confirmed again |
+| D1 — Digital Signature | ✅ 🔶 | Aggregators only — no new candidate report |
+| D2 — Document Storage | ✅ 🔶 | Aggregators only |
+| D3 — Notification Service | ✅ 🔶 | Aggregators only |
+
+**One new question surfaced:** Design a Calendly-like scheduling app — single unverified Glassdoor snippet, possibly Bengaluru-specific, contradicted by DocuSign's own prep PDF. Not a prep priority.
+
+**Confirmed HLD interviewer approach** (Blind P4 candidate, 2025):
+```
+1. Functional requirements
+2. Non-functional requirements
+3. Tech estimation (back-of-envelope)
+4. Database schema
+5. API design
+6. High-level architecture (boxes + arrows)
+```
+
+---
+
 ## 🔄 Changelog
 
 | Date | Change |
 |---|---|
 | June 2026 | File created during DocuSign R2 prep. Based on 16 searches + PDF analysis. To be generalised post-interview. |
 | June 2026 | Phase 2 added — solution walkthroughs. Two-layer structure: universal (`SystemDesignQuestions/`) + DocuSign-specific (`r2-solutions/`). `r2-solutions/` folder created with INDEX.md and 6 planned files. |
+| July 2026 | Research validation pass added. All 8 questions cross-checked against 20 searches. Zero dropped. Calendly question surfaced but low confidence. HLD interviewer approach step sequence confirmed. |

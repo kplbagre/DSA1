@@ -6,6 +6,27 @@
 
 ---
 
+## 🎯 What Is This System?
+
+**In plain English:** A search system accepts text queries and returns ranked results from an index of documents, products, or web pages — in milliseconds, even when the index contains billions of entries. The ranking must feel relevant (matching intent, not just keywords), and the index must stay up to date as new content is added.
+
+**Real-world examples:**
+
+| System / Company | What they built |
+|---|---|
+| **Elasticsearch / OpenSearch** | Apache Lucene-based distributed search engine; powers most enterprise search |
+| **Algolia** | SaaS search API — sub-10ms results, tunable relevance, used by Stripe Docs, Twitch |
+| **Apache Solr** | Lucene-based; older but widely deployed in enterprise content systems |
+| **Amazon product search** | Billions of products; ranking blends relevance + revenue signals |
+| **Spotify search** | Songs, albums, artists, podcasts — fuzzy match + personalization |
+| **LinkedIn profile search** | 900M professional profiles; faceted filtering + endorsement signals |
+
+**Core user journey:** User types "blue waterproof running shoes size 10" into Amazon search → query is tokenized and matched against the inverted index → top 20 results returned in under 100ms → results are re-ranked by personalization and purchase-probability signals.
+
+**Why it's hard to build at scale:** An inverted index maps every word to every document containing it — at billions of documents this must be sharded across many nodes; relevance ranking (TF-IDF, BM25) is CPU-intensive per query; the index must update in near-real-time as new documents are added; and typo tolerance (fuzzy matching) multiplies the computational cost.
+
+---
+
 ## Section 0 — Question Identity Card
 
 | | |
@@ -139,162 +160,198 @@ Then pivot to Section 2.
 
 ---
 
+## Section 8 — 🌐 API Design (Before HLD)
+
+> **Why here:** Define the external contract before drawing the architecture — the HLD shows how these endpoints are implemented. For Type A, this is concise (3–5 minutes); the architecture is the primary deliverable.
+
+### 🧠 How to Derive These Endpoints
+
+Search has three user-facing operations: search (query), autocomplete (suggest-as-you-type), and preview (expand a result). The derivation is straightforward; the interesting design is in the cursor mechanism and the tenant isolation contract.
+
+"Users search for documents by keywords" → `GET /v1/search?q=contract`. All filters (date range, author, status) are query params, AND-ed together. Response includes `results`, `total_hits`, and `next_cursor` for pagination. The `q` parameter is mandatory — searching with no query returns nothing (prevent full-index scans).
+
+"Users see suggestions while typing" → `GET /v1/autocomplete?prefix=contr`. Separate endpoint because autocomplete is latency-critical (< 50ms) and uses a different data structure (completion suggester in Elasticsearch, not full-text search). Cached aggressively: prefix completions for "docuSign" are the same for all users in the same tenant. 5-minute TTL on Redis — stale suggestions are acceptable.
+
+"User clicks a result to see more details" → `GET /v1/search/{doc_id}/preview`. Returns the full snippet + metadata. Why a separate endpoint instead of returning full content in the search results? Search results may return 10 items — fetching full snippets for all 10 is expensive. Return short snippets in search, full preview on demand.
+
+Cursor design for search: search cursors are NOT the same as DB cursors. In Elasticsearch, cursors use `search_after` — the sort values of the last result (`[score, doc_id]`). The cursor encodes these values as base64 and passes them as `?cursor=` on the next request. Elasticsearch uses them to start the next page from the correct position in the index. Offset-based pagination (`from: 100`) is forbidden in Elasticsearch beyond 10,000 results — `search_after` is the required approach.
+
+### Core Endpoints
+
+| Method | Path | Auth | Request | Response | Status Codes |
+|---|---|---|---|---|---|
+| GET | `/v1/search` | JWT Bearer | `?q=contract&date_from=&date_to=&author=alice&limit=10&cursor=` | `{results: [{id, title, snippet, score}], total_hits, next_cursor}` | 200, 400, 403 |
+| GET | `/v1/autocomplete` | JWT Bearer | `?prefix=contr&limit=10` | `{suggestions: ["contract", "contractor"]}` | 200, 400 |
+| GET | `/v1/search/{doc_id}/preview` | JWT Bearer | — | `{document_id, title, full_snippet, author, created_at}` | 200, 403, 404 |
+
+### 🔍 Endpoint Stories
+
+**`GET /v1/search`** is 90% of the system. The `tenant_id` claim in the JWT is automatically injected as a mandatory filter in every Elasticsearch query — users cannot search outside their tenant. This is enforced in the Query Builder layer, not in the client request. If a tenant filter were missing, a user could query across all documents. The `total_hits` field is approximate beyond 10,000 results — Elasticsearch uses a sampling heuristic for large counts. For a document management system, "1000+ results" is accurate enough. If exact counts are required, add a Count API backed by Postgres.
+
+**Cursor pagination for search** is a different beast from DB cursor pagination. DB cursors encode `(last_seen_id, last_seen_created_at)`. Elasticsearch cursors encode `search_after` values: the sort values of the last result — typically `[_score, doc_id]`. The `next_cursor` in the response is base64(`[score, doc_id]` of the last result). The next request passes this as `?cursor=` and Elasticsearch picks up from that position. Why not use Elasticsearch's `scroll` API? Scroll is for bulk export, not user-facing pagination — it holds a point-in-time snapshot for minutes (expensive, doesn't scale to millions of simultaneous users).
+
+**`GET /v1/autocomplete`** has a 50ms latency SLO — tighter than the search endpoint (200ms). Implementation: Elasticsearch completion suggester on the `title.autocomplete` field (edge n-gram tokenized). Redis caches `prefix → [suggestions]` with 5-minute TTL. Cache hit rate is high because prefix distribution follows Zipf's law — the top 1,000 prefixes cover 80% of all autocomplete requests. Cache miss falls through to Elasticsearch completion suggester.
+
+**`GET /v1/search/{doc_id}/preview`** does NOT call Elasticsearch — it fetches from Postgres (metadata) and returns a truncated document content from the stored source. Why not Elasticsearch? Because Elasticsearch stores the indexed text for search purposes; the canonical document content (with guaranteed accuracy) is in Postgres. Elasticsearch's stored `_source` can lag behind by reindex time. The probe: "What if the preview content is stale?" Answer: preview fetches directly from Postgres, which is always up-to-date. Only the search index can be stale.
+
+---
+
 ## Section 6 — 🏗️ High-Level Architecture (Minutes 10–25)
 
-### 🎨 ASCII Architecture Diagram
+### Stage 1 — Postgres Full-Text Search (Baseline)
+
+> Start here. Works for small scale (< 1M documents). Breaking point: at 50M docs + 3,500 QPS, Postgres GIN index saturates and ranking quality is unacceptable.
 
 ```
-  FULL-TEXT SEARCH SYSTEM — HIGH-LEVEL ARCHITECTURE
-  ────────────────────────────────────────────────────────────────
+── Stage 1: Postgres Full-Text ───────────────────────────────────────
 
-  INDEXING PATH (write-side)
-  ══════════════════════════════════════════════════════════════
-  
-  Document Service (creates/updates docs)
-         │
-         ├─→ Save to DB (Postgres)
-         │
-         └─→ Publish to Kafka topic: "documents.indexed"
-                │
-                ▼
-         ┌─────────────────────┐
-         │ Indexing Processor  │ (async, stateless)
-         │ (Kafka consumer)    │
-         └─────────┬───────────┘
-                   │
-                   ├─→ Extract: title, snippet, metadata
-                   │
-                   ├─→ Build inverted index (term → doc ID)
-                   │
-                   ▼
-         ┌──────────────────────────────┐
-         │ Elasticsearch Cluster        │
-         │ (50 shards × 3 replicas)    │
-         │                              │
-         │ Shard 1: docs 0-1M          │
-         │ Shard 2: docs 1M-2M         │
-         │ ...                          │
-         │ Shard 50: docs 49M-50M      │
-         └──────────────────────────────┘
+ ┌──────────────────┐  creates doc  ┌──────────────────────────────────┐
+ │  Document Service │──────────────▶│           PostgreSQL              │
+ └──────────────────┘               │  documents table                 │
+                                    │  tsvector_col GIN index          │
+ ┌──────────────────┐  GET /search  │  to_tsvector(title || snippet)   │
+ │  Search Service  │──────────────▶│                                  │
+ └──────────────────┘               │  SELECT id, title, snippet,      │
+       ▲  results                   │    ts_rank(tsv, query) AS score   │
+       │                            │  FROM documents                   │
+       └────────────────────────────│  WHERE tsv @@ plainto_tsquery(?) │
+                                    │    AND owner_id = ?               │
+                                    │  ORDER BY score DESC LIMIT 10    │
+                                    └──────────────────────────────────┘
 
+BREAKING POINT:
+   At 50M documents, the GIN index grows to ~50 GB in memory.
+   At 3,500 queries/sec, Postgres CPU saturates — ts_rank is computed
+   at query time per row, not pre-indexed.
+   No BM25 relevance scoring. No field-level boosting. No autocomplete.
+   No horizontal shard-out. Postgres full-text is functional, not a search engine.
+```
 
-  SEARCH PATH (read-side)
-  ══════════════════════════════════════════════════════════════
+**WHICH search backend?**
 
-  Client (User searches "contract")
-         │
-         ▼
-  ┌──────────────────────────────────┐
-  │  API Server (Stateless)          │
-  │  GET /v1/search?q=contract       │
-  └───────┬──────────────────────────┘
-          │
-          ├─→ Auth check (JWT)
-          │
-          ├─→ Check Redis cache
-          │   Key: "search:contract:tenant123"
-          │   TTL: 5 minutes
-          │
-          ├─→ If cache miss:
-          │   Query Elasticsearch
-          │     query: {
-          │       match: {
-          │         title_or_snippet: "contract"
-          │       },
-          │       filter: [
-          │         {term: {owner_id: user123}},
-          │         {range: {created_at: {...}}},
-          │         {term: {status: "ACTIVE"}}
-          │       ]
-          │     }
-          │     sort: [
-          │       {_score: desc},  // relevance (TF-IDF)
-          │       {created_at: desc}  // recency as tiebreaker
-          │     ]
-          │
-          ├─→ Cache results in Redis (5 min TTL)
-          │
-          ▼
-  ┌──────────────────────────────────┐
-  │  Redis Cache                     │
-  │  (recent searches + results)     │
-  │  TTL: 5 minutes                  │
-  └──────────────────────────────────┘
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Postgres `tsvector` / `tsquery` | Zero extra infra; ACID; co-located with source data | CPU-bound ranking at query time; no BM25; no autocomplete; saturates at 50M docs + 3.5K QPS | ✅ Fine for < 1M docs; breaks at scale |
+| Elasticsearch (Lucene engine) | Purpose-built inverted index; BM25 native; sharding + replicas; autocomplete; < 100ms at any scale | Extra infra; eventual consistency (1-2s lag); derived index — not source of truth | ✅ Right choice for Stage 2 |
+| Solr / OpenSearch | Same Lucene engine as Elasticsearch; open-source alternatives | Less ecosystem support; same trade-offs as ES | ⚠️ Viable; ES has more enterprise adoption at DocuSign scale |
 
-  Response to client:
-    {
-      "results": [
-        {
-          "document_id": "doc-123",
-          "title": "NDA Contract 2026-01",
-          "snippet": "...this Agreement shall be binding...",
-          "author": "alice@docusign.com",
-          "created_at": "2026-06-24",
-          "relevance_score": 0.95
-        }
-      ],
-      "total_hits": 15,
-      "next_cursor": "eyJzZWFyY2hfYWZ0ZXIiOiBbMC45NSwgMTIzNF19"
-    }
+> 📖 Full: `SystemDesignConcepts/Production-Grade/System-Design-Patterns/05-consistent-hashing.md`
 
+---
 
-  AUTOCOMPLETE PATH (optional)
-  ══════════════════════════════════════════════════════════════
+### Stage 2 — Elasticsearch + Kafka + Redis (Production)
 
-  Client types "contr" in search box
-         │
-         ├─→ On each keystroke: GET /v1/autocomplete?prefix=contr
-         │
-         ▼
-  ┌──────────────────────────────────┐
-  │  Redis Trie Index                │
-  │  (autocomplete suggestions)      │
-  │  "contr" → ["contract", ...]     │
-  │  Cached frequently typed prefixes│
-  └──────────────────────────────────┘
+> **Why we evolve:** Stage 1 breaks at 50M docs + 3.5K QPS. Fix: move full-text search to Elasticsearch (purpose-built), decouple indexing via Kafka (so document creation never blocks on ES), cache search results in Redis (80% hit rate → ES sees only 700 QPS).
 
-  Response: ["contract", "contracting", "contractor"]
+```
+── Stage 2: Production ───────────────────────────────────────────────
 
+── Indexing Path (write-side) ────────────────────────────────────────
+
+ ┌──────────────────┐
+ │  Document Service │
+ └──────┬───────────┘
+        │  1. Save to Postgres (source of truth)
+        │  2. Publish to Kafka: "documents.indexed"
+        │
+ ┌──────▼───────────────────────────┐
+ │           PostgreSQL             │
+ │  documents (source of truth)     │
+ └──────────────────────────────────┘
+        │ Kafka async (1-2s lag)
+ ┌──────▼───────────────────────────┐
+ │      Indexing Processor          │
+ │  (Kafka consumer group,          │
+ │   stateless, horizontally scaled)│
+ │  - extract title, snippet, meta  │
+ │  - bulk API → Elasticsearch      │
+ └──────┬───────────────────────────┘
+        │ bulk index
+ ┌──────▼───────────────────────────────────────────────────┐
+ │               Elasticsearch Cluster                      │
+ │   50 shards (hash by doc_id) × 3 replicas               │
+ │   Shard 0: docs hash % 50 = 0   (1M docs)               │
+ │   Shard 1: docs hash % 50 = 1   (1M docs)               │
+ │   ...                                                    │
+ │   Shard 49: docs hash % 50 = 49  (1M docs)              │
+ └──────────────────────────────────────────────────────────┘
+
+── Search Path (read-side) ──────────────────────────────────────────
+
+ ┌────────────┐  GET /v1/search?q=contract  ┌────────────────────────┐
+ │   Client   │────────────────────────────▶│    Search Service      │
+ └────────────┘                             │  JWT auth + filter     │
+       ▲  HTTP 200 results                  └────────────┬───────────┘
+       └────────────────────────────────────             │ cache-aside
+                                            ┌────────────▼───────────┐
+                                            │  Redis (5-min TTL)     │
+                                            │  key: hash(q+filters)  │
+                                            │  hit  → return < 5ms   │
+                                            │  miss → query ES       │
+                                            └────────────┬───────────┘
+                                                         │ cache miss
+                                            ┌────────────▼───────────────────────────┐
+                                            │        Elasticsearch Cluster           │
+                                            │  scatter query to all 50 shards        │
+                                            │  each shard: BM25 rank, return top 10  │
+                                            │  coordinating node: merge + re-rank    │
+                                            │  latency: ~80-120ms                    │
+                                            └────────────────────────────────────────┘
+
+── Autocomplete Path ────────────────────────────────────────────────
+
+ ┌────────────┐  GET /v1/autocomplete?prefix=contr
+ │   Client   │────────────────────────────────────────────────────▶ Redis ZSET
+ └────────────┘                                                      trie:contr
+       ▲  ["contract", "contractor", "contracting"]◀─────────────── ZRANGE 0 9
+       └─────────────────────────────────────────────────────────────────────────
 
 KEY INVARIANT:
-   Metadata DB is source of truth. Elasticsearch is derived (can rebuild).
-   Indexing lag of 1-2 seconds acceptable (eventual consistency).
-   Search is read-heavy (1.16K → 3.5K QPS); cache hits reduce load.
-   Sharding by document_id ensures even distribution across 50 shards.
+   PostgreSQL is source of truth — Elasticsearch is a derived index (rebuildable).
+   Kafka decouples document writes from indexing — ES failure never fails doc creation.
+   Indexing lag of 1-2 seconds is acceptable (eventual consistency).
+   Redis absorbs 80% of search queries — Elasticsearch sees only ~700 QPS at peak.
+   Scatter-gather across 50 shards runs in parallel — coordinating node merges results.
 ```
 
-**Data flow walkthrough (say this out loud):**
+**WHICH indexing transport?**
 
-**Flow 1 — Indexing (Document Created/Updated):**
-1. Document Service saves doc to Postgres
-2. Publishes to Kafka `documents.indexed` topic (outbox pattern)
-3. Indexing Processor consumes: extracts title, snippet, metadata
-4. Builds inverted index (a lookup table that maps each word → the list of documents containing it; think of it as the index at the back of a textbook — instead of reading every page to find "contract", you flip to "contract" and get the exact page list instantly): `{"contract": [doc-1, doc-5, doc-42], "nda": [doc-1, doc-3]}`
-5. Sends to Elasticsearch (1-2 second lag acceptable)
-6. Elasticsearch stores in appropriate shard (based on doc_id hash)
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Sync write to Elasticsearch | Document searchable immediately after creation | ES down → document creation fails; ES write latency (50-200ms) added to doc create P99 | ❌ Couples document creation availability to ES |
+| Async via Kafka (outbox pattern) | Document creation is fast (10ms to Postgres); ES failure replays from Kafka; backlog processed horizontally | 1-2 second index lag (eventual consistency) | ✅ Best — decoupled availability; lag is acceptable |
 
-**Flow 2 — Search Query:**
-1. Client calls `GET /v1/search?q=contract&date_from=2026-01-01&author=alice`
-2. API checks Redis cache (key = "search:contract:tenant123:alice:2026-01-01")
-3. Cache hit (80% baseline) → return cached results (< 5ms latency)
-4. Cache miss → query Elasticsearch (BM25 scoring)
-5. Elasticsearch queries all 50 shards in parallel (scatter-gather — the coordinating node "scatters" the query to every shard simultaneously, waits for each to return its top-N results, then "gathers" and merges them into the final ranked list)
-6. Shards return top 10 results each, coordinating node merges + re-ranks
-7. Cache results in Redis (TTL = 5 minutes)
-8. Return to client with cursor for pagination
+> 📖 Full: `SystemDesignConcepts/Production-Grade/Infrastructure/19-message-queues-kafka-rabbitmq.md`
+
+**WHICH sharding strategy?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Shard by doc_id (hash) | Even distribution across all shards; no hotspots; deterministic routing | Query broadcasts to all shards (scatter-gather); merge step adds ~20ms | ✅ Best — even load; ES optimizes scatter-gather with `query_and_fetch` |
+| Shard by user_id (range) | Queries hit only 1-2 shards (faster per-query) | Power users get hot shards; rebalancing is complex as users grow | ❌ Uneven distribution creates hotspots |
+| Shard by date range (time-based) | Natural for archival — old indices move to cold storage | Complex index lifecycle management; cross-date queries span shards | ⚠️ Good for time-series logs, not general document search |
+
+> 📖 Full: `SystemDesignConcepts/Production-Grade/System-Design-Patterns/05-consistent-hashing.md`
+
+---
+
+### Data Flow Walkthrough (say this out loud)
+
+**Flow 1 — Indexing (document created/updated):**
+1. Document Service saves to Postgres (source of truth), publishes `documents.indexed` to Kafka.
+2. Indexing Processor (Kafka consumer group) consumes: extracts title, snippet, metadata. Builds inverted index (a lookup table mapping each word → list of document IDs containing it; like the index at the back of a textbook) and sends to Elasticsearch `_bulk` API.
+3. Elasticsearch routes to shard: `hash(doc_id) % 50`. Document is searchable within ~1-2 seconds.
+
+**Flow 2 — Search query:**
+1. Client `GET /v1/search?q=contract&owner=alice`. Search Service checks Redis cache (key = `hash(query + filters + userId)`).
+2. Cache hit (80%) → return results in < 5ms.
+3. Cache miss → Elasticsearch scatter-gather: coordinating node broadcasts query to all 50 shards in parallel (scatter-gather — the coordinating node "scatters" the query to every shard simultaneously, collects top-N from each, then "gathers" into the final ranked list). Each shard ranks with BM25. Coordinating node merges 50 × 10 results, re-ranks, returns top 10. ~80-120ms.
+4. Cache result in Redis (5-min TTL). Return to client.
 
 **Flow 3 — Autocomplete:**
-1. User types "contr"
-2. API hits Redis trie: `ZRANGE trie:contr 0 10` (ZRANGE = Redis command that returns elements from a sorted set by rank; `trie:contr` is the key for all words starting with "contr", each scored by popularity; `0 10` = get the top 11 elements by rank; effectively "give me the 10 most popular completions of this prefix")
-3. Return instantly (< 50ms)
-4. If trie cache expired, rebuild from Elasticsearch `terms` aggregation (slow, 200ms)
-
-**Why each component:**
-- **Elasticsearch**: Designed for full-text search (inverted index, TF-IDF scoring, filtering, aggregations)
-- **Kafka (outbox)**: Decouples document writes from indexing; retries on failure
-- **Sharding (by doc_id)**: Distributes 50M docs evenly; 50 shards = 1M docs/shard = O(1000) ops/query (fast)
-- **Redis cache**: Avoids repeated Elasticsearch queries (same search term 20× per hour); 5-min TTL balances freshness + hit rate
-- **Autocomplete trie**: Prefix matching is O(log N) in trie; cached suggestions are O(1)
+1. User types "contr" → `GET /v1/autocomplete?prefix=contr`.
+2. `ZRANGE trie:contr 0 9` from Redis ZSET (each word scored by popularity). Returns in < 10ms.
+3. If key expired: rebuild from Elasticsearch `terms` aggregation (~200ms), repopulate Redis.
 
 ---
 
@@ -410,6 +467,40 @@ public class SearchService {
 - Shard strategy determines query latency and load distribution
 - Uneven sharding causes hotspots (some shards get 10× more queries)
 - Hash-based sharding is simple and distributes evenly but requires broadcast queries
+
+**⚠️ Production gotcha: Elasticsearch `refresh_interval` — newly indexed docs are invisible**
+
+By default, Elasticsearch refreshes its in-memory index to disk every **1 second** (`refresh_interval = 1s`). A document indexed at T=0 is not searchable until T=1s (after the next refresh cycle).
+
+**Why this matters for DocuSign document search:**
+- User uploads a document → indexing pipeline writes to ES
+- User immediately searches for the document → 0-1 second window where the document is not found
+- User assumes the upload failed → retries → possible duplicate
+
+**Two strategies:**
+
+| Strategy | Config | Effect | Use when |
+|---|---|---|---|
+| Default refresh (1s) | `"refresh_interval": "1s"` | Documents searchable within ~1s | Most search use cases ✅ |
+| Immediate refresh | `?refresh=true` or `?refresh=wait_for` on index API | Document searchable immediately | Real-time indexing requirements |
+| Bulk indexing optimization | `"refresh_interval": "30s"` or `-1` (disable) during bulk | Faster bulk load | Initial index build or large batch ingestion |
+
+**The `?refresh=wait_for` option:** When the indexing processor calls the ES index API with `?refresh=wait_for`, ES blocks the response until the next refresh cycle completes — guaranteeing the document is searchable before the API returns. This adds ~1s to the indexing latency but gives you "indexed and immediately searchable" semantics.
+
+```java
+// In SearchService.indexDocument():
+IndexRequest request = new IndexRequest("documents")
+    .id(documentId)
+    .source(/* fields */)
+    .setRefreshPolicy(WriteRequest.RefreshPolicy.WAIT_UNTIL);  // block until searchable
+
+IndexResponse response = elasticsearchClient.index(request, RequestOptions.DEFAULT);
+// Document is now searchable — use this for user-facing uploads
+```
+
+**Trade-off:** `refresh=wait_for` adds ~1s to P99 indexing latency. For background batch indexing (reindexing, bulk import), always use the default `1s` refresh (or disable it during bulk, re-enable after). Use `wait_for` only on user-triggered uploads where the user immediately searches.
+
+**In an interview:** "Elasticsearch has a 1-second refresh window between indexing and searchability. For user-facing uploads, I'd use `refresh=wait_for` to guarantee the document is searchable before returning 201 to the client. For background bulk indexing, I'd disable refresh during the batch and run a manual refresh at the end."
 
 ---
 
@@ -569,30 +660,25 @@ public class SearchCacheService {
 - Memory overhead: 100M queries × 5 KB per result page ÷ 80% hit rate = worst case 6.25 GB (fits in single Redis instance)
 - Eviction policy: LRU (Least Recently Used) when memory limit reached
 
+**⚠️ Cache hit rate correction — the 80% claim needs context:**
+
+80% cache hit rate is **optimistic and only realistic for specific query patterns**. The actual hit rate depends heavily on query diversity:
+
+| Query type | Real hit rate | Why |
+|---|---|---|
+| Autocomplete prefixes (e.g., "cont", "contr", "contra") | 80–90% | Zipf distribution — top 1K prefixes cover most traffic |
+| Popular common searches ("NDA template", "contract 2026") | 40–60% | Some repetition across tenants |
+| **Per-user filtered search (DocuSign context)** | **20–40%** | Each user's search includes `tenant_id + user_id` in the cache key — two users searching the same query never share a cache entry |
+| Long-tail queries (unique combinations of terms) | 5–15% | Enormous unique query space |
+
+**For DocuSign's document search (tenant-isolated, user-specific):** the cache key includes `tenant_id` and access control filters. A realistic hit rate is **20–40%**, not 80%. The design is still correct — caching reduces ES load meaningfully — but you shouldn't state 80% to a senior interviewer without the qualification.
+
+**In an interview:** "Cache hit rate varies significantly by query type. For autocomplete prefixes, 80%+ is realistic because most users type the same common prefixes. For full-text search in a multi-tenant system where the cache key is per-user, I'd estimate 20–40% hit rate — still meaningful (reduces ES to 2K–2.8K QPS) but not the 80% figure that applies to public, non-personalized search."
+
 **Why this deep dive matters:**
-- Cache is essential for search scalability (reduces backend load by 80%)
-- 5-minute TTL balances freshness (documents visible within 5 min) and hit rate (80%+)
+- Cache is essential for search scalability even at 20-40% hit rate (meaningful reduction)
+- 5-minute TTL balances freshness (documents visible within 5 min) and hit rate
 - Smart invalidation (trigger on document index) can improve freshness without sacrificing hit rate
-
----
-
-## Section 8 — 🌐 API Design
-
-### Core Endpoints
-
-| Method | Path | Auth | Request | Response | Status |
-|---|---|---|---|---|---|
-| GET | `/v1/search` | JWT Bearer | `q=contract&date_from=&date_to=&author=alice&limit=10&cursor=` | `{results: [{id, title, snippet, score}], total_hits, next_cursor}` | 200, 400, 403 |
-| GET | `/v1/autocomplete` | JWT Bearer | `prefix=contr&limit=10` | `{suggestions: ["contract", "contractor"]}` | 200, 400 |
-| GET | `/v1/search/{doc_id}/preview` | JWT Bearer | — | `{document_id, title, full_snippet, author, created_at}` | 200, 403, 404 |
-
-### Key Design Decisions
-
-- **Cursor pagination**: Offset-based pagination is slow on large result sets; cursor-based (keyset) is O(1)
-- **Partial results**: Search returns 10 results by default (balance latency vs usability)
-- **Filtering**: query params (date_from, date_to, author, status) are AND-ed together
-- **Autocomplete**: separate endpoint; suggestions are cached separately (5-min TTL)
-- **Snippet generation**: first 200 chars of document content (or matching terms in context)
 
 ---
 
@@ -679,7 +765,7 @@ ZADD trie:contr 100 "contract" 80 "contractor" 60 "contracting"
 
 **Lose:** Can't search inside PDF content; users must remember title/keywords, not content phrases.
 
-**Failure mode if wrong:** If you index full PDF content (100 KB per doc), 50M docs × 100 KB = 5 TB index. Elasticsearch cluster becomes expensive ($50K+/month). Queries slow (must search through 5TB index). Not worth it.
+**Failure mode if wrong:** If you index full PDF content (100 KB per doc), 50M docs × 100 KB = 5 TB index. Elasticsearch cluster becomes expensive ($50K+/month). Queries slow (must search through 5TB index). Not worth it. **Business impact:** At 5 TB, full-text search queries degrade from 200ms to 5+ seconds — for DocuSign's eDiscovery use case (a law firm searching all contracts for a specific clause), the search tool becomes too slow for production use, the legal team switches to manual review, and DocuSign loses a key enterprise feature differentiation against competitors like Adobe Sign.
 
 ---
 
@@ -691,7 +777,7 @@ ZADD trie:contr 100 "contract" 80 "contractor" 60 "contracting"
 
 **Lose:** New documents not searchable for 1-2 seconds; users might be surprised.
 
-**Failure mode if wrong:** If you synchronously index (write to Elasticsearch before returning to user), indexing failures block user requests. If Elasticsearch is down, document creation fails. Availability drops.
+**Failure mode if wrong:** If you synchronously index (write to Elasticsearch before returning to user), indexing failures block user requests. If Elasticsearch is down, document creation fails. Availability drops. **Business impact:** For DocuSign: if Elasticsearch is unavailable during synchronous indexing, envelope creation fails with a 500 — a sender trying to get a contract out before a fiscal quarter deadline cannot create the envelope at all — the core DocuSign action (send envelope) is broken for the entire duration of any Elasticsearch maintenance window, making search infrastructure a hard dependency on the write path.
 
 ---
 
@@ -703,7 +789,7 @@ ZADD trie:contr 100 "contract" 80 "contractor" 60 "contracting"
 
 **Lose:** Results can be stale; if ranking algorithm changed, users see old rankings for 5 minutes.
 
-**Failure mode if wrong:** If TTL is 1 hour, stale ranking changes confuse users ("why did this result drop?"). If no cache, Elasticsearch overloaded (50% CPU at peak). Need 10× more infrastructure cost.
+**Failure mode if wrong:** If TTL is 1 hour, stale ranking changes confuse users ("why did this result drop?"). If no cache, Elasticsearch overloaded (50% CPU at peak). Need 10× more infrastructure cost. **Business impact:** Without cache, a 2× search burst (a law firm running bulk eDiscovery across 100K contracts) pushes Elasticsearch to 100% CPU, all search queries time out, and DocuSign's contract search is completely down during the firm's discovery deadline — a legal crisis that escalates to VP support and risks the enterprise contract renewal.
 
 ---
 
@@ -755,6 +841,63 @@ Search is fundamental to any document platform. DocuSign customers must find the
 
 ---
 
+### New Deep Probes (Tier 2 — added Jul 4, 2026)
+
+**Q: "If 5 of your 50 shards go down (primary + all replicas), search for documents in those shards returns no results. The user searches for 'contract' and gets 90% of their documents, missing 10%. How do you handle partial results without failing silently?"**
+> Elasticsearch includes shard health in every response: `"_shards": {"total": 50, "successful": 45, "failed": 5}`. My API layer checks this field on every response.
+>
+> If `_shards.failed > 0`:
+> 1. Return the partial results (do NOT fail the whole request with a 503 — partial results > blank page)
+> 2. Add a warning field to the API response: `"warning": "Results may be incomplete — 5 of 50 index shards are temporarily unavailable"`
+> 3. Alert ops team via PagerDuty (shard failure is a P2 incident)
+>
+> Elasticsearch's default behavior (`allow_partial_search_results: true`) already returns partial results. I make sure my API surfaces the warning rather than hiding it.
+>
+> **Why not fail with 503?** A user searching for a contract to sign would rather see 45 of 50 results with a warning than a complete failure. Availability of partial results > perfect consistency when stakes are search, not booking or payment.
+
+---
+
+**Q: "How do you prevent user A from seeing user B's documents in search results? Both have contracts that contain the word 'NDA.'"**
+> Two-layer defense — Elasticsearch query filter + centralized query builder:
+>
+> **Layer 1 — Elasticsearch filter clause** (not a query clause): every search query includes a `filter` on `owner_id` and `tenant_id`. Elasticsearch evaluates filters BEFORE scoring — documents not matching the filter never reach the ranking phase:
+> ```json
+> {
+>   "query": {
+>     "bool": {
+>       "must": [{"match": {"title_or_snippet": "NDA"}}],
+>       "filter": [
+>         {"term": {"owner_id": "user-A-uuid"}},
+>         {"term": {"tenant_id": "tenant-123"}}
+>       ]
+>     }
+>   }
+> }
+> ```
+>
+> **Layer 2 — Centralized query builder** (no bypass possible): The filter is not optional code that each controller adds. There's ONE method `SearchQueryBuilder.buildSecureQuery(userId, tenantId, userInput)` that always adds the ownership filter. No controller can call the ES client directly — it must go through this builder. Code review enforces it.
+>
+> **Shared documents** (user A shares doc with user B): The index includes an `authorized_user_ids` array field. Filter becomes `{"terms": {"authorized_user_ids": ["user-A-uuid"]}}`.
+>
+> **In an interview:** "The ownership filter is in the ES filter clause (not the scoring query), so it's both fast (cached, doesn't affect BM25 scoring) and mandatory (centralized builder, no bypass). This makes cross-user leakage structurally impossible, not just policy-enforced."
+
+---
+
+### New Cross-Concept Probe (Tier 3 — added Jul 4, 2026)
+
+**Q: "A DocuSign customer uploads 100,000 documents in one day (bulk import). Your async indexing has a 1-2 second lag per document. How does the indexing service handle the sudden backlog without falling behind permanently?"**
+> With 100K documents arriving rapidly, the Kafka topic `documents.indexed` accumulates a backlog. The single-consumer Indexing Processor at 100 docs/sec would take ~17 minutes to clear 100K documents — acceptable. But at 1M documents (enterprise migration), it's 3 hours of lag.
+>
+> **Horizontal scaling via Kafka consumer groups:** The Indexing Processor is a Kafka consumer group. Multiple instances share the topic's 50 partitions. With 10 Processor instances, each handles 5 partitions → throughput scales 10× to 1,000 docs/sec → 100K document backlog clears in 100 seconds.
+>
+> **Throttle against Elasticsearch capacity:** Elasticsearch can handle ~5,000 bulk index operations/sec. If Indexing Processors are too aggressive (e.g., 50 instances), they overwhelm ES and cause write rejections. The fix: tune consumer group size to keep ES load at ~70% capacity.
+>
+> **Bulk API:** Rather than indexing one document per Elasticsearch request (expensive: one HTTP RTT per doc), Indexing Processor batches 100 documents per Elasticsearch `_bulk` API call — 100× fewer HTTP calls, same throughput.
+>
+> **In an interview:** "I'd scale the Kafka consumer group horizontally to match backlog size. The Indexing Processor is stateless — running 10 instances vs 1 is a single Kubernetes replica count change. Bulk API batching keeps ES overhead low. The key constraint is ES write capacity, not Kafka throughput."
+
+---
+
 ## Section 13 — 🐞 Common Mistakes on This Question
 
 - **Mistake 1:** "I'll store full PDF content in Elasticsearch." → **Why it's wrong:** 50M docs × 100 KB = 5 TB index. Cost is $50K+/month. Queries become slow. → **What to say instead:** "Index metadata + title + first 500 chars of content (snippet). Full PDF is retrieved separately when user clicks."
@@ -769,13 +912,13 @@ Search is fundamental to any document platform. DocuSign customers must find the
 
 | Dimension | Relevant? | How your design addresses it |
 |---|---|---|
-| **Testability** | ✅ | BM25 ranking is deterministic (same query = same score). Mock Elasticsearch for unit tests. Index a test dataset, verify ranking order. No flakiness. |
-| **Usability** | ✅ | Simple search API: `GET /search?q=contract`. Autocomplete guides users. Snippet shows context. Filters (date, author) refine results. |
-| **Extensibility** | ✅ | New fields (document_type, custom_metadata) are added to Elasticsearch mapping without reindexing. New ranking signals (view count, signature date) are added via boosting. |
-| **Security** | ✅ | JWT auth on all endpoints. Filters by owner_id + tenant_id (prevent cross-user search leaks). Status filter prevents deleted docs from appearing. |
-| **Availability** | ✅ | Elasticsearch cluster has 50 shards × 3 replicas. Single shard failure doesn't block search (replicas take over). Redis cache as fallback (serve stale results if ES slow). |
-| **Scalability** | ✅ | At 100M searches/day (3.5K QPS), cache + sharding handle easily. Index grows to 50M docs = 1.1 TB (fits in cluster). Horizontal scaling: add shards if > 100M docs. |
-| **Observability & Traceability** | ✅ | Log every search query (user, query, results returned, latency). Elasticsearch provides per-shard metrics (query latency, request rate). Track cache hit rate (dashboard: 80% = healthy). |
+| **Testability** | ✅ | BM25 ranking is deterministic (same query + same index = same score). Test: index a fixed dataset of 10 synthetic envelopes, verify ranking order for known query. Async indexing path testable with mock Kafka producer + mock ES client — no live cluster needed. Cache hit/miss testable with Redis mock. |
+| **Usability** | ✅ | GET /search?q=contract&owner_id={id}&filter=status:ACTIVE&limit=10 returns {items, total_hint, latency_ms}. Autocomplete via Redis trie responds in < 5ms. Snippet shows the 150-char context around the matched term. For DocuSign: a legal assistant searching "employment agreement 2024" gets the right envelope ranked first, with a contextual snippet from the title/metadata. |
+| **Extensibility** | ✅ | New searchable fields (custom_fields, template_name) added to ES mapping with `dynamic: false` — no reindex needed for new string fields. New ranking signals (days-to-expiry boost, recently viewed boost) added as ES `function_score` parameters with zero API changes. |
+| **Security** | ✅ | Every ES query includes a mandatory `filter` clause on (owner_id + tenant_id) via `SearchQueryBuilder.buildSecureQuery()` — for DocuSign: cross-tenant search leaks would expose one customer's contract list to another; the centralized filter makes bypass impossible even if a controller forgets to add it. Status filter (WHERE status = 'ACTIVE') prevents deleted envelopes from appearing in results (soft-delete search consistency). |
+| **Availability** | ✅ | ES cluster: 50 shards × 3 replicas — single shard failure triggers automatic replica promotion (< 60s). Redis cache serves stale results during ES degradation (acceptable: stale results > no results for users). At 3.5K QPS with 80% cache hit rate, only 700 queries/sec hit ES — a 2× traffic spike stays within ES capacity. |
+| **Scalability** | ✅ | At 50M docs × 22 KB/doc = 1.1 TB index (Section 4), 50 shards distribute the index across the cluster — no single shard exceeds 22 GB. At 3.5K QPS (Section 4: 100M searches/day), Redis cache (80% hit rate) routes only 700 QPS to ES. For DocuSign's eDiscovery use case: a law firm searching across 100K contracts completes in < 200ms via index parallelism across 50 shards. |
+| **Observability & Traceability** | ✅ | Every search logs (user_id, tenant_id, query_text, result_count, latency_ms, cache_hit, request_id). Dashboards: ES per-shard latency histogram (P99 < 200ms target), Redis cache hit rate (alert < 75%), indexing lag (alert > 5s). For DocuSign: "what did user X search for before accessing envelope Y?" is answerable in 200ms from the search query log — useful for legal discovery and compliance audits. |
 
 ---
 
@@ -790,3 +933,6 @@ Search is fundamental to any document platform. DocuSign customers must find the
 | Date | Change |
 |---|---|
 | June 24, 2026 | **E1-search-system.md created.** Full 15-section solution framework for Type A System Design. Covers: Elasticsearch sharding (50 shards by hash), BM25 ranking (relevance + recency), async indexing via Kafka (outbox pattern), Redis caching (5-min TTL, 80% hit rate), query filtering (access control + compliance), autocomplete (Redis trie). Scale: 50M documents, 100M searches/day = 3.5K QPS peak. Prerequisites: `05-consistent-hashing.md`, `03-caching.md`, `11-api-design.md`. |
+| Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **Partial shard failure — silent vs visible degradation** — check `_shards.failed` in ES response, return partial results + warning field rather than 503, alert ops; availability of partial results > complete failure for search; (2) **Cross-user search access control** — `filter` clause in ES bool query (not scoring query, cached) on `owner_id` + `tenant_id`; centralized `SearchQueryBuilder.buildSecureQuery()` makes filter mandatory — no controller bypasses possible; shared docs via `authorized_user_ids` array field; (3) **Bulk import backlog handling** — Kafka consumer group horizontal scaling (10 instances = 10× throughput); stateless Processor = Kubernetes replica count change; ES `_bulk` API batches 100 docs per HTTP call (100× fewer RTTs); tune consumer group size to keep ES at 70% capacity. |
+| Jul 5, 2026 | **Section 6 restructured into 2-stage progressive HLD.** Stage 1 (Postgres full-text, GIN index + tsvector) — shows functional baseline for < 1M docs, identifies breaking point at 50M docs + 3.5K QPS (CPU saturation, no BM25, no autocomplete). Stage 2 (Elasticsearch + Kafka + Redis, production) — Kafka async decouples indexing from document creation; ES 50 shards by doc_id hash; Redis 5-min TTL absorbs 80% of queries. Three decision tables added: search backend (Postgres vs ES vs Solr — ES ✅), indexing transport (sync write vs Kafka async — Kafka ✅), sharding strategy (doc_id vs user_id vs date — doc_id ✅). Verdict alignment verified: all Section 6 table verdicts match Section 7 deep dive choices (doc_id sharding ✅, BM25 ✅, Redis cache-aside ✅). |
+| Jul 5, 2026 | **Section 10 business impact + Section 14 DocuSign dimensions pass.** Section 10: added **Business impact:** to all 3 trade-offs — eDiscovery search degrading under load losing enterprise law firm accounts to Adobe Sign (Elasticsearch CPU), synchronous indexing making Elasticsearch a hard dependency on the envelope create write path (async trade-off cost), law firm eDiscovery burst driving 100% CPU with VP escalation during discovery deadline (capacity). Section 14: rewrote all 7 dimension cells — `SearchQueryBuilder.buildSecureQuery()` mandatory tenant filter preventing cross-tenant isolation failure (Security), 3.5K QPS with 80% Redis cache hit rate from Section 4 (Scalability), search query audit trail for compliance officer eDiscovery verification (Observability). |
