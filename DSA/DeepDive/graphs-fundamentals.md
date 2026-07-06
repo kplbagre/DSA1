@@ -231,60 +231,97 @@ for (int[] edge : edges) {
 }
 ```
 
-### When to use which
-
-| Property | Adjacency List | Adjacency Matrix |
-| --- | --- | --- |
-| Memory | `O(V + E)` | `O(V²)` |
-| Add edge | `O(1)` | `O(1)` |
-| Check edge `(u, v)` | `O(degree(u))` | `O(1)` |
-| Iterate neighbors of `v` | `O(degree(v))` | `O(V)` |
-| Best for | **Sparse graphs (E ≪ V²)** | Very dense graphs (rare in interviews) |
-
-> **Default rule:** **always use adjacency list unless explicitly told otherwise.** Almost every LC graph problem assumes adjacency list.
 
 ---
 
-## 🌐 Connected Components — Concept [Striver G-4]
+### Grid (implicit — every 2-D grid problem)
 
-> A **connected component** is a maximal set of mutually reachable vertices. A graph with 10 vertices might have 1 component (fully connected) or 10 components (no edges at all).
+> A 2-D `char[][]` or `int[][]` grid is a graph in disguise. No adjacency list is ever built — neighbors are computed on the fly from cell coordinates using direction arrays.
 
-### 🎨 Visual — Components in a Disconnected Graph
+**The mapping rules:**
+- Each **land cell** `(r, c)` = one **vertex**
+- Two land cells share an **edge** iff they are 4-directional neighbors AND both are land
+- Water/blocked cells are **absent from the graph** (not just disconnected — absent)
+- **Vertex ID** = the pair `(r, c)`, not a single integer
+- **Visited array** = `boolean[rows][cols]` instead of `boolean[V]`
 
-```
-A graph with 3 components:
-
-   Component A          Component B          Component C
-   ──────────          ──────────           ──────────
-
-      (0)───(1)            (3)                (5)──(6)
-        │                    │                  │    │
-        │                   (4)                 │    │
-       (2)                                     (7)──(8)
-
-
-   8 vertices, 3 components.
-   To visit every vertex, you MUST start a fresh BFS/DFS from each component.
-   That's why the outer `for (i = 0; i < V; i++) if (!visited[i]) ...` loop exists.
-```
-
-**Why it matters:** for problems like "count islands" or "number of provinces", you're literally counting connected components.
-
-**The universal counting pattern:**
+**The neighbor loop** — replaces `adj.get(u)` exactly:
 
 ```java
-int components = 0;
-boolean[] visited = new boolean[V];
-for (int i = 0; i < V; i++) {
-    if (!visited[i]) {
-        traverse(i, adj, visited);     // BFS or DFS
-        components++;
+// Direction arrays (4-directional: up, down, left, right)
+private static final int[] DR = {-1,  1,  0,  0};
+private static final int[] DC = { 0,  0, -1,  1};
+
+// "adj.get(u)" equivalent for cell (r, c):
+for (int d = 0; d < 4; d++) {
+    int nr = r + DR[d];
+    int nc = c + DC[d];
+    if (inBounds(nr, nc, rows, cols) && grid[nr][nc] == '1') {
+        // (nr, nc) is a valid neighbor of (r, c)
     }
 }
-return components;
 ```
 
-> **Why the outer for-loop:** the graph may be disconnected. One BFS/DFS only covers ONE component — you need to iterate over all vertices and trigger a fresh traversal each time you find an unvisited one.
+### 🎨 Visual — A grid IS a graph (just in disguise)
+
+```
+The SAME thing, drawn two ways:
+
+
+  AS A MATRIX (what the problem gives you):
+
+         col 0   col 1   col 2
+       ┌───────┬───────┬───────┐
+  row 0│   1   │   1   │   0   │
+       ├───────┼───────┼───────┤
+  row 1│   1   │   0   │   1   │
+       ├───────┼───────┼───────┤
+  row 2│   0   │   1   │   1   │
+       └───────┴───────┴───────┘
+
+
+  AS A GRAPH (what your traversal code sees):
+
+       (0,0)───(0,1)                       (1,2)
+         │                                   │
+       (1,0)                       (2,1)───(2,2)
+
+
+  TWO CONNECTED COMPONENTS:
+    Component A = {(0,0), (0,1), (1,0)}     ← L-shape, top-left
+    Component B = {(1,2), (2,1), (2,2)}     ← L-shape, bottom-right
+
+  Water cells (0,2), (1,1), (2,0) are NOT in the graph at all —
+  they're absent from the vertex set, not just disconnected.
+
+
+  RULES OF THE DISGUISE:
+    • Each LAND cell (value '1') is a VERTEX.
+    • Two cells share an EDGE iff they are 4-directional neighbors
+      (up / right / down / left) AND both are LAND.
+    • Water cells ('0') are NOT vertices — they are absent from the graph.
+    • You never build the adjacency list explicitly. You compute
+      neighbors ON THE FLY using (r ± 1, c) and (r, c ± 1).
+
+  KEY INVARIANT:
+    A 2-D grid problem = a graph problem where the vertex ID is the
+    pair (r, c) and adjacency is a 1-step move on the grid. Once you
+    see this, every BFS / DFS template you already know applies verbatim.
+```
+
+> **⚠️ Do NOT confuse a grid matrix with an adjacency matrix.** Both are `int[][]` arrays but mean opposite things: `grid[1][1] = 0` means *"this cell is water"* — it does NOT mean *"vertex 1 has no self-loop."* See the confusion-trap visual in **`§ Grid BFS/DFS Problems`** for a side-by-side breakdown.
+
+### When to use which
+
+| Property | Adjacency List | Adjacency Matrix | Grid (implicit) |
+| --- | --- | --- | --- |
+| Memory | `O(V + E)` | `O(V²)` | `O(1)` extra (no stored edges) |
+| Add edge | `O(1)` | `O(1)` | N/A — implicit |
+| Check edge `(u, v)` | `O(degree(u))` | `O(1)` | `O(1)` (bounds + value check) |
+| Iterate neighbors | `O(degree(v))` | `O(V)` | `O(4)` = `O(1)` (fixed 4 dirs) |
+| Best for | **Sparse graphs (E ≪ V²)** | Dense graphs (rare) | **2-D grid problems** |
+
+> **Default rule:** **always use adjacency list unless explicitly told otherwise.** Almost every LC graph problem assumes adjacency list.
 
 ---
 
@@ -526,6 +563,51 @@ for (int i = 0; i < chars.length; i++) {
 ---
 
 
+---
+
+## 🌐 Connected Components — Concept [Striver G-4]
+
+> A **connected component** is a maximal set of mutually reachable vertices. A graph with 10 vertices might have 1 component (fully connected) or 10 components (no edges at all).
+
+### 🎨 Visual — Components in a Disconnected Graph
+
+```
+A graph with 3 components:
+
+   Component A          Component B          Component C
+   ──────────          ──────────           ──────────
+
+      (0)───(1)            (3)                (5)──(6)
+        │                    │                  │    │
+        │                   (4)                 │    │
+       (2)                                     (7)──(8)
+
+
+   8 vertices, 3 components.
+   To visit every vertex, you MUST start a fresh BFS/DFS from each component.
+   That's why the outer `for (i = 0; i < V; i++) if (!visited[i]) ...` loop exists.
+```
+
+**Why it matters:** for problems like "count islands" or "number of provinces", you're literally counting connected components.
+
+**The universal counting pattern:**
+
+```java
+int components = 0;
+boolean[] visited = new boolean[V];
+for (int i = 0; i < V; i++) {
+    if (!visited[i]) {
+        traverse(i, adj, visited);     // BFS or DFS
+        components++;
+    }
+}
+return components;
+```
+
+> **Why the outer for-loop:** the graph may be disconnected. One BFS/DFS only covers ONE component — you need to iterate over all vertices and trigger a fresh traversal each time you find an unvisited one.
+
+---
+
 ## 🌊 BFS — Breadth-First Search [Striver G-5]
 
 > Visit vertices **level by level**, expanding outward from the start. Uses a **queue**. Natural fit for "shortest path in unweighted graph" because the first time you see a vertex is via the fewest edges.
@@ -683,6 +765,47 @@ while (!queue.isEmpty()) {
 | **Implicit-graph BFS** | LC 127 Word Ladder | No adjacency list — neighbors are generated on the fly per node (26 letter substitutions × word length) |
 | **Reverse-direction BFS** | LC 542 01 Matrix, LC 130 Surrounded Regions | Flip who the source is (e.g., seed 0-cells not 1-cells); natural "distance from X" answers fall out |
 | **Level-tracking BFS** | LC 102, LC 994 (levels = minutes) | Wrap the inner loop in an outer `for (int sz = queue.size(); sz > 0; sz--)` to count levels explicitly |
+
+
+---
+
+### 🎯 Grid BFS — only 4 lines change from adjacency-list BFS
+
+> **Mental shortcut:** grid BFS IS the same template. Copy it in your head — change exactly 4 things. Mark-on-enqueue discipline, while-loop structure, visited check — byte-for-byte identical.
+
+```
+ADJACENCY-LIST BFS                       GRID BFS            (← 4 things change)
+─────────────────────────────────────    ──────────────────────────────────────────
+
+boolean[] visited = new boolean[V];  ①→  boolean[][] visited = new boolean[R][C];
+Queue<Integer> q = new ArrayDeque<>(); ②→  Queue<int[]> q   = new ArrayDeque<>();
+q.offer(start);                          q.offer(new int[]{sr, sc});
+visited[start] = true;                   visited[sr][sc] = true;
+
+while (!q.isEmpty()) {                   while (!q.isEmpty()) {
+    int u = q.poll();                ③→      int[] cell = q.poll();
+                                             int r = cell[0], c = cell[1];
+    for (int v : adj.get(u)) {       ④→      for (int d = 0; d < 4; d++) {
+                                                 int nr = r + DR[d];
+                                                 int nc = c + DC[d];
+        if (!visited[v]) {                       if (inBounds(nr,nc,R,C)
+                                                     && !visited[nr][nc]
+                                                     && grid[nr][nc] == '1') {
+            visited[v] = true;                       visited[nr][nc] = true;
+            q.offer(v);                              q.offer(new int[]{nr,nc});
+        }                                        }
+    }                                        }
+}                                        }
+
+① visited: boolean[V]  →  boolean[rows][cols]   (2D array)
+② queue element: int   →  int[] pair
+③ poll: single int     →  int[] pair → extract r, c
+④ neighbor loop: adj.get(u)  →  DR/DC direction arrays + inBounds + land check
+
+KEY INVARIANT:
+   Same mark-on-enqueue discipline. Same O(V+E) = O(rows×cols) complexity.
+   Only the coordinate system changes — the algorithm is identical.
+```
 
 ---
 
@@ -950,10 +1073,195 @@ public List<Integer> dfsIterative(int start, List<List<Integer>> adj, int V) {
 | **Adjacency matrix DFS** | LC 547 Number of Provinces | `for (int v = 0; v < V; v++) if (adj[u][v] == 1 && !visited[v])` replaces `adj.get(u)` loop |
 | **All-paths DFS** | LC 797 All Paths Source to Target | No visited[] — backtrack after each recursive call to explore all branches |
 
+
+---
+
+### 🎯 Grid DFS — only 4 lines change from adjacency-list DFS
+
+> **Same shortcut as grid BFS:** copy the adjacency-list DFS template and change exactly 4 things.
+
+```
+ADJACENCY-LIST DFS (recursive)           GRID DFS (recursive) (← 4 things change)
+─────────────────────────────────────    ──────────────────────────────────────────
+
+void dfs(int u,                      ①→  void dfs(int r, int c,
+         List<List<Integer>> adj,             char[][] grid,
+         boolean[] visited) {                boolean[][] visited) {
+
+    // caller checks: if (!visited[u])       // combined entry guard         ②
+                                         if (!inBounds(r,c,R,C)
+                                             || grid[r][c] != '1'
+                                             || visited[r][c]) return;
+
+    visited[u] = true;               ③→  visited[r][c] = true;
+
+    for (int v : adj.get(u)) {       ④→  for (int d = 0; d < 4; d++) {
+        if (!visited[v]) {                   int nr = r + DR[d];
+            dfs(v, adj, visited);            int nc = c + DC[d];
+        }                                    dfs(nr, nc, grid, visited);
+    }                                    }
+}                                    }
+
+① parameter: single int u  →  pair (r, c) + grid reference
+② guard: caller-side !visited[u] check  →  combined entry guard (bounds+land+visited)
+③ visited: visited[u]  →  visited[r][c]  (2D)
+④ neighbor loop: adj.get(u)  →  DR/DC direction arrays (guard absorbed into next call)
+
+KEY INVARIANT:
+   Mark-on-entry discipline identical to adjacency-list DFS.
+   The combined entry guard handles all three rejection conditions in one if.
+```
+
 > 🧩 **Try these (DFS warm-up):**
 > - ✅ Practice problem: DFS traversal output of a graph from vertex 0
 > - ✅ **LC 200** Number of Islands (G-8) — DFS on a grid
 > - ✅ **LC 547** Number of Provinces (G-7) — DFS on adjacency matrix
+
+---
+
+## 🎨 Style Habits — Build These From Day 1
+
+### 🌐 Universal Habits (apply to every graph problem)
+
+#### Habit 1 — Always initialize `visited` BEFORE any traversal
+
+Forgetting this is the #1 source of "infinite recursion" / TLE bugs.
+
+```java
+// ❌ Missing visited — infinite recursion on cycles
+private void dfs(int u, List<List<Integer>> adj) {
+    for (int v : adj.get(u)) {
+        dfs(v, adj);
+    }
+}
+
+// ✅ Always pass visited
+private void dfs(int u, List<List<Integer>> adj, boolean[] visited) {
+    visited[u] = true;
+    for (int v : adj.get(u)) {
+        if (!visited[v]) {
+            dfs(v, adj, visited);
+        }
+    }
+}
+```
+
+---
+
+#### Habit 2 — Mark visited BEFORE adding to queue, not after polling
+
+Already covered in BFS section. Repeating because it's the single biggest source of BFS bugs.
+
+---
+
+#### Habit 3 — Use `Deque` over legacy `Stack`
+
+```java
+// ❌ Legacy, synchronized, slow
+Stack<Integer> stack = new Stack<>();
+
+// ✅ Modern, fast
+Deque<Integer> stack = new ArrayDeque<>();
+stack.push(x);
+stack.pop();
+stack.peek();
+```
+
+---
+
+#### Habit 4 — Use direction arrays for grid problems
+
+```java
+// ❌ Four duplicate calls
+dfs(grid, r - 1, c);
+dfs(grid, r + 1, c);
+dfs(grid, r, c - 1);
+dfs(grid, r, c + 1);
+
+// ✅ Loop over direction arrays
+private static final int[] DR = {-1, 1, 0, 0};
+private static final int[] DC = {0, 0, -1, 1};
+for (int d = 0; d < 4; d++) {
+    dfs(grid, r + DR[d], c + DC[d]);
+}
+```
+
+---
+
+#### Habit 5 — Bounds-check FIRST in DFS/BFS, before any other check
+
+```java
+// ✅ Order matters — bounds first, then content
+if (!inBounds(r, c, rows, cols) || grid[r][c] != '1') {
+    return;
+}
+```
+
+If you content-check first, you'll get an `ArrayIndexOutOfBoundsException`.
+
+---
+
+### 🔧 Context-Specific Habits
+
+#### Habit 6 — Cycle detection: undirected needs parent; directed needs recursion stack
+
+```java
+// ❌ Using only `visited` in directed → false positive cycle on diamond shape
+if (visited[v]) {
+    return true;
+}
+
+// ✅ Directed needs pathVisited (currently in recursion path)
+if (pathVisited[v]) {
+    return true;
+}
+```
+
+---
+
+#### Habit 7 — In Dijkstra, handle stale heap entries
+
+```java
+// ✅ Always check if the polled distance is current
+if (d > dist[u]) {
+    continue;
+}
+```
+
+Without this, you'll relax via outdated distances → wrong answer or TLE.
+
+---
+
+#### Habit 8 — In DSU, always recompute roots after `union`
+
+```java
+// ❌ Roots can change after path compression in subsequent finds
+int rootX = dsu.find(x);
+int rootY = dsu.find(y);
+dsu.union(x, y);
+// Don't use rootX or rootY here; they may be stale
+
+// ✅ Re-find after union
+dsu.union(x, y);
+int newRoot = dsu.find(x);
+```
+
+---
+
+#### Habit 9 — Pre-size adjacency list to avoid reallocation
+
+```java
+// ❌ Default capacity, repeated grow-and-copy
+List<List<Integer>> adj = new ArrayList<>();
+for (int i = 0; i < V; i++) {
+    adj.add(new ArrayList<>());
+}
+
+// ✅ Same code, but if you know average degree, pre-size the inner lists:
+adj.add(new ArrayList<>(avgDegree));
+```
+
+Minor, but matters on very large graphs.
 
 ---
 
@@ -1019,52 +1327,8 @@ Q5: Are we MERGING SETS / counting components dynamically?
 
 > **First-timer bridge:** if you have NEVER applied BFS/DFS to a 2-D grid before, **do not skip this intro.** Up to now we drew graphs as circles connected by edges, with vertex IDs `0..V-1`. A grid problem hands you a `char[][]` or `int[][]` instead — and your job is to realize that this matrix **is already a graph**, just disguised. The traversal templates are exactly what you've learned; what changes is **how you name a vertex** and **how you find its neighbors**.
 
-### 🎨 Visual — A grid IS a graph (just in disguise)
+> **Visual — grid IS a graph:** See **`§ Graph Representations → Grid`** above — the side-by-side matrix/graph drawing and the KEY INVARIANT are there, with the full mapping rules.
 
-```
-The SAME thing, drawn two ways:
-
-
-  AS A MATRIX (what the problem gives you):
-
-         col 0   col 1   col 2
-       ┌───────┬───────┬───────┐
-  row 0│   1   │   1   │   0   │
-       ├───────┼───────┼───────┤
-  row 1│   1   │   0   │   1   │
-       ├───────┼───────┼───────┤
-  row 2│   0   │   1   │   1   │
-       └───────┴───────┴───────┘
-
-
-  AS A GRAPH (what your traversal code sees):
-
-       (0,0)───(0,1)                       (1,2)
-         │                                   │
-       (1,0)                       (2,1)───(2,2)
-
-
-  TWO CONNECTED COMPONENTS:
-    Component A = {(0,0), (0,1), (1,0)}     ← L-shape, top-left
-    Component B = {(1,2), (2,1), (2,2)}     ← L-shape, bottom-right
-
-  Water cells (0,2), (1,1), (2,0) are NOT in the graph at all —
-  they're absent from the vertex set, not just disconnected.
-
-
-  RULES OF THE DISGUISE:
-    • Each LAND cell (value '1') is a VERTEX.
-    • Two cells share an EDGE iff they are 4-directional neighbors
-      (up / right / down / left) AND both are LAND.
-    • Water cells ('0') are NOT vertices — they are absent from the graph.
-    • You never build the adjacency list explicitly. You compute
-      neighbors ON THE FLY using (r ± 1, c) and (r, c ± 1).
-
-  KEY INVARIANT:
-    A 2-D grid problem = a graph problem where the vertex ID is the
-    pair (r, c) and adjacency is a 1-step move on the grid. Once you
-    see this, every BFS / DFS template you already know applies verbatim.
-```
 
 > **What's actually different from adjacency-list graphs?**
 
@@ -1263,7 +1527,7 @@ for (int[] dir : DIRS) {
 
 ---
 
-## 🧱 Grid DFS and BFS Templates — your building blocks before any problem
+## 🧱 Grid BFS/DFS — Templates, Core Concepts, and Patterns
 
 > **Before you attempt LC 200 (Number of Islands) or any grid problem, write these two templates from memory.** They are nearly identical to the adjacency-list versions you already know — the ONLY differences are:
 >
@@ -4078,150 +4342,6 @@ if (parent != -1 && low[v] >= disc[u]) {
 > - 🔴 Practice problem: Articulation points
 
 ---
-
-## 🎨 Style Habits — Build These From Day 1
-
-### 🌐 Universal Habits (apply to every graph problem)
-
-#### Habit 1 — Always initialize `visited` BEFORE any traversal
-
-Forgetting this is the #1 source of "infinite recursion" / TLE bugs.
-
-```java
-// ❌ Missing visited — infinite recursion on cycles
-private void dfs(int u, List<List<Integer>> adj) {
-    for (int v : adj.get(u)) {
-        dfs(v, adj);
-    }
-}
-
-// ✅ Always pass visited
-private void dfs(int u, List<List<Integer>> adj, boolean[] visited) {
-    visited[u] = true;
-    for (int v : adj.get(u)) {
-        if (!visited[v]) {
-            dfs(v, adj, visited);
-        }
-    }
-}
-```
-
----
-
-#### Habit 2 — Mark visited BEFORE adding to queue, not after polling
-
-Already covered in BFS section. Repeating because it's the single biggest source of BFS bugs.
-
----
-
-#### Habit 3 — Use `Deque` over legacy `Stack`
-
-```java
-// ❌ Legacy, synchronized, slow
-Stack<Integer> stack = new Stack<>();
-
-// ✅ Modern, fast
-Deque<Integer> stack = new ArrayDeque<>();
-stack.push(x);
-stack.pop();
-stack.peek();
-```
-
----
-
-#### Habit 4 — Use direction arrays for grid problems
-
-```java
-// ❌ Four duplicate calls
-dfs(grid, r - 1, c);
-dfs(grid, r + 1, c);
-dfs(grid, r, c - 1);
-dfs(grid, r, c + 1);
-
-// ✅ Loop over direction arrays
-private static final int[] DR = {-1, 1, 0, 0};
-private static final int[] DC = {0, 0, -1, 1};
-for (int d = 0; d < 4; d++) {
-    dfs(grid, r + DR[d], c + DC[d]);
-}
-```
-
----
-
-#### Habit 5 — Bounds-check FIRST in DFS/BFS, before any other check
-
-```java
-// ✅ Order matters — bounds first, then content
-if (!inBounds(r, c, rows, cols) || grid[r][c] != '1') {
-    return;
-}
-```
-
-If you content-check first, you'll get an `ArrayIndexOutOfBoundsException`.
-
----
-
-### 🔧 Context-Specific Habits
-
-#### Habit 6 — Cycle detection: undirected needs parent; directed needs recursion stack
-
-```java
-// ❌ Using only `visited` in directed → false positive cycle on diamond shape
-if (visited[v]) {
-    return true;
-}
-
-// ✅ Directed needs pathVisited (currently in recursion path)
-if (pathVisited[v]) {
-    return true;
-}
-```
-
----
-
-#### Habit 7 — In Dijkstra, handle stale heap entries
-
-```java
-// ✅ Always check if the polled distance is current
-if (d > dist[u]) {
-    continue;
-}
-```
-
-Without this, you'll relax via outdated distances → wrong answer or TLE.
-
----
-
-#### Habit 8 — In DSU, always recompute roots after `union`
-
-```java
-// ❌ Roots can change after path compression in subsequent finds
-int rootX = dsu.find(x);
-int rootY = dsu.find(y);
-dsu.union(x, y);
-// Don't use rootX or rootY here; they may be stale
-
-// ✅ Re-find after union
-dsu.union(x, y);
-int newRoot = dsu.find(x);
-```
-
----
-
-#### Habit 9 — Pre-size adjacency list to avoid reallocation
-
-```java
-// ❌ Default capacity, repeated grow-and-copy
-List<List<Integer>> adj = new ArrayList<>();
-for (int i = 0; i < V; i++) {
-    adj.add(new ArrayList<>());
-}
-
-// ✅ Same code, but if you know average degree, pre-size the inner lists:
-adj.add(new ArrayList<>(avgDegree));
-```
-
-Minor, but matters on very large graphs.
 
 ---
 
