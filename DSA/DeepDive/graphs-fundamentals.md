@@ -6,6 +6,39 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Striver |
+| --- | --- |
+| [🎯 Goal](#-why-youre-reading-this-the-goal) | — |
+| [🚦 Difficulty Tags](#-difficulty-tagging--read-before-you-pick-a-problem) | — |
+| [📍 Reading Roadmap](#-reading-roadmap--medium-vs-advanced) | — |
+| [📖 Terminology](#-terminology-memorize-these-striver-g-1) | G-1 |
+| [🗂️ Graph Representations](#️-graph-representations-striver-g-2-g-3) | G-2, G-3 |
+| [🔨 Building the Graph](#-building-the-graph--input-format-patterns) | G-2, G-3 |
+| [🌐 Connected Components](#-connected-components--concept-striver-g-4) | G-4 |
+| [🌊 BFS](#-bfs--breadth-first-search-striver-g-5) | G-5 |
+| [🚶 DFS](#-dfs--depth-first-search-striver-g-6) | G-6 |
+| [🎨 Style Habits](#-style-habits--build-these-from-day-1) | — |
+| [🧭 Pattern Decision Framework](#-the-pattern-decision-framework--when-to-use-what) | — |
+| [🧩 Grid BFS/DFS Problems](#-grid-bfsdfs-problems-striver-g-7-to-g-16) | G-7 to G-16 |
+| [🧱 Grid Templates + Core Concepts](#-grid-bfsdfs--templates-core-concepts-and-patterns) | G-7 to G-16 |
+| [🔄 Cycle Detection — Undirected](#-cycle-detection--undirected-graph-striver-g-11-g-12) | G-11, G-12 |
+| [↔️ Bipartite Check](#️-bipartite-graph-check-striver-g-17-g-18) | G-17, G-18 |
+| [🔁 Cycle Detection — Directed](#-cycle-detection--directed-graph-striver-g-19-g-20) | G-19, G-20 |
+| [📊 Topological Sort](#-topological-sort-striver-g-21-to-g-26) | G-21 to G-26 |
+| [📏 Shortest Path Family](#-shortest-path-family-striver-g-27-to-g-43--senior-likely-from-here-on) 🟡 | G-27 to G-43 |
+| [🌳 MST](#-minimum-spanning-tree-mst-striver-g-44-g-45-g-47--advanced) 🔴 | G-44, G-45, G-47 |
+| [🔗 DSU / Union-Find](#-disjoint-set-union-dsu--union-find-striver-g-46-through-g-53--advanced) 🔴 | G-46 to G-53 |
+| [🚀 Advanced Topics](#-advanced-topics--senior-only-striver-g-54-g-55-g-56) 🔴 | G-54 to G-56 |
+| [🔬 Worked Walkthroughs](#-worked-walkthroughs--14-canonical-problems) | — |
+| [🗺️ Practice Plan](#️-practice-plan--tiered) | — |
+| [⚠️ Gotchas](#️-gotchas-silent-bug-hall-of-fame) | — |
+| [⚡ Quick Cheat Sheet](#-quick-cheat-sheet) | — |
+| [🧾 TL;DR](#-tldr--one-page-summary) | — |
+
+---
+
 ## 🎯 Why You're Reading This (The Goal)
 
 By the end of this doc, you should:
@@ -4345,160 +4378,6 @@ if (parent != -1 && low[v] >= disc[u]) {
 
 ---
 
-## 🐞 Common Bugs (Hall of Fame)
-
-### Bug 1 — Infinite recursion / TLE because `visited` not used
-
-```java
-// ❌
-private void dfs(int u, List<List<Integer>> adj) {
-    for (int v : adj.get(u)) {
-        dfs(v, adj);
-    }
-}
-
-// ✅
-private void dfs(int u, List<List<Integer>> adj, boolean[] visited) {
-    if (visited[u]) {
-        return;
-    }
-    visited[u] = true;
-    for (int v : adj.get(u)) {
-        dfs(v, adj, visited);
-    }
-}
-```
-
----
-
-### Bug 2 — BFS visits same vertex twice (marks AFTER polling)
-
-```java
-// ❌ Marks too late
-while (!queue.isEmpty()) {
-    int u = queue.poll();
-    if (visited[u]) continue;
-    visited[u] = true;
-    for (int v : adj.get(u)) {
-        queue.offer(v);
-    }
-}
-
-// ✅ Mark BEFORE enqueueing
-while (!queue.isEmpty()) {
-    int u = queue.poll();
-    for (int v : adj.get(u)) {
-        if (!visited[v]) {
-            visited[v] = true;
-            queue.offer(v);
-        }
-    }
-}
-```
-
----
-
-### Bug 3 — Undirected cycle detection without parent check
-
-Covered in Cycle Detection Undirected section. Always pass parent and skip `v == parent`.
-
----
-
-### Bug 4 — Directed cycle detection with only one visited array
-
-Covered in Cycle Detection Directed section. Need BOTH `visited` and `pathVisited`.
-
----
-
-### Bug 5 — Dijkstra with negative edge weights
-
-> Dijkstra's greedy invariant breaks. Use Bellman-Ford instead.
-
-```java
-// Edge weights: {-1, 2, -3}
-// Dijkstra will commit early and miss the better path through a negative-weight detour
-```
-
----
-
-### Bug 6 — Forgetting to use PriorityQueue in Dijkstra
-
-```java
-// ❌ Plain Queue — visits in insertion order, not shortest-distance order
-Queue<int[]> queue = new ArrayDeque<>();
-
-// ✅ Min-heap on distance
-PriorityQueue<int[]> pq = new PriorityQueue<>((a, b) -> a[0] - b[0]);
-```
-
----
-
-### Bug 7 — Integer overflow in Floyd-Warshall
-
-```java
-// ❌ MAX_VALUE + 5 = overflow → negative number → wrong answer
-Arrays.fill(row, Integer.MAX_VALUE);
-
-// ✅ Use MAX_VALUE / 2 so additions stay safe
-Arrays.fill(row, Integer.MAX_VALUE / 2);
-```
-
----
-
-### Bug 8 — DSU without path compression → TLE on large inputs
-
-```java
-// ❌ O(tree height) per find — degenerates to O(N) on adversarial input
-public int find(int x) {
-    if (parent[x] == x) {
-        return x;
-    }
-    return find(parent[x]);
-}
-
-// ✅ Path compression — flattens the tree
-public int find(int x) {
-    if (parent[x] != x) {
-        parent[x] = find(parent[x]);
-    }
-    return parent[x];
-}
-```
-
----
-
-### Bug 9 — `static` fields leaking across LeetCode test cases
-
-```java
-// ❌ persists across cases
-private static int count = 0;
-
-// ✅ instance field + reset at top of entry method
-private int count;
-public int solve(...) {
-    count = 0;
-    ...
-}
-```
-
-Same lesson as trees doc.
-
----
-
-### Bug 10 — Grid bounds check ordering
-
-```java
-// ❌ ArrayIndexOutOfBoundsException
-if (grid[r][c] != '1' || !inBounds(r, c, rows, cols)) {
-    return;
-}
-
-// ✅ Bounds first
-if (!inBounds(r, c, rows, cols) || grid[r][c] != '1') {
-    return;
-}
-```
-
 ---
 
 ## 🔬 Worked Walkthroughs — 14 Canonical Problems
@@ -5750,6 +5629,31 @@ In a matrix, `r` is row (y-axis, top-to-bottom) and `c` is column (x-axis, left-
 
 ---
 
+**13. DFS without a `visited` array — infinite recursion on any cycle.**
+
+A DFS with no visited tracking re-enters every already-seen vertex forever. On undirected graphs this crashes immediately; on directed graphs it may TLE on long paths.
+
+```java
+// ❌ no visited array — infinite recursion on undirected graph
+private void dfs(int u, List<List<Integer>> adj) {
+    for (int v : adj.get(u)) {
+        dfs(v, adj);   // v calls back into u, which calls back into v...
+    }
+}
+
+// ✅ visited array gates the recursion
+private void dfs(int u, List<List<Integer>> adj, boolean[] visited) {
+    visited[u] = true;
+    for (int v : adj.get(u)) {
+        if (!visited[v]) {
+            dfs(v, adj, visited);
+        }
+    }
+}
+```
+
+---
+
 ## ⚡ Quick Cheat Sheet
 
 | If you need... | Use... |
@@ -5815,6 +5719,7 @@ In a matrix, `r` is row (y-axis, top-to-bottom) and `c` is column (x-axis, left-
 
 | Date | Change |
 | --- | --- |
+| July 2026 | **Structural restructure (3 passes).** Pass A: deleted stale 17-day "Where to Go Next" section (74 lines). Pass B: (1) swapped Building-the-Graph before Connected Components for logical order; (2) added Grid as 3rd representation type with direction-array code and moved "grid IS a graph" visual; (3) added Grid BFS 4-line diff and Grid DFS 4-line diff side-by-side blocks inside BFS/DFS sections; (4) moved Style Habits from end-of-file to immediately after DFS section; (5) renamed Grid Templates section header. Pass C: merged Common Bugs section into Gotchas (deleted 10-entry duplicate, added unique Gotcha 13 — DFS without visited); added clickable section index at top of file. Net change: −74 lines stale content, +313 lines structured additions. |
 | May 2026 | Initial version. Curriculum aligned to Striver's Graph Series (56 videos, G-1 through G-56). Tiered practice plan (5 tiers) with explicit difficulty tags. Code rewritten in project style. Decision frameworks (5-question funnel + keyword signals) added as this doc's pedagogical contribution. |
 | May 2026 | **Visual reference pass.** Added 9 ASCII diagram blocks: graph types reference (undirected/directed/weighted/cyclic/DAG/tree/connected/disconnected/complete, self-loop, parallel edges); adjacency list vs matrix side-by-side; connected-components diagram; BFS level-by-level trace; DFS recursion-stack trace + BFS-vs-DFS comparison; undirected cycle detection (parent edge vs back edge); bipartite vs odd-cycle counter-example; directed cycle white/gray/black coloring; Kahn's topological sort step-by-step animation; Dijkstra's relaxation trace (with stale-entry handling); Prim vs Kruskal on the same graph; DSU forest visualization (initial → unions → path compression flattening). |
 | May 2026 | **BFS / DFS marking-discipline annotation pass.** Heavily annotated the canonical BFS template, the ❌/✅ mark-on-poll vs mark-on-offer comparison, the recursive DFS template, and the iterative DFS template with inline `← ` arrow comments pinpointing *why* `visited[]` is mutated at each line. Added "BFS-vs-DFS marking rule — one sentence." Added a compact "🧭 Interview default — recursive or iterative?" callout citing ~85% recursive in interview-prep ecosystem with a 3-trigger switch table. |
