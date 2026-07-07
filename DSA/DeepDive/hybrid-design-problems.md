@@ -263,6 +263,38 @@ class LRUCache {
 }
 ```
 
+**Demo:**
+
+```java
+// --- Demo / Calling Code ---
+public static void main(String[] args) {
+    LRUCache cache = new LRUCache(2);
+    cache.put(1, 1);
+    // DLL: head ↔ [1] ↔ tail
+    cache.put(2, 2);
+    // DLL: head ↔ [2] ↔ [1] ↔ tail  (2 is MRU)
+    System.out.println(cache.get(1));
+    // → 1. Promotes key 1 to MRU.
+    // DLL: head ↔ [1] ↔ [2] ↔ tail
+    cache.put(3, 3);
+    // Capacity full. LRU = tail.prev = key 2. Evict 2. Insert 3.
+    // DLL: head ↔ [3] ↔ [1] ↔ tail
+    System.out.println(cache.get(2));
+    // → -1  (evicted)
+    System.out.println(cache.get(3));
+    // → 3
+    cache.put(4, 4);
+    // LRU = tail.prev = key 1. Evict 1. Insert 4.
+    // DLL: head ↔ [4] ↔ [3] ↔ tail
+    System.out.println(cache.get(1));
+    // → -1  (evicted)
+    System.out.println(cache.get(3));
+    // → 3
+    System.out.println(cache.get(4));
+    // → 4
+}
+```
+
 **Time:** get O(1), put O(1), eviction O(1) | **Space:** O(capacity)
 
 > 🧩 **Drill — do this NOW before reading the variants:**
@@ -520,6 +552,38 @@ class LFUCache {
 }
 ```
 
+**Demo:**
+
+```java
+// --- Demo / Calling Code ---
+public static void main(String[] args) {
+    LFUCache cache = new LFUCache(2);
+    cache.put(1, 1);
+    // keyToFreq: {1→1}, freqToKeys: {1→[1]}, minFreq=1
+    cache.put(2, 2);
+    // keyToFreq: {1→1,2→1}, freqToKeys: {1→[1,2]}, minFreq=1
+    System.out.println(cache.get(1));
+    // → 1. bumpFreq(1): keyToFreq: {1→2,2→1}, freqToKeys: {1→[2], 2→[1]}, minFreq=1
+    cache.put(3, 3);
+    // full. Evict from minFreq=1: first of [2] = key 2. Insert 3 with freq=1. minFreq=1.
+    // keyToFreq: {1→2,3→1}, freqToKeys: {1→[3], 2→[1]}
+    System.out.println(cache.get(2));
+    // → -1  (evicted)
+    System.out.println(cache.get(3));
+    // → 3. bumpFreq(3): freq-1 bucket empty → remove, minFreq was 1 → minFreq=2.
+    // keyToFreq: {1→2,3→2}, freqToKeys: {2→[1,3]}
+    cache.put(4, 4);
+    // full. Evict from minFreq=2: first of [1,3] = key 1 (LRU tiebreak). Insert 4. minFreq=1.
+    // keyToFreq: {3→2,4→1}, freqToKeys: {1→[4], 2→[3]}
+    System.out.println(cache.get(1));
+    // → -1  (evicted)
+    System.out.println(cache.get(3));
+    // → 3
+    System.out.println(cache.get(4));
+    // → 4
+}
+```
+
 **Time:** get O(1), put O(1) | **Space:** O(capacity)
 
 ### Variants
@@ -594,6 +658,25 @@ class HitCounter {
         }
         return total;
     }
+}
+```
+
+**Demo:**
+
+```java
+// --- Demo / Calling Code ---
+public static void main(String[] args) {
+    HitCounter counter = new HitCounter();
+    counter.hit(1);
+    counter.hit(2);
+    counter.hit(3);
+    System.out.println(counter.getHits(4));
+    // → 3. Hits at t=1,2,3. Diffs: 3,2,1 — all < 300.
+    counter.hit(300);
+    System.out.println(counter.getHits(300));
+    // → 4. Hits at t=1,2,3,300. Diffs: 299,298,297,0 — all < 300.
+    System.out.println(counter.getHits(301));
+    // → 3. Hit at t=1: diff=300, NOT < 300 → excluded. Hits at t=2,3,300 remain.
 }
 ```
 
@@ -712,6 +795,32 @@ class Leaderboard {
 }
 ```
 
+**Demo:**
+
+```java
+// --- Demo / Calling Code ---
+public static void main(String[] args) {
+    Leaderboard board = new Leaderboard();
+    board.addScore(1, 73);
+    board.addScore(2, 56);
+    board.addScore(3, 39);
+    board.addScore(4, 51);
+    board.addScore(5, 4);
+    // playerScore: {1→73,2→56,3→39,4→51,5→4}
+    // scoreCount (TreeMap): {4→1, 39→1, 51→1, 56→1, 73→1}
+    System.out.println(board.top(3));
+    // → 180. Descending: 73 + 56 + 51 = 180.
+    board.reset(1);
+    // playerScore: {2→56,3→39,4→51,5→4}. scoreCount removes 73.
+    System.out.println(board.top(3));
+    // → 146. Descending: 56 + 51 + 39 = 146.
+    board.addScore(1, 10);
+    // player 1 re-enters with score 10.
+    System.out.println(board.top(3));
+    // → 146. Descending: 56+51+39=146. Player 1 (score=10) not in top 3.
+}
+```
+
 **Time:** addScore O(log N), top O(K log N), reset O(log N) | **Space:** O(N)
 
 ### Variants
@@ -822,6 +931,26 @@ class FixedWindowRateLimiter {
 }
 ```
 
+**Demo:**
+
+```java
+// --- Demo / Calling Code ---
+public static void main(String[] args) {
+    // 3 requests per 60 seconds
+    FixedWindowRateLimiter limiter = new FixedWindowRateLimiter(3, 60_000);
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (count=1)
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (count=2)
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (count=3, at limit)
+    System.out.println(limiter.allowRequest("alice"));
+    // → false (throttled — window not yet expired)
+    System.out.println(limiter.allowRequest("bob"));
+    // → true  (separate user, independent window)
+}
+```
+
 **Time:** O(1) | **Space:** O(users)
 
 ---
@@ -891,6 +1020,26 @@ class SlidingWindowLogRateLimiter {
             return false;
         }
     }
+}
+```
+
+**Demo:**
+
+```java
+// --- Demo / Calling Code ---
+public static void main(String[] args) {
+    // 3 requests per 60 seconds, exact sliding window
+    SlidingWindowLogRateLimiter limiter = new SlidingWindowLogRateLimiter(3, 60_000);
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (log: [t0])
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (log: [t0, t1])
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (log: [t0, t1, t2], at limit)
+    System.out.println(limiter.allowRequest("alice"));
+    // → false (3 timestamps still in [now-60000, now] window)
+    System.out.println(limiter.allowRequest("bob"));
+    // → true  (separate user, empty deque)
 }
 ```
 
@@ -979,6 +1128,30 @@ class TokenBucketRateLimiter {
 }
 ```
 
+**Demo:**
+
+```java
+// --- Demo / Calling Code ---
+public static void main(String[] args) throws InterruptedException {
+    // capacity=3 tokens, refill at 1 token/sec
+    TokenBucketRateLimiter limiter = new TokenBucketRateLimiter(3, 1);
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (bucket: 3 → 2.0)
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (bucket: 2 → 1.0)
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (bucket: 1 → 0.0, burst absorbed)
+    System.out.println(limiter.allowRequest("alice"));
+    // → false (0 tokens, throttled; lastRefillMs still updated)
+    Thread.sleep(1100);
+    // 1.1 seconds pass → earned 1.1 tokens → bucket = min(3, 0 + 1.1) = 1.1
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (bucket: 1.1 → 0.1)
+    System.out.println(limiter.allowRequest("bob"));
+    // → true  (new user, starts full at 3 tokens)
+}
+```
+
 **Time:** O(1) | **Space:** O(users)
 
 ---
@@ -1040,6 +1213,26 @@ class SlidingWindowCounterRateLimiter {
             return false;
         }
     }
+}
+```
+
+**Demo:**
+
+```java
+// --- Demo / Calling Code ---
+public static void main(String[] args) {
+    // 3 requests per 60 seconds, O(1) approximation
+    SlidingWindowCounterRateLimiter limiter = new SlidingWindowCounterRateLimiter(3, 60_000);
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (estimated ≈ 0 + 0 = 0 < 3; currCount=1)
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (estimated ≈ 0 + 1 = 1 < 3; currCount=2)
+    System.out.println(limiter.allowRequest("alice"));
+    // → true  (estimated ≈ 0 + 2 = 2 < 3; currCount=3)
+    System.out.println(limiter.allowRequest("alice"));
+    // → false (estimated ≈ 3 >= 3; throttled)
+    System.out.println(limiter.allowRequest("bob"));
+    // → true  (separate user, independent counters)
 }
 ```
 
@@ -1345,3 +1538,4 @@ These two problems force you to build the DLL from scratch. Until you can do thi
 | --- | --- |
 | June 2026 | Created. Covers LRU, LFU, Hit Counter, Leaderboard at depth + cross-refs for Rate Limiter, Consistent Hashing, Task Scheduler. Triggered by WEX LRU+TTL interview miss. |
 | July 2026 | **Added Problem 5 — Rate Limiter.** Covers all 4 algorithms (Fixed Window, Sliding Log, Token Bucket, Sliding Counter) with full Java code, visuals, and tradeoff table. Moved Rate Limiter from cross-ref (planned external file) to first-class problem in this doc. Added Gotchas 7 and 8 for rate limiter-specific bugs. |
+| July 2026 | **Added Demo / Calling Code blocks** after every class implementation (LRU, LFU, Hit Counter, Leaderboard, all 4 Rate Limiter algorithms). Each demo shows exact method call sequence with inline comments showing expected output and internal state after each operation. |

@@ -64,6 +64,28 @@ Before every interview, say these 6 sentences to yourself (takes 30 seconds):
 
 ---
 
+## 🔑 Technology Quick Reference
+
+> **Read this once before the file.** These are the only acronyms and technologies you need to know cold for this question.
+
+| Term | Plain-English meaning |
+|---|---|
+| **CDN** (Content Delivery Network) | A global network of edge servers that cache your content close to the user. Instead of every viewer hitting your origin server in US-East, they hit a nearby edge node — Mumbai, Frankfurt, São Paulo. |
+| **PoP** (Point of Presence) | One physical CDN edge location. Cloudflare has 300+ PoPs globally. Think of each PoP as a local cache. |
+| **Origin** | The source of truth that CDN edges fetch from on a cache miss — in this design, multi-region S3 buckets. Not your app server. |
+| **Transcoding** | Converting one raw uploaded video into multiple formats and resolutions (360p, 720p, 1080p). You never serve the raw upload directly to viewers. |
+| **Rendition** | One specific output of transcoding — e.g., "the 720p rendition" is the 720p version of the video. One upload produces 4-5 renditions. |
+| **HLS** (HTTP Live Streaming) | Apple's standard that splits a video into 2–10 second chunks and generates a manifest file listing all chunks. The player downloads chunks sequentially and switches quality tiers between chunks. |
+| **DASH** (Dynamic Adaptive Streaming over HTTP) | Google/MPEG's equivalent of HLS. Same concept — chunked delivery with quality switching. Most players support both. |
+| **ABR** (Adaptive Bitrate) | The automatic quality-switching behavior enabled by HLS/DASH — starts at 360p on slow 3G, switches to 1080p once bandwidth is confirmed. Not a magic switch; requires HLS/DASH manifest + multiple renditions. |
+| **RTMP** (Real-Time Messaging Protocol) | The protocol live-streaming software (OBS, Streamlabs) uses to push live video to an ingest server. Only relevant for live streaming — today's design is on-demand only. |
+| **Pre-warming** | Proactively pushing content to CDN edge nodes before users request it. Solves the thundering-herd cold-cache problem — without it, every edge misses on a video's first request and hammers the origin simultaneously. |
+| **VOD** (Video on Demand) | Pre-recorded content users can watch any time. Opposite of live streaming. This design is VOD. |
+| **TTL** (Time To Live) | How long a CDN edge caches a piece of content before re-fetching from origin. Long TTL = fewer origin requests, stale content risk. Short TTL = fresh content, more origin load. |
+| **Multi-region S3** | Replicating S3 buckets across regions (us-east-1, eu-west-1, ap-southeast-1) so CDN edges in each region pull from a nearby origin instead of all hitting one US bucket. |
+
+---
+
 ## Section 0 — Question Identity Card
 
 | | |
@@ -836,4 +858,5 @@ DocuSign does not stream video. However, the question "architect a worldwide vid
 
 | Date | Change |
 |---|---|
+| Jul 6, 2026 | **🔑 Technology Quick Reference table added.** 13-row glossary covering CDN, PoP, Origin, Transcoding, Rendition, HLS, DASH, ABR, RTMP, Pre-warming, VOD, TTL, Multi-region S3 — inserted before Section 0 so the file is readable without prior video streaming knowledge. |
 | Jul 5, 2026 | File created. Full 15-section 60-min interview-ready solution. Type A (Infrastructure). PDF-confirmed question. Covers: 3-stage progressive HLD (single-region origin → transcoding+S3+pull-CDN → HLS/DASH+multi-region+push), 3 decision tables, HLS manifest structure, S3 multipart upload flow, DocuSign pivot (envelope PDF distribution maps 1:1 to video distribution architecture), Tier 1/2/3 probe answers, 5 common mistakes. Cross-refs verified against actual SystemDesignConcepts files. |

@@ -473,6 +473,49 @@ return dummy.next;
 
 **Why this works:** Dummy eliminates the special case. All insertions follow the same pattern.
 
+**🎨 Visual — Dummy Node: The Problem It Solves**
+
+```
+WITHOUT dummy — two code paths for the same job:
+
+  head ──► [1] ──► [2] ──► [3] ──► null
+
+  Insert 99 at FRONT:
+    special case → head = new Node(99); head.next = oldHead
+
+  Insert 99 after node [1]:
+    normal case  → newNode.next = node1.next; node1.next = newNode
+
+  Different code for the same operation = two bugs waiting to happen.
+
+WITH dummy — one code path for every position:
+
+  dummy[0] ──► [1] ──► [2] ──► [3] ──► null
+      ↑
+     curr
+
+  Insert 99 at "front" (= after dummy):
+
+    newNode.next = curr.next   →  newNode.next = [1]
+    curr.next    = newNode     →  dummy.next   = [99]
+
+    dummy[0] ──► [99] ──► [1] ──► [2] ──► [3] ──► null
+
+  Insert 99 after node [1]:
+
+    (advance curr to [1])
+    newNode.next = curr.next   →  newNode.next = [2]
+    curr.next    = newNode     →  [1].next     = [99]
+
+    dummy[0] ──► [1] ──► [99] ──► [2] ──► [3] ──► null
+
+  EXACT SAME CODE for both positions.
+  Always return dummy.next — that is the real head of your result list.
+
+KEY INVARIANT: dummy.next is ALWAYS the true head of the list.
+               dummy absorbs "what if the head changes?" so your loop never has to.
+```
+
 ---
 
 > 🧩 **Drill:**
@@ -644,6 +687,42 @@ return prev;
 ```
 
 **Why this works:** By saving `next` before mutating `curr.next`, you never orphan the list. `prev` accumulates the reversed portion.
+
+**🎨 Visual — Three-Pointer Reversal: `1 → 2 → 3 → null`**
+
+```
+START:   prev=null  curr=[1]
+
+         null        [1] ──► [2] ──► [3] ──► null
+         prev        curr
+
+STEP 1:  next = curr.next = [2]
+         curr.next = prev  →  [1] now points left (arrow flipped)
+         prev = [1],  curr = [2]
+
+         null ◄── [1]    [2] ──► [3] ──► null
+                  prev   curr
+
+STEP 2:  next = curr.next = [3]
+         curr.next = prev  →  [2] now points to [1]
+         prev = [2],  curr = [3]
+
+         null ◄── [1] ◄── [2]    [3] ──► null
+                           prev   curr
+
+STEP 3:  next = curr.next = null
+         curr.next = prev  →  [3] now points to [2]
+         prev = [3],  curr = null  ← loop exits
+
+         null ◄── [1] ◄── [2] ◄── [3]
+                                    prev  (new head!)
+
+return prev  →  3 ──► 2 ──► 1 ──► null  ✅
+
+KEY INVARIANT: At every step, [head..prev] is fully reversed;
+               [curr..tail] is still in original forward order.
+               When curr=null, entire list is reversed. New head = prev.
+```
 
 ---
 
@@ -1012,6 +1091,42 @@ return ptr1;
 
 **Why this works:** Mathematical property. Both pointers traverse at same speed from this point onward, so they converge at the cycle start.
 
+**🎨 Visual — Floyd's Cycle Start: Why Resetting Works**
+
+```
+List layout (m=3 tail-to-entry, cycle length L=4):
+
+  head ──► [0] ──► [1] ──► [2] ──► [C] ──► [A] ──► [B] ──► [D]
+                                     ▲                          │
+                                     └──────────────────────────┘
+  m = 3  (head → C)          k = 1  (C → meeting point A)
+
+THE MATH:
+  slow traveled:  m + k  =  3 + 1  =  4
+  fast traveled:  2 × 4  =  8  =  m + k + r×L  =  4 + 1×4  ✓
+
+  Rearrange:  r×L = m + k  →  m = r×L - k  =  1×4 - 1  =  3  ✓
+
+WHAT m = r×L - k MEANS IN THE CYCLE:
+  From meeting point A, walk m=3 steps forward inside the cycle:
+    A ──► B  (step 1)
+    B ──► D  (step 2)
+    D ──► C  (step 3)  ← back at cycle entry!
+
+  From head, walk m=3 steps:
+    [0] ──► [1] ──► [2] ──► [C]  ← same destination!
+
+RESET STEP:
+  ptr1 = head         →  walks 3 steps: [0]→[1]→[2]→[C]
+  ptr2 = meeting pt A →  walks 3 steps: A→B→D→[C]
+                                               ↑
+                                     both arrive at C simultaneously ✅
+
+KEY INVARIANT: distance(head → cycle_entry) = distance(meeting_point → cycle_entry)
+               (measured going forward through the list/cycle).
+               One full reset + tandem walk guarantees collision at cycle entry.
+```
+
 ---
 
 > 🧩 **Drill:**
@@ -1136,6 +1251,41 @@ return dummy.next;
 ```
 
 **Why this works:** The gap ensures that when `right` reaches `null`, `left` is positioned right before the target node.
+
+**🎨 Visual — K-Gap: Why n+1 (not n) is the Right Gap**
+
+```
+List: dummy ──► [1] ──► [2] ──► [3] ──► [4] ──► [5] ──► null
+                                                          ↑
+Goal: remove the 2nd node from end = node [4]            null
+
+WRONG gap = n (n=2 here):
+  Initial: right=dummy, left=dummy
+  Advance right 2 steps:    right → [1] → [2]
+  Now advance both until right=null:
+    step 1: left→[1], right→[3]
+    step 2: left→[2], right→[4]
+    step 3: left→[3], right→[5]
+    step 4: left→[4], right→null  ← loop stops
+  left=[4]  but we need left=[3] to do left.next=left.next.next!
+  ✗ left is ON the target, not BEFORE it.
+
+RIGHT gap = n+1 (n+1=3 here):
+  Initial: right=dummy, left=dummy
+  Advance right 3 steps:    right → [1] → [2] → [3]
+  Now advance both until right=null:
+    step 1: left→[1], right→[4]
+    step 2: left→[2], right→[5]
+    step 3: left→[3], right→null  ← loop stops
+  left=[3]  ← one node BEFORE [4] ✅
+  left.next = left.next.next  →  [3].next = [5]
+  dummy ──► [1] ──► [2] ──► [3] ──► [5] ──► null  ✅
+
+KEY INVARIANT: gap of n+1 (achieved by starting right from dummy,
+               not from head) means when right=null, left is exactly
+               one node before the target — enabling the skip with
+               left.next = left.next.next.
+```
 
 ---
 

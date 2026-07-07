@@ -27,6 +27,30 @@
 
 ---
 
+## 🔑 Technology Quick Reference
+
+> **Read this once before the file.** These are the only cryptography and security acronyms you need to know cold for this question.
+
+| Term | Plain-English meaning |
+|---|---|
+| **Asymmetric encryption** | Encryption where the key that locks and the key that unlocks are different. You publish the public key freely; you never share the private key. The basis of all digital signatures. |
+| **Private key** | The secret half of an RSA key pair. Used to *sign* a document. Only the signer holds this — if compromised, all signatures are forged. |
+| **Public key** | The shareable half. Anyone can use it to *verify* a signature made by the matching private key. Published in a certificate. |
+| **RSA** | The most common asymmetric algorithm. Produces a key pair. Signing = hashing the document and encrypting the hash with the private key. Verification = decrypting the signature with the public key and comparing hashes. |
+| **PKI** (Public Key Infrastructure) | The entire system — CAs, certificates, key pairs, revocation lists — that makes digital signatures legally trustworthy at scale. |
+| **Certificate (X.509)** | A file that binds a public key to an identity (name, email, organization). Issued and digitally signed by a Certificate Authority. Like a passport — proves who owns a public key. |
+| **CA** (Certificate Authority) | A trusted entity that issues certificates. DocuSign runs its own CA to sign user certificates. The CA's own certificate is the root of trust. |
+| **HSM** (Hardware Security Module) | A tamper-resistant physical device that stores private keys. The key cannot be extracted even if you have physical access. DocuSign's CA private key lives in an HSM. |
+| **Non-repudiation** | The legal guarantee that a signer cannot later deny having signed. Enforced cryptographically — the signature can only have been made by the holder of that exact private key. |
+| **BYOK** (Bring Your Own Key) | The user generates their own RSA key pair and uploads only the public key. DocuSign never sees the private key. Higher security for users, higher verification complexity for DocuSign. |
+| **OCSP** (Online Certificate Status Protocol) | A real-time protocol to check if a certificate has been revoked. 50–200ms latency — too slow to put on the signing critical path. |
+| **CRL** (Certificate Revocation List) | A cached file listing all revoked certificate serial numbers. DocuSign loads this into Redis — O(1) lookup, sub-ms. Updated every 60 seconds. The practical alternative to OCSP on the critical path. |
+| **Audit trail** | An immutable, append-only log of every event on a document — opened, signed, declined, completed — with timestamp, IP address, and certificate serial number. The legal evidence that non-repudiation claims are based on. |
+| **Webhook** | An HTTP callback DocuSign sends to a customer's server when an event occurs (e.g., "all parties signed" → POST to `https://customer.com/callbacks`). Needs idempotent delivery with retries. |
+| **Envelope** | DocuSign's term for one signing transaction — one document + one set of recipients + one signing workflow. |
+
+---
+
 ## Section 0 — Question Identity Card
 
 | | |
@@ -1135,4 +1159,5 @@ If DocuSign's own server stamps "signed at 2026-06-24 15:14:00 UTC," a signer's 
 | June 24, 2026 | **D1-digital-signature.md created.** Full 15-section solution framework for Mixed A+B interview type. Covers: PKI infrastructure (cert management, signature verification), audit trail immutability (append-only + DB triggers), multi-party signing state machine (sequential + parallel), GDPR/compliance angles, and DocuSign-specific depth (non-repudiation guarantees). Scale: 1M users, 35 sig/sec peak. Prerequisite: `13-security-pki.md`. |
 | Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **Certificate revocation check latency** — OCSP is 50–200ms (unusable on critical path); CRL cached as Redis HashSet, refreshed every 60s; O(1) `SISMEMBER` check under 1ms; 60-second revocation window is explicit trade-off; (2) **Temporal as alternative to custom state machine** — custom FSM works for MVP at 35 sig/sec; Temporal handles expiry timers, escalation, conditional routing, and legal hold natively with full execution history; migration decision: Temporal at DocuSign's actual workflow complexity; (3) **UTC timestamp strategy for multi-jurisdiction legal compliance** — `TIMESTAMP WITH TIME ZONE` in Postgres always stores UTC; log user's declared timezone alongside UTC; court-presentable via UTC + timezone derivation. |
 | Jul 5, 2026 | **Section 6 restructured into 2-stage progressive HLD.** Stage 1 (monolith + direct DB) — identifies two breaking points: sync webhook couples external system availability to signing success; uncached cert lookup hits DB on every sign request. Stage 2 (service split + Redis + Kafka) — cert cache in Redis (sub-ms CRL check + cert PEM TTL); Kafka decouples webhook delivery (signing returns immediately after publish); PKI infrastructure separated. Four decision tables added: key management (Hosted CA ✅ vs BYOK ❌ vs Hybrid ⚠️), audit trail immutability (DB trigger ✅ vs application-only ❌ vs blockchain ❌), signing workflow (state machine ✅ vs set ❌ vs event-sourced ⚠️), webhook delivery (Kafka ✅ vs Redis pub/sub ❌ vs sync HTTP ❌). Verdict alignment verified: all Section 6 table verdicts match Section 7 deep dive choices (Hosted CA ✅, DB trigger ✅, state machine ✅). |
+| Jul 6, 2026 | **🔑 Technology Quick Reference table added.** 15-row glossary covering asymmetric encryption, private/public key, RSA, PKI, X.509 certificate, CA, HSM, non-repudiation, BYOK, OCSP, CRL, audit trail, webhook, envelope — inserted before Section 0. |
 | Jul 5, 2026 | **Section 10 business impact pass.** Added explicit **Business impact:** label to all 3 trade-offs — compliance officer timing out during live legal hearing due to unindexed audit log full table scan, HSM compromise making every historical DocuSign signature legally contestable at $1.5M/year key-loss support cost, non-repudiation destroyed when audit record digest doesn't match signature invalidating a court-submitted contract. |

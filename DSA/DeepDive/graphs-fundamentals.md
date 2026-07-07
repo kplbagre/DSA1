@@ -10,35 +10,36 @@
 
 | Section | Striver |
 | --- | --- |
-| [🎯 Goal](#-why-youre-reading-this-the-goal) | — |
-| [🚦 Difficulty Tags](#-difficulty-tagging--read-before-you-pick-a-problem) | — |
-| [📍 Reading Roadmap](#-reading-roadmap--medium-vs-advanced) | — |
-| [📖 Terminology](#-terminology-memorize-these-striver-g-1) | G-1 |
-| [🗂️ Graph Representations](#️-graph-representations-striver-g-2-g-3) | G-2, G-3 |
-| [🔨 Building the Graph](#-building-the-graph--input-format-patterns) | G-2, G-3 |
-| [🌐 Connected Components](#-connected-components--concept-striver-g-4) | G-4 |
-| [🌊 BFS](#-bfs--breadth-first-search-striver-g-5) | G-5 |
-| [🚶 DFS](#-dfs--depth-first-search-striver-g-6) | G-6 |
-| [🎨 Style Habits](#-style-habits--build-these-from-day-1) | — |
-| [🧭 Pattern Decision Framework](#-the-pattern-decision-framework--when-to-use-what) | — |
-| [🧩 Grid BFS/DFS Problems](#-grid-bfsdfs-problems-striver-g-7-to-g-16) | G-7 to G-16 |
-| [🧱 Grid Templates + Core Concepts](#-grid-bfsdfs--templates-core-concepts-and-patterns) | G-7 to G-16 |
-| [🔄 Cycle Detection — Undirected](#-cycle-detection--undirected-graph-striver-g-11-g-12) | G-11, G-12 |
-| [↔️ Bipartite Check](#️-bipartite-graph-check-striver-g-17-g-18) | G-17, G-18 |
-| [🔁 Cycle Detection — Directed](#-cycle-detection--directed-graph-striver-g-19-g-20) | G-19, G-20 |
-| [📊 Topological Sort](#-topological-sort-striver-g-21-to-g-26) | G-21 to G-26 |
-| [📏 Shortest Path Family](#-shortest-path-family-striver-g-27-to-g-43--senior-likely-from-here-on) 🟡 | G-27 to G-43 |
-| [🌳 MST](#-minimum-spanning-tree-mst-striver-g-44-g-45-g-47--advanced) 🔴 | G-44, G-45, G-47 |
-| [🔗 DSU / Union-Find](#-disjoint-set-union-dsu--union-find-striver-g-46-through-g-53--advanced) 🔴 | G-46 to G-53 |
-| [🚀 Advanced Topics](#-advanced-topics--senior-only-striver-g-54-g-55-g-56) 🔴 | G-54 to G-56 |
-| [🔬 Worked Walkthroughs](#-worked-walkthroughs--14-canonical-problems) | — |
-| [🗺️ Practice Plan](#️-practice-plan--tiered) | — |
-| [⚠️ Gotchas](#️-gotchas-silent-bug-hall-of-fame) | — |
-| [⚡ Quick Cheat Sheet](#-quick-cheat-sheet) | — |
-| [🧾 TL;DR](#-tldr--one-page-summary) | — |
+| [🎯 Goal](#goal) | — |
+| [🚦 Difficulty Tags](#difficulty-tags) | — |
+| [📍 Reading Roadmap](#reading-roadmap) | — |
+| [📖 Terminology](#terminology) | G-1 |
+| [🗂️ Graph Representations](#representations) | G-2, G-3 |
+| [🔨 Building the Graph](#building-the-graph) | G-2, G-3 |
+| [🌐 Connected Components](#connected-components) | G-4 |
+| [🌊 BFS](#bfs) | G-5 |
+| [🚶 DFS](#dfs) | G-6 |
+| [🎨 Style Habits](#style-habits) | — |
+| [🧭 Pattern Decision Framework](#pattern-decision) | — |
+| [🧩 Grid BFS/DFS Problems](#grid-problems) | G-7 to G-16 |
+| [🧱 Grid Templates + Core Concepts](#grid-templates) | G-7 to G-16 |
+| [🔄 Cycle Detection — Undirected](#cycle-undirected) | G-11, G-12 |
+| [↔️ Bipartite Check](#bipartite) | G-17, G-18 |
+| [🔁 Cycle Detection — Directed](#cycle-directed) | G-19, G-20 |
+| [📊 Topological Sort](#topo-sort) | G-21 to G-26 |
+| [📏 Shortest Path Family](#shortest-path) 🟡 | G-27 to G-43 |
+| [🌳 MST](#mst) 🔴 | G-44, G-45, G-47 |
+| [🔗 DSU / Union-Find](#dsu) 🔴 | G-46 to G-53 |
+| [🚀 Advanced Topics](#advanced-topics) 🔴 | G-54 to G-56 |
+| [🔬 Worked Walkthroughs](#walkthroughs) | — |
+| [🗺️ Practice Plan](#practice-plan) | — |
+| [⚠️ Gotchas](#gotchas) | — |
+| [⚡ Quick Cheat Sheet](#cheat-sheet) | — |
+| [🧾 TL;DR](#tldr) | — |
 
 ---
 
+<a id="goal"></a>
 ## 🎯 Why You're Reading This (The Goal)
 
 By the end of this doc, you should:
@@ -52,6 +53,7 @@ By the end of this doc, you should:
 
 ---
 
+<a id="difficulty-tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 Every problem and algorithm is tagged so you can **climb tiers in order**.
@@ -66,6 +68,7 @@ Every problem and algorithm is tagged so you can **climb tiers in order**.
 
 ---
 
+<a id="reading-roadmap"></a>
 ## 📍 Reading Roadmap — Medium vs Advanced
 
 > **The doc is split into two halves.** The first half is **everything you need for a medium-level SDE-2/SDE-3 interview**. The second half is senior+ territory — important to be aware of, optional to master cold.
@@ -82,6 +85,7 @@ Every problem and algorithm is tagged so you can **climb tiers in order**.
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology (Memorize These) [Striver G-1]
 
 | Term | Meaning |
@@ -157,6 +161,7 @@ Every problem and algorithm is tagged so you can **climb tiers in order**.
 
 ---
 
+<a id="representations"></a>
 ## 🗂️ Graph Representations [Striver G-2, G-3]
 
 Two ways. Pick based on density.
@@ -358,7 +363,7 @@ The SAME thing, drawn two ways:
 
 ---
 
-<a id="-building-the-graph--input-format-patterns"></a>
+<a id="building-the-graph"></a>
 ## 🔨 Building the Graph — Input Format Patterns
 
 > **The interview trap no one warns you about:** you can know BFS cold and still stall because you don't know how to BUILD the graph from the raw input the problem hands you. There are 6 common input formats interviewers use. Know all of them.
@@ -598,6 +603,7 @@ for (int i = 0; i < chars.length; i++) {
 
 ---
 
+<a id="connected-components"></a>
 ## 🌐 Connected Components — Concept [Striver G-4]
 
 > A **connected component** is a maximal set of mutually reachable vertices. A graph with 10 vertices might have 1 component (fully connected) or 10 components (no edges at all).
@@ -641,6 +647,7 @@ return components;
 
 ---
 
+<a id="bfs"></a>
 ## 🌊 BFS — Breadth-First Search [Striver G-5]
 
 > Visit vertices **level by level**, expanding outward from the start. Uses a **queue**. Natural fit for "shortest path in unweighted graph" because the first time you see a vertex is via the fewest edges.
@@ -692,7 +699,7 @@ Key invariant:  THE QUEUE ALWAYS HOLDS AT MOST TWO LEVELS AT A TIME.
 **Time:** `O(V + E)`. **Space:** `O(V)` for queue + visited.
 
 > **⬛ Before writing the BFS loop — answer these 3 questions first:**
-> 1. **What format is the input?** Two arrays / edge list / matrix / implicit → build the adjacency list first (see [§ Building the Graph](#-building-the-graph--input-format-patterns))
+> 1. **What format is the input?** Two arrays / edge list / matrix / implicit → build the adjacency list first (see [§ Building the Graph](#building-the-graph))
 > 2. **Are nodes 1-indexed?** → allocate `n+1` lists; use node IDs as-is; ignore index 0
 > 3. **Is it multi-source?** → seed ALL sources into the queue at time 0, each at distance 0 — do NOT run BFS once per source separately
 
@@ -929,6 +936,7 @@ public int findMinimumTime(int n, int[] from, int[] to, int[] status) {
 
 ---
 
+<a id="dfs"></a>
 ## 🚶 DFS — Depth-First Search [Striver G-6]
 
 > Go as deep as possible from each vertex before backtracking. Uses **recursion** (implicit stack) or an explicit `Deque`. Natural fit for "is there a path", "find all paths", "cycle detection", "topological sort".
@@ -992,7 +1000,7 @@ BFS vs DFS — same graph, very different traversal:
 **Time:** `O(V + E)`. **Space:** `O(V)` for recursion + visited.
 
 > **⬛ Before writing the DFS function — answer these 3 questions first:**
-> 1. **What format is the input?** → build the adjacency list first if needed (see [§ Building the Graph](#-building-the-graph--input-format-patterns))
+> 1. **What format is the input?** → build the adjacency list first if needed (see [§ Building the Graph](#building-the-graph))
 > 2. **Are nodes 1-indexed?** → `n+1` lists; ignore index 0
 > 3. **Do I need to return a value?** → bottom-up DFS: return area/count/bool from each call; top-down DFS: accumulate in a class-level variable
 
@@ -1152,6 +1160,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 ### 🌐 Universal Habits (apply to every graph problem)
@@ -1298,6 +1307,7 @@ Minor, but matters on very large graphs.
 
 ---
 
+<a id="pattern-decision"></a>
 ## 🧭 The Pattern Decision Framework — When to Use What
 
 The **5-question funnel** for graph problems. Walk it top-down.
@@ -1356,6 +1366,7 @@ Q5: Are we MERGING SETS / counting components dynamically?
 
 ---
 
+<a id="grid-problems"></a>
 ## 🧩 Grid BFS/DFS Problems [Striver G-7 to G-16]
 
 > **First-timer bridge:** if you have NEVER applied BFS/DFS to a 2-D grid before, **do not skip this intro.** Up to now we drew graphs as circles connected by edges, with vertex IDs `0..V-1`. A grid problem hands you a `char[][]` or `int[][]` instead — and your job is to realize that this matrix **is already a graph**, just disguised. The traversal templates are exactly what you've learned; what changes is **how you name a vertex** and **how you find its neighbors**.
@@ -1560,6 +1571,7 @@ for (int[] dir : DIRS) {
 
 ---
 
+<a id="grid-templates"></a>
 ## 🧱 Grid BFS/DFS — Templates, Core Concepts, and Patterns
 
 > **Before you attempt LC 200 (Number of Islands) or any grid problem, write these two templates from memory.** They are nearly identical to the adjacency-list versions you already know — the ONLY differences are:
@@ -2777,6 +2789,7 @@ if (visited[v] && v != parent) {
 
 ---
 
+<a id="bipartite"></a>
 ## ↔️ Bipartite Graph Check [Striver G-17, G-18]
 
 > A graph is **bipartite** if you can color every vertex with one of two colors such that no edge connects same-colored vertices. Equivalent: no odd-length cycle exists.
@@ -2894,6 +2907,7 @@ private boolean dfsColor(int u, int currColor, List<List<Integer>> adj, int[] co
 
 ---
 
+<a id="cycle-directed"></a>
 ## 🔁 Cycle Detection — Directed Graph [Striver G-19, G-20]
 
 > **Why undirected detection doesn't work here:** in a directed graph, there's no "parent" — direction matters. You can have `A → B` and `B → C` with `A` not reachable from `C` at all. The trick is tracking which vertices are **currently in the active recursion path**.
@@ -3033,6 +3047,7 @@ if (pathVisited[v]) {
 
 ---
 
+<a id="topo-sort"></a>
 ## 📊 Topological Sort [Striver G-21 to G-26]
 
 > **What it is:** a linear ordering of vertices of a **DAG** (Directed Acyclic Graph) such that for every edge `u → v`, `u` appears before `v`. Used for prerequisite chains, build orders, task scheduling.
@@ -3371,6 +3386,7 @@ public boolean canFinish(int numCourses, int[][] prerequisites) {
 
 ---
 
+<a id="shortest-path"></a>
 ## 📏 Shortest Path Family [Striver G-27 to G-43] 🟡 *Senior likely from here on*
 
 The shortest-path family has **four** main algorithms, picked by graph properties:
@@ -3384,6 +3400,53 @@ The shortest-path family has **four** main algorithms, picked by graph propertie
 | **Floyd-Warshall** | All-pairs shortest paths, small V | `O(V³)` | `O(V²)` |
 
 > **The picking rule:** **start at the top of the table; pick the first one that fits.** BFS is always fastest when applicable.
+
+### 🧠 Mental Model — "Shortest" Means Cheapest Total Weight, Not Fewest Hops
+
+> **If you've only used BFS, this is the most important shift.** BFS counts hops. Every algorithm below minimizes the *sum of edge weights*. Those are completely different things.
+
+### 🎨 Visual — Why BFS Gives Wrong Answers on Weighted Graphs
+
+```
+Reference graph (5 nodes, directed, used throughout this section):
+
+           4               1
+     (0) ──────► (1) ──────────► (4)
+      │                           ▲
+    2 │           7               │ 2
+      │                           │
+     (2) ─────────────► (3) ───────┘
+                    3
+
+Edges: 0→1(4), 0→2(2), 0→3(7), 1→4(1), 2→3(3), 3→4(2)   source = 0
+
+
+BFS answer (treats every edge as cost 1 — ignores weights):
+  dist = { 0:0, 1:1, 2:1, 3:1, 4:2 }
+  "0→3 = 1 hop"  — but that hop costs 7!
+
+Dijkstra answer (minimizes total edge weight):
+  ┌────────┬────────────────────────────────────┬──────┬──────────────┐
+  │  Dest  │  Cheapest path                     │ Hops │ Total weight │
+  ├────────┼────────────────────────────────────┼──────┼──────────────┤
+  │   1    │ 0 → 1                              │  1   │  4           │
+  │   2    │ 0 → 2                              │  1   │  2           │
+  │   3    │ 0 → 2 → 3                          │  2   │  2+3 = 5  ✅ │
+  │        │ (not 0 → 3 direct, cost = 7)       │  1   │  7        ❌ │
+  │   4    │ 0 → 1 → 4                          │  2   │  4+1 = 5  ✅ │
+  │        │ (not 0 → 2 → 3 → 4, cost = 7)      │  3   │  7        ❌ │
+  └────────┴────────────────────────────────────┴──────┴──────────────┘
+
+  Node 3: BFS picks 1-hop direct path (cost 7).
+          Dijkstra picks 2-hop indirect path (cost 5) — 40% cheaper.
+
+
+KEY INVARIANT:
+  Shortest path in a weighted graph = path with minimum SUM of edge weights.
+  More hops can be cheaper. BFS is correct only when all edge weights are equal.
+  Use the picking table above to choose which algorithm fits your constraints.
+```
+
 
 ---
 
@@ -3713,6 +3776,70 @@ Collections.reverse(path);
 
 **The algorithm:** relax every edge V-1 times. After V-1 iterations, all shortest paths are finalized (any shortest path has at most V-1 edges). On the V-th iteration, if any edge still relaxes → negative cycle exists.
 
+### 🎨 Visual — Bellman-Ford: Iteration Trace (source = 0)
+
+```
+Graph — 4 nodes, directed, one negative edge:
+
+          4         5
+    (0) ──────► (1)   (0) ──────► (2)
+                 ▲                 │
+               -6│                 │  path 0→2→1 costs 5+(-6) = -1
+                 └─────────────── (2)
+
+    edge 1→3 (w=3): (1) ──────► (3)
+
+Edges — the code iterates them in this exact order each pass:
+  e1: 1→3  (w= 3)
+  e2: 2→1  (w=-6)   ← only negative edge
+  e3: 0→1  (w= 4)
+  e4: 0→2  (w= 5)
+
+Important: Bellman-Ford is correct for ANY edge ordering — V-1 passes
+           guarantee all shortest paths. This order shows worst-case propagation.
+
+
+Initial dist = [0, ∞, ∞, ∞]   (source = 0, V = 4, so V-1 = 3 passes)
+
+  ┌──────────┬─────────────────────────────────────────────────┬────────────────────┐
+  │  Pass    │  What relaxes and why                           │  dist[] after pass │
+  ├──────────┼─────────────────────────────────────────────────┼────────────────────┤
+  │  init    │  —                                              │  [0, ∞, ∞, ∞]     │
+  ├──────────┼─────────────────────────────────────────────────┼────────────────────┤
+  │    1     │  e1: 1→3: dist[1]=∞, SKIP                      │                    │
+  │          │  e2: 2→1: dist[2]=∞, SKIP                      │                    │
+  │          │  e3: 0→1: 0+4=4 < ∞ → dist[1]=4               │                    │
+  │          │  e4: 0→2: 0+5=5 < ∞ → dist[2]=5               │  [0, 4, 5, ∞]      │
+  │          │  (e2 ran before e4 found dist[2] — 0→2→1       │                    │
+  │          │   could not propagate in this pass yet)        │                    │
+  ├──────────┼─────────────────────────────────────────────────┼────────────────────┤
+  │    2     │  e1: 1→3: 4+3=7 < ∞ → dist[3]=7               │                    │
+  │          │  e2: 2→1: 5-6=-1 < 4 → dist[1]=-1  ← better!  │                    │
+  │          │  e3: 0→1: 0+4=4 > -1, skip                     │                    │
+  │          │  e4: 0→2: no change                             │  [0, -1, 5, 7]     │
+  │          │  (dist[1] now correct; dist[3] still stale)    │                    │
+  ├──────────┼─────────────────────────────────────────────────┼────────────────────┤
+  │  3 = V-1 │  e1: 1→3: -1+3=2 < 7 → dist[3]=2  ← correct! │                    │
+  │          │  e2,e3,e4: no changes                           │  [0, -1, 5, 2] ✅  │
+  ├──────────┼─────────────────────────────────────────────────┼────────────────────┤
+  │  4 = V   │  No edge relaxes further → no negative cycle ✅ │  [0, -1, 5, 2]     │
+  │ (check)  │                                                 │                    │
+  └──────────┴─────────────────────────────────────────────────┴────────────────────┘
+
+Final: 0→0=0, 0→1=-1 (via 0→2→1), 0→2=5, 0→3=2 (via 0→2→1→3)
+
+Why did Dijkstra fail here?  It greedily "finalizes" dist[1]=4 in its first step
+and never revisits it — so it misses the cheaper path 0→2→1 = -1.
+Bellman-Ford never finalizes anything mid-pass; it just keeps relaxing.
+
+
+KEY INVARIANT:
+  After pass k, every shortest path of AT MOST k edges is correctly computed.
+  The path 0→2→1→3 has 3 edges → it appears only at pass 3 (= V-1).
+  Negative edges force reconsideration of previously reached nodes, which is
+  exactly why Dijkstra (a greedy finalizer) fails when negative edges exist.
+```
+
 ```java
 public int[] bellmanFord(int V, int[][] edges, int src) {
     int[] dist = new int[V];
@@ -3758,6 +3885,93 @@ public int[] bellmanFord(int V, int[][] edges, int src) {
 
 **The algorithm:** for each intermediate vertex `k`, check if going through `k` shortens the path from `i` to `j`.
 
+### 🎨 Visual — Floyd-Warshall: Matrix Evolution Through Each Relay Vertex k
+
+```
+Mental model first: think of k as "which vertex are we now ALLOWED to use as
+a stopover?" At k=0, only vertex 0 can be a relay. At k=1, vertices 0 and 1
+are allowed. By k=V-1, every vertex is a permitted relay — and dist[i][j] holds
+the true shortest path from i to j.
+
+Graph — 4 nodes, directed:
+
+   (0) ──3──► (1)       also: 1→0 = 8
+    │           │              3→0 = 2
+    │7          │2
+    │           │
+   (3) ◄──1── (2)
+
+Edges: 0→1(3), 0→3(7), 1→0(8), 1→2(2), 2→3(1), 3→0(2)
+
+
+Initial dist matrix (before any k; ∞ = no direct edge, 0 = same node):
+
+        →0   →1   →2   →3
+   0  [  0    3    ∞    7  ]
+   1  [  8    0    2    ∞  ]
+   2  [  ∞    ∞    0    1  ]
+   3  [  2    ∞    ∞    0  ]
+
+
+k=0: "Can vertex 0 act as a relay?"  →  check dist[i][0] + dist[0][j] < dist[i][j]
+
+  (1→3): 8+7=15 < ∞   → dist[1][3] = 15        ✎ 1→0→3 is now known
+  (3→1): 2+3=5  < ∞   → dist[3][1] = 5         ✎ 3→0→1 is now known
+
+        →0   →1   →2   →3
+   0  [  0    3    ∞    7  ]
+   1  [  8    0    2   15  ]  ← via 0
+   2  [  ∞    ∞    0    1  ]
+   3  [  2    5    ∞    0  ]  ← via 0
+
+
+k=1: "Can vertex 1 also be a relay?"
+
+  (0→2): 3+2=5  < ∞   → dist[0][2] = 5         ✎ 0→1→2 is now known
+  (3→2): 5+2=7  < ∞   → dist[3][2] = 7         ✎ 3→0→1→2 is now known
+
+        →0   →1   →2   →3
+   0  [  0    3    5    7  ]  ← via 1
+   1  [  8    0    2   15  ]
+   2  [  ∞    ∞    0    1  ]
+   3  [  2    5    7    0  ]  ← via 1
+
+
+k=2: "Can vertex 2 also be a relay?"
+
+  (0→3): 5+1=6  < 7   → dist[0][3] = 6         ✎ 0→1→2→3 beats direct 0→3(7)
+  (1→3): 2+1=3  < 15  → dist[1][3] = 3         ✎ 1→2→3 is now known
+
+        →0   →1   →2   →3
+   0  [  0    3    5    6  ]  ← via 2
+   1  [  8    0    2    3  ]  ← via 2
+   2  [  ∞    ∞    0    1  ]
+   3  [  2    5    7    0  ]
+
+
+k=3: "Can vertex 3 also be a relay?"
+
+  (1→0): 3+2=5  < 8   → dist[1][0] = 5         ✎ 1→2→3→0 beats direct 1→0(8)
+  (2→0): 1+2=3  < ∞   → dist[2][0] = 3         ✎ 2→3→0 is now known
+  (2→1): 1+5=6  < ∞   → dist[2][1] = 6         ✎ 2→3→0→1 is now known
+
+        →0   →1   →2   →3
+   0  [  0    3    5    6  ]
+   1  [  5    0    2    3  ]  ← via 3
+   2  [  3    6    0    1  ]  ← via 3
+   3  [  2    5    7    0  ]
+
+This is the final answer — all-pairs shortest paths.
+Verify: dist[2][1]=6 → path 2→3→0→1 = 1+2+3 = 6 ✅
+
+
+KEY INVARIANT:
+  k is NOT a source or destination — it is the relay (intermediate) vertex.
+  After iteration k, dist[i][j] = shortest path from i to j using only
+  vertices {0..k} as stopovers. Each k "unlocks" one more relay, and we
+  re-check every (i,j) pair. That is why the OUTER loop is k, not i or j.
+```
+
 ```java
 public int[][] floydWarshall(int V, int[][] edges, int n) {
     int[][] dist = new int[V][V];
@@ -3797,6 +4011,7 @@ public int[][] floydWarshall(int V, int[][] edges, int n) {
 
 ---
 
+<a id="mst"></a>
 ## 🌳 Minimum Spanning Tree (MST) [Striver G-44, G-45, G-47] 🔴 *Advanced*
 
 > **What MST is:** a subset of edges that connects all vertices with **minimum total weight** and **no cycles**. Has exactly V-1 edges.
@@ -4244,6 +4459,7 @@ public int makeConnected(int n, int[][] connections) {
 
 ---
 
+<a id="advanced-topics"></a>
 ## 🚀 Advanced Topics — Senior+ Only [Striver G-54, G-55, G-56]
 
 > **Honest take:** these come up rarely in SDE / SDE2 interviews. They're worth understanding **after** the rest is solid — and possibly knowing the names without implementing from memory unless you're targeting senior+ roles or specific systems-heavy positions.
@@ -4380,6 +4596,7 @@ if (parent != -1 && low[v] >= disc[u]) {
 
 ---
 
+<a id="walkthroughs"></a>
 ## 🔬 Worked Walkthroughs — 14 Canonical Problems
 
 > **How to use this section:** each walkthrough covers one structurally unique algorithmic shape. Master these 14 and you can solve 50+ graph problems by recognising which shape applies and applying the template. The **"Transfers to"** block at the end of each walkthrough tells you exactly how each related problem differs — enough detail to reconstruct its solution without seeing its code.
@@ -5406,6 +5623,7 @@ public int minCostConnectPoints(int[][] points) {
 
 ---
 
+<a id="practice-plan"></a>
 ## 🗺️ Practice Plan — Tiered
 
 ### Tier 1 — Foundations (must be muscle memory) ✅
@@ -5526,6 +5744,7 @@ Striver videos: **G-54 through G-56**.
 
 ---
 
+<a id="gotchas"></a>
 ## ⚠️ Gotchas (Silent Bug Hall of Fame)
 
 These compile and run, but produce wrong output. Each is a *real* trap.
@@ -5654,6 +5873,7 @@ private void dfs(int u, List<List<Integer>> adj, boolean[] visited) {
 
 ---
 
+<a id="cheat-sheet"></a>
 ## ⚡ Quick Cheat Sheet
 
 | If you need... | Use... |
@@ -5680,6 +5900,7 @@ private void dfs(int u, List<List<Integer>> adj, boolean[] visited) {
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 1. **Default representation:** adjacency list (`List<List<Integer>>` unweighted, `List<List<int[]>>` weighted)
@@ -5702,6 +5923,7 @@ private void dfs(int u, List<List<Integer>> adj, boolean[] visited) {
 
 ---
 
+<a id="cross-references"></a>
 ## 🔗 Cross-References
 
 | Topic | File |
@@ -5715,6 +5937,7 @@ private void dfs(int u, List<List<Integer>> adj, boolean[] visited) {
 
 ---
 
+<a id="changelog"></a>
 ## 🔄 Changelog
 
 | Date | Change |

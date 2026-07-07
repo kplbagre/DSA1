@@ -27,6 +27,32 @@
 
 ---
 
+## 🔑 Technology Quick Reference
+
+> **Read this once before the file.** These are the only auth/security acronyms you need to know cold for this question.
+
+| Term | Plain-English meaning |
+|---|---|
+| **JWT** (JSON Web Token) | A compact, self-contained token with 3 base64url-encoded parts: header (algorithm), payload (claims: user_id, roles, expiry), and signature. Stateless — the server validates the signature without any DB lookup. |
+| **RS256** | The JWT signing algorithm used here. Uses RSA asymmetric signing — private key signs at login, public key verifies on every request. More secure than HS256 (shared secret) because the public key can be distributed safely. |
+| **Access token** | The short-lived JWT (15-min TTL) attached to every API request in the `Authorization: Bearer` header. Expires quickly to limit the damage if stolen. |
+| **Refresh token** | A long-lived opaque token (7-day TTL) stored in an httpOnly cookie. Used only to get a new access token when the current one expires. Never sent on API requests. |
+| **Token blacklist** | A Redis store of revoked JWT IDs (`jti` claim → "revoked", TTL = token's remaining lifetime). The only way to immediately invalidate a stateless JWT before it naturally expires. |
+| **jti** (JWT ID) | A unique identifier claim inside every JWT. Used as the Redis key when blacklisting a revoked token. |
+| **OAuth 2.0** | The open standard for *delegated authorization* — "allow app X to act on your behalf without giving it your password." DocuSign uses it so third-party apps can send envelopes on a user's behalf. |
+| **OIDC** (OpenID Connect) | The identity layer built on top of OAuth 2.0 that adds *authentication* (who you are). Adds an `id_token` containing the user's identity. Powers "Sign in with Google" style flows. |
+| **PKCE** (Proof Key for Code Exchange) | A security extension for OAuth in mobile/SPA apps. Prevents an attacker who intercepts the auth code from exchanging it for a token (because they don't know the `code_verifier`). RFC 7636. |
+| **RBAC** (Role-Based Access Control) | Assign users a role (admin, signer, viewer). The role defines allowed actions. Simple and fast — one lookup: "what role does this user have?" |
+| **ACL** (Access Control List) | Per-resource permissions — user A can view doc 123, user B can sign doc 456. Fine-grained but expensive to query. DocuSign uses RBAC + per-document ACL together. |
+| **MFA** (Multi-Factor Authentication) | Requiring a second proof of identity beyond password. Prevents account takeover even if password is stolen. |
+| **TOTP** (Time-based One-Time Password) | The 6-digit rotating code from Google Authenticator or Authy. Changes every 30 seconds. Requires a shared secret established at setup time. More secure than SMS OTP (not interceptable). |
+| **OTP** (One-Time Password) | A single-use code sent via email or SMS. Simpler than TOTP but depends on email/phone delivery. Vulnerable to SIM-swapping for SMS. |
+| **SSO** (Single Sign-On) | One login grants access to multiple services. User authenticates once with a central Identity Provider; all connected apps trust that session without re-asking for credentials. Used by DocuSign enterprise customers (law firms, banks). |
+| **SAML 2.0** | XML-based standard for enterprise SSO. The Identity Provider (Okta, Azure AD) sends a signed XML "assertion" to DocuSign proving who the user is. DocuSign validates the assertion's signature against the IdP's certificate. |
+| **bcrypt** | A one-way slow hashing algorithm for passwords. Slow by design — makes brute-force attacks expensive. Never store passwords in plaintext or with MD5/SHA1. |
+
+---
+
 ## Section 0 — Question Identity Card
 
 | | |
@@ -1085,4 +1111,5 @@ public String login(String email, String password, String existingSessionId) {
 | June 24, 2026 | **E2-authentication-system.md created.** Final solution file. Full 15-section solution framework for Type B Product Architecture. Covers: JWT tokens with RSA signature verification, token blacklist (revocation), MFA (email OTP + TOTP), fine-grained RBAC+ACL authorization, audit trails (immutable), key rotation. Scale: 10M users, 100M logins/day = 3.5K logins/sec peak, 35K token validations/sec. Prerequisites: `13-security-pki.md`, `11-api-design.md`. |
 | Jul 5, 2026 | **Section 6 restructured: single final-state diagram → 3-stage progressive HLD.** Stage 1 (Session-Based Auth): stateful session cookie, Redis session lookup on every request — BREAKING POINTs: 35K session lookups/sec saturates Redis; single-factor login too risky for DocuSign. Stage 2 (Stateless JWT, no blacklist): RS256-signed JWT; validation is CPU-only (1-2ms); no session store — BREAKING POINTs: no revocation (stolen token valid for 15 min); no MFA (compromised password = full access). Stage 3 (JWT + Redis Blacklist + MFA + RBAC — production): Redis blacklist (jti → revoked, TTL = token's remaining lifetime); email OTP + optional TOTP MFA; RBAC roles in JWT + per-document resource_permissions table (fine-grained ACL); immutable access_audit_log. Four inline decision tables: (1) token strategy — session ❌ / JWT ✅ / hybrid ⚠️; (2) revocation — none ❌ / very short TTL ⚠️ / Redis blacklist ✅; (3) authorization model — simple RBAC ❌ / ABAC ❌ / RBAC+ACL ✅; (4) MFA method — none ❌ / SMS OTP ❌ / Email OTP+TOTP ✅. All Section 6 verdicts verified against Section 7 deep dive choices — no contradictions. |
 | Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **PKCE for mobile OAuth** — code_verifier generated by app, code_challenge = BASE64URL(SHA256(verifier)) sent during authorization, original verifier sent at token exchange; auth server hashes verifier and checks against stored challenge; prevents intercepted auth codes from being exchanged by attackers who don't know the verifier; RFC 7636 recommended approach for all public clients; (2) **Refresh token rotation for theft detection** — every RT use issues new RT + invalidates old; stored as token family chain with `current_rt_hash`; RT reuse (already-used RT presented) → revoke entire family; detects theft on first use but requires retry-with-idempotency for network failures; (3) **SAML 2.0 SSO trust and forgery prevention** — trust bootstrapped via customer's IdP X.509 certificate; at assertion time: XML signature verification, NotOnOrAfter expiry check, InResponseTo cross-site injection prevention; forged assertions fail signature; replayed assertions fail expiry; cross-site assertions fail InResponseTo. |
+| Jul 6, 2026 | **🔑 Technology Quick Reference table added.** 17-row glossary covering JWT, RS256, access/refresh token, token blacklist, jti, OAuth 2.0, OIDC, PKCE, RBAC, ACL, MFA, TOTP, OTP, SSO, SAML 2.0, bcrypt — inserted before Section 0. |
 | Jul 5, 2026 | **Section 10 business impact + Section 14 DocuSign dimensions pass.** Section 10: added **Business impact:** to all 3 trade-offs — signing ceremony latency degradation at the "Adopt & Sign" moment (auth service dependency at highest legal significance), 30% non-MFA-adoption leaving users vulnerable to SIM-swapping with fraudulent contracts carrying full legal weight (enforcement cost), public computer 60-minute JWT validity post-logout exposing in-progress contracts (token lifetime). Section 14: rewrote all 7 dimension cells — FIDO2 and notary role RBAC extensibility (Extensibility), stolen JWT 15-minute blacklist closure window (Security), 70% enterprise MFA adoption rate alert + 7-year legal retention for `access_audit_log` (Observability). |

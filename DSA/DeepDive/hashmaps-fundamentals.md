@@ -317,6 +317,121 @@ return count;
 
 ---
 
+### 🔄 Method Fallbacks — When You Forget the Shorthand
+
+> Every method below has a **"🔄 Fallback"** — the plain `if-else` equivalent that always works. In an interview, use whichever comes to mind first. Concise is nice; correct is required.
+
+**1. `map.merge(key, 1, Integer::sum)` — increment a counter**
+
+```java
+// What it does:
+//   key ABSENT  → put(key, 1)
+//   key PRESENT → put(key, oldValue + 1)
+//
+// Integer::sum is shorthand for (oldVal, newVal) -> oldVal + newVal
+// The "1" is the newVal. merge() calls sum(oldVal, 1) = oldVal + 1.
+freq.merge(word, 1, Integer::sum);
+
+// 🔄 Fallback — always works:
+freq.put(word, freq.getOrDefault(word, 0) + 1);
+```
+
+---
+
+**2. `map.computeIfAbsent(key, k -> new ArrayList<>())` — get-or-create**
+
+```java
+// What it does:
+//   key ABSENT  → create new ArrayList, store it, AND return it
+//   key PRESENT → just return the existing value
+//
+// k -> new ArrayList<>() is a lambda: given the key, produce a new list.
+// The "k" param is the key itself (unused, but Java requires it).
+// Chain .add() because computeIfAbsent returns the list.
+groups.computeIfAbsent(key, k -> new ArrayList<>()).add(s);
+
+// 🔄 Fallback — always works:
+if (!groups.containsKey(key)) {
+    groups.put(key, new ArrayList<>());
+}
+groups.get(key).add(s);
+```
+
+---
+
+**3. `map.getOrDefault(key, 0)` — safe get with default**
+
+```java
+// What it does:
+//   key EXISTS  → returns the value
+//   key ABSENT  → returns 0 instead of null
+int count = freq.getOrDefault(key, 0);
+
+// 🔄 Fallback — always works:
+int count = freq.containsKey(key) ? freq.get(key) : 0;
+```
+
+---
+
+**4. `map.entrySet()` — iterate key-value pairs together**
+
+```java
+// What it does:
+//   Returns a Set of Map.Entry objects, each holding one key-value pair.
+//   Use e.getKey() and e.getValue() — no second lookup needed.
+for (Map.Entry<Integer, Integer> e : freq.entrySet()) {
+    int element = e.getKey();
+    int count = e.getValue();
+}
+
+// 🔄 Fallback — always works (one extra lookup per iteration):
+for (int key : freq.keySet()) {
+    int count = freq.get(key);
+}
+```
+
+---
+
+**5. `!set.add(x)` — add-and-check duplicate in one shot**
+
+```java
+// What it does:
+//   set.add(x) returns TRUE  if the element was NEW (successfully added).
+//   set.add(x) returns FALSE if the element ALREADY EXISTED (not added).
+//   So !set.add(x) means "x was already in the set" = duplicate found.
+if (!seen.add(x)) {
+    return true;  // duplicate
+}
+
+// 🔄 Fallback — always works:
+if (seen.contains(x)) {
+    return true;
+}
+seen.add(x);
+```
+
+---
+
+**6. `new PriorityQueue<>((a, b) -> freq.get(a) - freq.get(b))` — min-heap by map value**
+
+```java
+// What it does:
+//   (a, b) -> expression is a Comparator lambda.
+//   NEGATIVE result → a comes first (a is "smaller" = higher priority in min-heap).
+//   POSITIVE result → b comes first.
+//   freq.get(a) - freq.get(b) → lower frequency = higher priority (min-heap by freq).
+PriorityQueue<Integer> pq = new PriorityQueue<>(
+    (a, b) -> freq.get(a) - freq.get(b)
+);
+
+// 🔄 Fallback — if comparator lambdas confuse you, sort a list instead:
+List<Integer> keys = new ArrayList<>(freq.keySet());
+keys.sort((a, b) -> freq.get(b) - freq.get(a));
+// Then take the first K elements from keys.
+```
+
+---
+
 ## 🔨 Setup — Phase 1 Before the HashMap Loop
 
 > **The Phase 1 question for hashmaps:** *Before I write the main loop, which map type do I need, and how do I construct or seed it from the raw input?* Picking the wrong type (HashMap when you need TreeMap) costs you O(log n) per operation silently. Forgetting to seed the map before the loop (e.g. `prefixCount.put(0, 1)`) causes an off-by-one that makes subarrays starting at index 0 invisible.
@@ -459,6 +574,20 @@ public int findMostFrequent(int[] nums) {
 
 **Why this works:** One pass to build; one pass to query. No redundant scans.
 
+**🎨 Trace — `nums = [1,2,2,3,3,3]`, find most frequent:**
+
+```
+i=0: n=1. merge(1,1) → freq={1→1}
+i=1: n=2. merge(2,1) → freq={1→1, 2→1}
+i=2: n=2. merge(2,1) → freq={1→1, 2→2}
+i=3: n=3. merge(3,1) → freq={1→1, 2→2, 3→1}
+i=4: n=3. merge(3,1) → freq={1→1, 2→2, 3→2}
+i=5: n=3. merge(3,1) → freq={1→1, 2→2, 3→3}  ← new maxFreq=3
+
+Scan entrySet: (1→1), (2→2), (3→3) → mostFrequent=3
+Answer: 3
+```
+
 ---
 
 > 🧩 **Drill — do this NOW before reading further:**
@@ -531,6 +660,15 @@ public int[] twoSum(int[] nums, int target) {
 
 **Why this works:** Each number is visited once (O(n)); each map lookup is O(1). Total O(n).
 
+**🎨 Trace — `nums = [2, 7, 11, 15]`, target = 9:**
+
+```
+i=0: n=2. complement=9-2=7. map={}. 7 absent → store. map={2→0}
+i=1: n=7. complement=9-7=2. map={2→0}. 2 FOUND → return [map.get(2), 1] = [0, 1]
+
+Answer: [0, 1] ✅  (nums[0]+nums[1] = 2+7 = 9)
+```
+
 ---
 
 > 🧩 **Drill — do this NOW before reading further:**
@@ -600,6 +738,19 @@ public List<List<String>> groupAnagrams(String[] strs) {
 ```
 
 **Why this works:** Sorting is O(m log m) per string. Hashing and grouping are O(1) per string. Total: O(n * m log m).
+
+**🎨 Trace — `["eat","tea","tan","ate","nat","bat"]`:**
+
+```
+s="eat": sort → "aet". groups={"aet"→["eat"]}
+s="tea": sort → "aet". groups={"aet"→["eat","tea"]}
+s="tan": sort → "ant". groups={"aet"→["eat","tea"], "ant"→["tan"]}
+s="ate": sort → "aet". groups={"aet"→["eat","tea","ate"], "ant"→["tan"]}
+s="nat": sort → "ant". groups={"aet"→["eat","tea","ate"], "ant"→["tan","nat"]}
+s="bat": sort → "abt". groups={"aet"→["eat","tea","ate"], "ant"→["tan","nat"], "abt"→["bat"]}
+
+Return: [["eat","tea","ate"], ["tan","nat"], ["bat"]]  ✅
+```
 
 ---
 
@@ -672,6 +823,27 @@ public int subarraySumK(int[] nums, int k) {
 
 **Why this works:** Each prefix sum is computed once (O(n)); each map lookup is O(1). Total O(n).
 
+**KEY INVARIANT:** `prefixCount[x]` = how many times prefix sum `x` appeared **before** the current position. The seed `{0→1}` accounts for the empty prefix, making subarrays starting at index 0 visible. Formula: `subarray_sum(i..j) = prefix[j] - prefix[i-1]`. To count subarrays ending at `j` with sum `k`: `count += prefixCount[prefix[j] - k]`.
+
+**🎨 Trace — `nums = [1, 2, 1, 2, 1]`, k = 3:**
+
+```
+seed: prefixCount={0→1}, sum=0, count=0
+
+i=0: n=1. sum=0+1=1. look up prefixCount[1-3]=prefixCount[-2]=0. count=0.
+          prefixCount={0→1, 1→1}
+i=1: n=2. sum=1+2=3. look up prefixCount[3-3]=prefixCount[0]=1. count=1. ← [1,2]
+          prefixCount={0→1, 1→1, 3→1}
+i=2: n=1. sum=3+1=4. look up prefixCount[4-3]=prefixCount[1]=1. count=2. ← [2,1]
+          prefixCount={0→1, 1→1, 3→1, 4→1}
+i=3: n=2. sum=4+2=6. look up prefixCount[6-3]=prefixCount[3]=1. count=3. ← [1,2]
+          prefixCount={0→1, 1→1, 3→1, 4→1, 6→1}
+i=4: n=1. sum=6+1=7. look up prefixCount[7-3]=prefixCount[4]=1. count=4. ← [2,1]
+          prefixCount={0→1, 1→1, 3→1, 4→1, 6→1, 7→1}
+
+Answer: 4 ✅  (subarrays: [1,2]@(0,1), [2,1]@(1,2), [1,2]@(2,3), [2,1]@(3,4))
+```
+
 ---
 
 > 🧩 **Drill — do this NOW:**
@@ -718,6 +890,8 @@ Build a graph (HashMap mapping source → list of destinations). Use a specific 
 
 (Full code shown in walkthroughs below.)
 
+> **Deferred:** The Two-Pass implementation is complex (Hierholzer's algorithm, DFS with path reversal). Full code is not included in this doc — study `DSA/DeepDive/graphs-fundamentals.md` for graph traversal patterns before attempting LC 332 cold.
+
 ---
 
 ### Pattern 6: Custom Grouping (Word Frequency, Window Frequency)
@@ -750,6 +924,64 @@ Output: `[0, 1, 2]` (anagrams at indices 0, 1, 2)
 Use sliding window + frequency map. Maintain pattern frequency, slide window, compare frequencies in O(26) = O(1) (fixed alphabet).
 
 **Key insight:** "Two strings have same character frequencies iff their frequency maps are equal. Use a window to slide and compare maps in O(1) (fixed alphabet size)."
+
+**Steps in plain English:**
+
+1. **Build frequency map** of pattern `p` (size m).
+2. **Slide a fixed window** of size m over string `s`. On each slide: add entering char, remove exiting char.
+3. **Compare window frequency** with pattern frequency. If equal, record start index.
+
+```java
+public List<Integer> findAnagrams(String s, String p) {
+    // Step 1 — frequency map of pattern
+    Map<Character, Integer> patFreq = new HashMap<>();
+    for (char c : p.toCharArray()) {
+        patFreq.merge(c, 1, Integer::sum);
+    }
+    Map<Character, Integer> winFreq = new HashMap<>();
+    List<Integer> result = new ArrayList<>();
+    int m = p.length();
+
+    // Step 2 — slide window of size m
+    for (int i = 0; i < s.length(); i++) {
+        // Add entering character
+        char enter = s.charAt(i);
+        winFreq.merge(enter, 1, Integer::sum);
+
+        // Remove exiting character once window exceeds size m
+        if (i >= m) {
+            char exit = s.charAt(i - m);
+            winFreq.put(exit, winFreq.get(exit) - 1);
+            if (winFreq.get(exit) == 0) {
+                winFreq.remove(exit);
+            }
+        }
+
+        // Step 3 — compare maps once window is full
+        if (i >= m - 1 && winFreq.equals(patFreq)) {
+            result.add(i - m + 1);
+        }
+    }
+    return result;
+}
+```
+
+**Why this works:** Pattern frequency built once O(m). Each char enters and exits the window at most once O(n). Map comparison is O(26) = O(1) (fixed alphabet). Total O(n + m).
+
+**🎨 Trace — `s = "abab"`, `p = "ab"`:**
+
+```
+patFreq={a→1, b→1}, m=2
+
+i=0: enter='a'. winFreq={a→1}. i < m-1, skip compare.
+i=1: enter='b'. winFreq={a→1, b→1}. i==m-1=1 → compare: equal → result=[0]   ← "ab"@0
+i=2: enter='a'. winFreq={a→2, b→1}. exit=s[0]='a' → winFreq={a→1, b→1}.
+      compare: equal → result=[0,1]                                             ← "ba"@1
+i=3: enter='b'. winFreq={a→1, b→2}. exit=s[1]='b' → winFreq={a→1, b→1}.
+      compare: equal → result=[0,1,2]                                           ← "ab"@2
+
+Answer: [0, 1, 2] ✅
+```
 
 ---
 
@@ -788,6 +1020,15 @@ class Solution {
 ```
 
 **Complexity:** Time O(n), Space O(n).
+
+**🎨 Trace — `nums = [2, 7, 11, 15]`, target = 9:**
+
+```
+i=0: nums[0]=2. complement=9-2=7. map={}. miss → map={2→0}
+i=1: nums[1]=7. complement=9-7=2. map={2→0}. HIT → return [map.get(2), 1] = [0, 1]
+
+Answer: [0, 1] ✅
+```
 
 **Transfers to:**
 
@@ -843,6 +1084,27 @@ class Solution {
 
 **Complexity:** Time O(n), Space O(1) (fixed 26-element array).
 
+**🎨 Trace — `s = "eat"`, `t = "tea"` → true; `s = "rat"`, `t = "car"` → false:**
+
+```
+Trace 1 — s="eat", t="tea" (anagram):
+
+counts after "eat": counts[e]=1, counts[a]=1, counts[t]=1
+
+Process "tea":
+  c='t': counts[t]-- = 0. ok.
+  c='e': counts[e]-- = 0. ok.
+  c='a': counts[a]-- = 0. ok.
+No negatives → return true ✅
+
+Trace 2 — s="rat", t="car" (NOT anagram):
+
+counts after "rat": counts[r]=1, counts[a]=1, counts[t]=1
+
+Process "car":
+  c='c': counts[c]-- = -1. NEGATIVE → return false ✅
+```
+
 **Transfers to:**
 
 | What's identical | ONE thing different | Key line that changes |
@@ -888,6 +1150,17 @@ class Solution {
 ```
 
 **Complexity:** Time O(n · k log k) where k = max string length, Space O(n · k).
+
+**🎨 Trace — `["eat","tea","tan","ate"]`:**
+
+```
+s="eat": key=sort("eat")="aet". groups={"aet"→["eat"]}
+s="tea": key=sort("tea")="aet". groups={"aet"→["eat","tea"]}
+s="tan": key=sort("tan")="ant". groups={"aet"→["eat","tea"], "ant"→["tan"]}
+s="ate": key=sort("ate")="aet". groups={"aet"→["eat","tea","ate"], "ant"→["tan"]}
+
+Return: [["eat","tea","ate"], ["tan"]]  ✅
+```
 
 **Transfers to:**
 
@@ -952,6 +1225,29 @@ class Solution {
 
 **Complexity:** Time O(n), Space O(n).
 
+**KEY INVARIANT:** `buckets[i]` holds exactly all elements with frequency `i`. Right-to-left scan visits highest-frequency elements first — giving top-k in O(n) with no sorting needed.
+
+**🎨 Trace — `nums = [1, 1, 1, 2, 2, 3]`, k = 2:**
+
+```
+Step 1 — frequency map:
+  freq={1→3, 2→2, 3→1}
+
+Step 2 — bucket array (size n+1=7):
+  buckets[3]=[1]
+  buckets[2]=[2]
+  buckets[1]=[3]
+
+Step 3 — scan right-to-left until result has k=2 elements:
+  f=6: null. skip.
+  f=5: null. skip.
+  f=4: null. skip.
+  f=3: [1] → result=[1], idx=1
+  f=2: [2] → result=[1,2], idx=2. idx==k → stop.
+
+Answer: [1, 2] ✅
+```
+
 **Transfers to:**
 
 | What's identical | ONE thing different | Key line that changes |
@@ -1001,6 +1297,25 @@ class Solution {
 
 **Complexity:** Time O(n), Space O(n).
 
+**🎨 Trace — `nums = [1, 2, 1, 2, 1]`, k = 3:**
+
+```
+prefixCount={0→1}, sum=0, count=0
+
+i=0: n=1. sum=1. lookup[1-3]=lookup[-2]=0. count=0.
+          prefixCount={0→1, 1→1}
+i=1: n=2. sum=3. lookup[3-3]=lookup[0]=1. count=1. ← subarray[0..1]=[1,2]
+          prefixCount={0→1, 1→1, 3→1}
+i=2: n=1. sum=4. lookup[4-3]=lookup[1]=1. count=2. ← subarray[1..2]=[2,1]
+          prefixCount={0→1, 1→1, 3→1, 4→1}
+i=3: n=2. sum=6. lookup[6-3]=lookup[3]=1. count=3. ← subarray[2..3]=[1,2]
+          prefixCount={0→1, 1→1, 3→1, 4→1, 6→1}
+i=4: n=1. sum=7. lookup[7-3]=lookup[4]=1. count=4. ← subarray[3..4]=[2,1]
+          prefixCount={0→1, 1→1, 3→1, 4→1, 6→1, 7→1}
+
+Answer: 4 ✅
+```
+
 **Transfers to:**
 
 | What's identical | ONE thing different | Key line that changes |
@@ -1049,6 +1364,24 @@ class Solution {
 ```
 
 **Complexity:** Time O(n²), Space O(n²).
+
+**🎨 Trace — `nums1=[1,2]`, `nums2=[-2,-1]`, `nums3=[-1,2]`, `nums4=[0,2]`:**
+
+```
+Step 1 — build abCount (all a+b sums from nums1×nums2):
+  a=1, b=-2: sum=-1. abCount={-1→1}
+  a=1, b=-1: sum=0.  abCount={-1→1, 0→1}
+  a=2, b=-2: sum=0.  abCount={-1→1, 0→2}
+  a=2, b=-1: sum=1.  abCount={-1→1, 0→2, 1→1}
+
+Step 2 — for each (c+d) from nums3×nums4, look up -(c+d):
+  c=-1, d=0:  c+d=-1. -(c+d)=1.  abCount[1]=1. count=1
+  c=-1, d=2:  c+d=1.  -(c+d)=-1. abCount[-1]=1. count=2
+  c=2,  d=0:  c+d=2.  -(c+d)=-2. abCount[-2]=0. count=2
+  c=2,  d=2:  c+d=4.  -(c+d)=-4. abCount[-4]=0. count=2
+
+Answer: 2 ✅
+```
 
 **Transfers to:**
 
@@ -1114,6 +1447,26 @@ class RandomizedSet {
 ```
 
 **Complexity:** All operations O(1) amortized, Space O(n).
+
+**KEY INVARIANT:** After `remove(val)`, ONLY the swapped element (former last) needs its map index updated — all other elements are untouched. One swap + one map update + one pop = O(1) remove.
+
+**🎨 Trace — `insert(1)→insert(2)→insert(3)→remove(2)`:**
+
+```
+insert(1): list=[1],     map={1→0}
+insert(2): list=[1,2],   map={1→0, 2→1}
+insert(3): list=[1,2,3], map={1→0, 2→1, 3→2}
+
+remove(2):
+  idx = map.get(2) = 1
+  last = list.get(2) = 3       ← last element in list
+  list.set(1, 3)               → list=[1,3,3]
+  map.put(3, 1)                → map={1→0, 2→1, 3→1}  ← update 3's index to 1
+  list.remove(2)               → list=[1,3]
+  map.remove(2)                → map={1→0, 3→1}
+
+getRandom(): picks uniformly from list=[1,3]  ✅
+```
 
 **Transfers to:**
 
@@ -1213,6 +1566,31 @@ class LRUCache {
 ```
 
 **Complexity:** get and put O(1), Space O(capacity).
+
+**KEY INVARIANT:** `head.next` = MRU (most recently used). `tail.prev` = LRU (eviction target). HashMap and DLL reference the **same** node objects — no data copy. `moveToHead` = unlink + relink = 2 pointer ops = O(1).
+
+**🎨 Trace — `put(1,1)→put(2,2)→get(1)→put(3,3)`, cap=2:**
+
+```
+put(1,1): map={1→Node(1,1)}.
+          DLL: head ↔ Node(1,1) ↔ tail          (MRU=1, LRU=1)
+
+put(2,2): map={1→Node(1,1), 2→Node(2,2)}.
+          DLL: head ↔ Node(2,2) ↔ Node(1,1) ↔ tail   (MRU=2, LRU=1)
+
+get(1):   hit. moveToHead(Node(1,1)).
+          DLL: head ↔ Node(1,1) ↔ Node(2,2) ↔ tail   (MRU=1, LRU=2)
+          return 1  ✅
+
+put(3,3): new key. addToHead(Node(3,3)).
+          DLL: head ↔ Node(3,3) ↔ Node(1,1) ↔ Node(2,2) ↔ tail
+          map.size()=3 > cap=2. EVICT tail.prev = Node(2,2).
+          remove(Node(2,2)). map.remove(2).
+          DLL: head ↔ Node(3,3) ↔ Node(1,1) ↔ tail
+          map={1→Node(1,1), 3→Node(3,3)}
+
+Key 2 evicted ✅  (LRU was 2 when put(3,3) triggered eviction)
+```
 
 **Transfers to:**
 
@@ -1836,3 +2214,5 @@ Read editorials; don't attempt cold.
 | Date | Change |
 | --- | --- |
 | June 2026 | **Complete rewrite with Pattern Application Gallery.** Synthesized Striver's HashMap/HashSet series + LeetCode editorials. Added "When you'll see this pattern" + "Problem motivation" + "Naive approach + complexity" + "Why this pattern solves it" for each of 6 core patterns. Added new "Pattern Application Gallery" section with 3-5 problem sketches per pattern (insight + code structure, not full solutions). 3 complete walkthroughs (LC 1, 49, 560) with traces. Complexity analysis throughout. 4-tier practice plan with ✅/🟡/🔴 tagging. |
+| July 2026 | **Added §Method Fallbacks** — new `### 🔄 Method Fallbacks — When You Forget the Shorthand` subsection in Style Habits. Covers 6 methods (`merge`, `computeIfAbsent`, `getOrDefault`, `entrySet`, `!set.add()`, PriorityQueue comparator) with explicit `// 🔄 Fallback` plain-code equivalents. Mirrors the `arrays-and-hashing.md` playbook format so both files have the same quick-reference under pressure. |
+| July 2026 | **Full upgrade pass (Types 2, 3, 5):** Added running traces to all 6 patterns and all 8 walkthroughs (`**🎨 Trace — ...:**` format). Added `KEY INVARIANT` callouts to Pattern 4, WW-4 (bucket sort), WW-7 (swap-with-last), WW-8 (LRU DLL). Completed Pattern 6 with Steps in plain English + `findAnagrams` template code + trace. Added deferred note to Pattern 5 (Hierholzer's → `graphs-fundamentals.md`). |

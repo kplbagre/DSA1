@@ -6,6 +6,27 @@
 
 ---
 
+## 📋 Section Index
+
+| # | Section | What you get |
+|---|---|---|
+| 1 | [🎯 Goal](#goal) | What you can do after reading this |
+| 2 | [🚦 Difficulty Tags](#tags) | ✅ 🟡 🔴 — how problems are rated |
+| 3 | [📖 What Are Two Pointers & Sliding Window?](#what) | Core concept + monotonicity hook |
+| 4 | [📖 Terminology](#terminology) | Subarray, window, expand, shrink, invariant |
+| 5 | [🔨 Setup — Phase 1](#setup) | Skeleton, edge guards, exact-K frame |
+| 6 | [🧠 Mental Model](#mental-model) | Worm picture + 3-questions template + decision table |
+| 7 | [🎨 Style Habits](#style) | Naming, long/int, invariant comments |
+| 8 | [🧭 Patterns 1–7](#patterns) | All templates with motivation + running trace |
+| 9 | [🌳 Special Topics](#special) | maxFreqEver, formed counter, when NOT to use |
+| 10 | [🔬 Worked Walkthroughs](#walkthroughs) | WW-1 through WW-11 with visuals |
+| 11 | [⚠️ Gotchas](#gotchas) | Silent bugs that compile but produce wrong output |
+| 12 | [🗺️ Practice Plan](#practice) | 5 tiers, stop-here cutoff |
+| 13 | [🧾 TL;DR](#tldr) | One-page summary for revision day |
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This (The Goal)
 
 By the end of this doc you should be able to:
@@ -19,6 +40,7 @@ By the end of this doc you should be able to:
 
 ---
 
+<a id="tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 | Tag | Meaning | Use When |
@@ -31,6 +53,7 @@ By the end of this doc you should be able to:
 
 ---
 
+<a id="what"></a>
 ## 📖 What Are Two Pointers & Sliding Window? [L1]
 
 Both are **linear-scan techniques** for problems on arrays or strings where:
@@ -70,6 +93,7 @@ Sliding window is **only valid** when the problem has one of these monotonicity 
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology (Memorize These)
 
 | Term | Definition | Example for `nums = [1, 2, 3, 4]` |
@@ -97,6 +121,7 @@ This is the single most common terminology trap. Same trap appears in arrays-fun
 
 ---
 
+<a id="setup"></a>
 ## 🔨 Setup — Phase 1 Before the Window Loop
 
 > **The Phase 1 question for two pointers / sliding window:** *Before I write the main loop, how do I initialize the window, which skeleton do I use (fixed vs variable vs converging), and what guards go at the top?* The most common two-pointer bugs are not algorithmic — they're setup failures: wrong pointer starting positions, forgetting the fixed-window pre-population step, or missing the `atMost(k) − atMost(k−1)` frame for exact-K problems.
@@ -250,6 +275,7 @@ if (nums == null || nums.length == 0) {
 
 ---
 
+<a id="mental-model"></a>
 ## 🧠 Mental Model — The One Picture That Unifies Everything
 
 Read this section twice. It is the highest-leverage page in the doc.
@@ -561,31 +587,28 @@ WHY "EXACTLY" IS HARD DIRECTLY — but "AT MOST" IS EASY:
   That's the entire reason for the subtraction trick.
 ```
 
-### How to Pick the Right Template — 10-Second Decision Tree
+### How to Pick the Right Template — 10-Second Decision Table
 
-```
-Problem statement
-│
-├── "Subarray of size exactly K" ?  → Template 1 (Fixed Window)
-│
-├── "Longest subarray that ..."     → Template 2 (Longest Valid)
-│
-├── "Shortest / smallest subarray that ..."  → Template 3 (Shortest Valid)
-│
-├── "Number of subarrays with EXACTLY K ..."  → Template 4 (atMost(K) − atMost(K−1))
-│
-├── "Number of subarrays with AT MOST K ..."  → Just atMost(K)
-│
-└── None of the above
-    │
-    ├── Is the answer a pair/triplet? → Classic Two Pointers (sorted array)
-    │
-    └── Is monotonicity present?     → Generalized two pointers / fast-slow
-        Otherwise                    → Probably NOT sliding window. Try DP / hashing.
-```
+Scan the trigger phrase column first. Match the words in the problem statement. Done.
+
+| Trigger phrase in problem | Pattern | Window behavior | Mini example |
+|---|---|---|---|
+| "subarray / substring **of size K**" | **Pattern 1** — Fixed Window | always exactly K elements | max sum subarray of size 3 |
+| "**longest** subarray / substring **that** ..." | **Pattern 2** — Longest Valid | expand always; shrink **until** valid | longest with ≤ K zeros |
+| "**shortest / minimum** subarray that ..." | **Pattern 3** — Shortest Valid | expand always; shrink **while** valid | min-length sum ≥ target |
+| "**number of** subarrays with **exactly** K ..." | **Pattern 4** — atMost(K)−atMost(K−1) | run atMost helper **twice** | subarrays with exactly K distinct |
+| "**number of** subarrays with **at most** K ..." | **Pattern 4 helper** — atMost(K) only | shrink until valid; `count += right−left+1` | subarrays with ≤ K distinct |
+| "find a **pair / triplet**" (sorted input) | **Pattern 6** — Converging two pointers | close in from both ends | two sum on sorted array |
+| "**remove / dedup** in-place" | **Pattern 7** — Same-direction two pointers | fast scouts, slow writes | remove duplicates |
+| none of the above | ⚠️ Probably NOT sliding window | — | try prefix-sum + hash, or DP |
+
+> **The one thing to memorise about Pattern 3 vs Pattern 2:** the `while` condition flips.
+> Pattern 2: `while (invalid) shrink` — hold the window as long as possible.
+> Pattern 3: `while (valid) record-then-shrink` — squeeze the window as tight as possible.
 
 ---
 
+<a id="style"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 ### 🌐 Universal Habits
@@ -610,6 +633,7 @@ Problem statement
 
 ---
 
+<a id="patterns"></a>
 ## 🧭 Patterns — The Striver Playlist Mapped to Templates
 
 Every video maps cleanly to one of the four templates. The pattern format below mirrors arrays-fundamentals: blockquote → English steps → Java template → example problems → try-these.
@@ -631,6 +655,43 @@ The problem asks for an aggregate over **exactly** K consecutive elements — su
 - **LC 2461 Maximum Sum of Distinct Subarrays With Length K** — track all distinct-value subarrays of size K
 
 **Real-world example:** Rolling metrics over a fixed time window — compute max CPU usage every 60 seconds, aggregate daily transactions (fixed batch), detect anomalies over K-element blocks.
+
+**🧠 Why brute force is O(nK) and how the window beats it:**
+
+Brute force: for every starting index `i`, sum `nums[i..i+k-1]` from scratch — O(K) work per window, O(nK) total.
+
+Fixed-window sliding works because the new window differs from the previous by exactly one element:
+
+> `sum(i+1..i+k) = sum(i..i+k-1) − nums[i] + nums[i+k]`
+
+One subtraction and one addition, regardless of K. So every slide is O(1) → O(n) total.
+
+**The key insight: incremental update. Never recompute what you already have.**
+
+### 🎨 Visual — Running trace: max sum subarray of size K=3
+
+```
+Input: nums = [2, 1, 5, 1, 3, 2],  K = 3
+
+Phase 1 — build first window [0..2]:
+  windowSum = 2 + 1 + 5 = 8.  best = 8.
+
+Phase 2 — slide:
+  right=3: +nums[3]=1, -nums[0]=2.  windowSum = 8+1-2 = 7.  best=8.
+  right=4: +nums[4]=3, -nums[1]=1.  windowSum = 7+3-1 = 9.  best=9.  ← new best
+  right=5: +nums[5]=2, -nums[2]=5.  windowSum = 9+2-5 = 6.  best=9.
+
+Answer = 9   (window [2..4] = [5, 1, 3])
+
+
+WHY IT WORKS IN ONE LINE:
+  Each slide: add one element on the right, drop one element on the left.
+  We never re-sum the K elements in the middle — they carry over for free.
+
+KEY INVARIANT:
+  At every step, windowSum = sum of exactly K consecutive elements ending at
+  the current right pointer. The window is always exactly size K.
+```
 
 **English steps:**
 1. **Build the first window** of size `k` (sum, freq, whatever the state is).
@@ -695,6 +756,55 @@ Finding the **maximum-length subarray/substring** satisfying a constraint where 
 - **LC 424 Longest Repeating Character Replacement** — longest where (len − maxFreq) ≤ K (replace cost)
 
 **Real-world example:** Find longest clean data segment without corruption, longest period with acceptable latency, longest prefix matching a pattern.
+
+**🧠 Why brute force is O(n²) and how the window beats it:**
+
+Brute force tries every `(left, right)` pair — for each `right`, restart `left` from 0. That's O(n²) windows.
+
+Sliding window works because the constraint is **monotone in the left direction**:
+
+> If window `[left..right]` is **invalid** (too many distinct chars, too many zeros, etc.),
+> then window `[left−1..right]` is **even more invalid** — you've only added one more element.
+> There is zero point moving `left` further left for this `right`.
+
+So `left` never resets. Each element is added once (when `right` reaches it) and removed at most once (when `left` passes it). That's at most 2n operations → O(n).
+
+**This is the only reason sliding window exists: the shrink direction is irreversible.**
+
+### 🎨 Visual — Running trace: longest subarray with at most K=1 zero
+
+```
+Input: nums = [1, 1, 0, 1, 1, 0, 1],  K = 1 (at most 1 zero allowed)
+
+Window state tracked: count of zeros inside [left..right]
+
+right=0: add 1. zeros=0. window=[1].           len=1.  best=1
+right=1: add 1. zeros=0. window=[1,1].         len=2.  best=2
+right=2: add 0. zeros=1 ≤ 1. window=[1,1,0].  len=3.  best=3
+right=3: add 1. zeros=1. window=[1,1,0,1].     len=4.  best=4
+right=4: add 1. zeros=1. window=[1,1,0,1,1].   len=5.  best=5  ← new best
+right=5: add 0. zeros=2 > 1. INVALID → SHRINK:
+           remove [0]=1 → zeros=2, left=1. still invalid.
+           remove [1]=1 → zeros=2, left=2. still invalid.
+           remove [2]=0 → zeros=1, left=3. valid again.
+         window=[1,1,0],  len=3.              best stays 5.
+right=6: add 1. zeros=1. window=[1,1,0,1].     len=4.  best stays 5.
+
+Answer = 5   (the window [0..4] = [1,1,0,1,1])
+
+
+Why left never went back past index 3:
+  Once [0..4] was found (len=5), right moved to index 5 and made it invalid.
+  We shrunk left FORWARD (3→4 direction) until valid, NOT backward.
+  This is the irreversibility: left only ever moves right.
+  Each of the 7 elements was touched at most twice (once by right, once by left).
+
+
+KEY INVARIANT:
+  After the shrink loop, window [left..right] is the LONGEST valid window
+  ending exactly at right. No window ending at right with a smaller left
+  can be longer — we only shrank as far as we had to.
+```
 
 **English steps:**
 1. **Initialize** `left = 0`, `answer = 0`, empty window state.
@@ -791,6 +901,57 @@ Finding the **minimum-length subarray/substring** satisfying a constraint. Once 
 
 **Real-world example:** Find minimal cache size to serve a query log, shortest token sequence to reach goal, minimum config window for compliance check.
 
+**🧠 Why this is the mirror of Pattern 2 — and where beginners get confused:**
+
+Pattern 2 (longest): shrink while **invalid** → expand until you find the best valid length.
+Pattern 3 (shortest): shrink while **valid** → you want the tightest window that still satisfies.
+
+The key shift:
+
+> In Pattern 2, validity is precious — you want to hold onto it as long as possible.
+> In Pattern 3, validity is a trigger — the moment the window becomes valid, you greedily shrink to find if a smaller window also satisfies.
+> When it goes invalid again, stop shrinking and expand.
+
+Brute force: try every `(left, right)` pair = O(n²). Sliding window: same irreversibility argument as Pattern 2 — if `[left..right]` is valid, `[left+1..right]` might ALSO be valid (and shorter). Shrinking from the left eliminates longer solutions we've already recorded.
+
+### 🎨 Visual — Running trace: shortest subarray with sum ≥ target=7
+
+```
+Input: nums = [2, 3, 1, 2, 4, 3],  target = 7
+
+left=0, sum=0, best=∞
+
+right=0: +2. sum=2. Not valid (2 < 7). No shrink.
+right=1: +3. sum=5. Not valid. No shrink.
+right=2: +1. sum=6. Not valid. No shrink.
+right=3: +2. sum=8. VALID (8 ≥ 7). SHRINK:
+  record len=3-0+1=4. best=4.
+  -nums[0]=2. sum=6. left=1. invalid → stop shrink.
+right=4: +4. sum=10. VALID. SHRINK:
+  record len=4-1+1=4. best=4.
+  -nums[1]=3. sum=7. left=2. still valid.
+  record len=4-2+1=3. best=3.  ← new best
+  -nums[2]=1. sum=6. left=3. invalid → stop shrink.
+right=5: +3. sum=9. VALID. SHRINK:
+  record len=5-3+1=3. best=3.
+  -nums[3]=2. sum=7. left=4. still valid.
+  record len=5-4+1=2. best=2.  ← new best
+  -nums[4]=4. sum=3. left=5. invalid → stop shrink.
+
+Answer = 2   (window [4..5] = [4, 3], sum = 7)
+
+
+SHRINK-WHILE-VALID in action:
+  Every time the window becomes valid, we squeeze it from the left
+  to see if a smaller window also works. We record BEFORE each shrink.
+  The moment it goes invalid we stop — we can't make it valid by shrinking further.
+
+KEY INVARIANT:
+  We record the window BEFORE shrinking (not after).
+  The inner while fires only when valid — it's the opposite of Pattern 2's while.
+  Pattern 2: while(invalid) shrink.  Pattern 3: while(valid) record-then-shrink.
+```
+
 **English steps:**
 1. **Initialize** `left = 0`, `answer = Integer.MAX_VALUE`, empty state.
 2. **Loop `right`** — add `nums[right]` to state.
@@ -855,6 +1016,113 @@ Counting subarrays where something appears **exactly** K times — direct case a
 - **LC 1358 Number of Substrings Containing All Three Characters** — exactly one of each char (also Pattern 5)
 
 **Real-world example:** Count audit logs matching exactly N severity levels, transactions with exactly K distinct vendors, data segments with exactly T tags.
+
+**🧠 Why "exactly K" can't use a single window — and why atMost fixes it:**
+
+Attempt at direct "exactly K": expand right, shrink left whenever distinct count **exceeds** K.
+The problem: when you shrink, you might overshoot — you go from K+1 distinct down to K−1 or less, missing the windows that had exactly K.
+
+> "Exactly K" is **not monotone**: having K+1 distinct → shrink once → you might have K−1 distinct (not K).
+> There's no stable shrink condition that keeps distinct count pinned at exactly K.
+
+"At most K" IS monotone: once you exceed K, shrinking from the left can only remove or preserve distinct count. The standard `while(distinct > k) left++` always converges — never overshoots below K.
+
+So we decompose: **exactly(K) = atMost(K) − atMost(K−1)**. Pure inclusion-exclusion.
+
+### 🎨 Visual — Why direct "exactly K" fails, and how the subtraction saves it
+
+```
+nums = [1, 2, 1, 2, 3],  K = 2 (subarrays with exactly 2 distinct)
+
+Attempt — direct "exactly 2": maintain a window with exactly 2 distinct.
+  right=0: [1].    distinct=1. not 2. no record.
+  right=1: [1,2].  distinct=2. record! count=1.
+  right=2: [1,2,1]. distinct=2. record! count=2.
+  right=3: [1,2,1,2]. distinct=2. record! But also [2,1,2],[1,2],[2] should count.
+  ...
+
+The problem: when right=4 adds '3', distinct becomes 3.
+  We shrink: remove [0]=1. window=[2,1,2,3]. distinct=3. still bad.
+  Remove [1]=2. window=[1,2,3]. distinct=3. still bad.
+  Remove [2]=1. window=[2,3]. distinct=2. stop.
+  But we MISSED subarrays [1,2,3] ending at right=4 — they had 3 distinct,
+  not 2, but their sub-windows like [2,3] DO count. Left jumped too far.
+  There's no way to systematically recover those.
+
+The fix — atMost subtraction:
+
+  ┌─ THE FORMULA FIRST — read this before the trace ──────────────────┐
+  │                                                                    │
+  │  count += right - left + 1                                        │
+  │                                                                    │
+  │  After every shrink, left = earliest valid start for this right.  │
+  │  So EVERY start in [left .. right] gives a valid subarray that    │
+  │  ends at right. How many starts is that?  right - left + 1.       │
+  │                                                                    │
+  │  Example: right=3, left=0 → starts 0,1,2,3 → 3-0+1=4 subarrays: │
+  │    start=0: [1,2,1,2]                                             │
+  │    start=1: [2,1,2]                                               │
+  │    start=2: [1,2]                                                 │
+  │    start=3: [2]                                                   │
+  │                                                                    │
+  └────────────────────────────────────────────────────────────────────┘
+
+─────────────────────────────────────────────────────────────────────
+  atMost(k=2): count all subarrays with ≤ 2 distinct integers
+  State tracked each step: left, freq map, distinct, count += (right-left+1)
+─────────────────────────────────────────────────────────────────────
+
+  Initial: left=0, freq={}, distinct=0, count=0
+
+  right=0: add 1. freq={1:1}. distinct=1. no shrink.
+    count += 0-0+1=1.  count=1.
+
+  right=1: add 2. freq={1:1,2:1}. distinct=2. no shrink.
+    count += 1-0+1=2.  count=3.
+
+  right=2: add 1. freq={1:2,2:1}. distinct=2 (1 was already in map). no shrink.
+    count += 2-0+1=3.  count=6.
+
+  right=3: add 2. freq={1:2,2:2}. distinct=2 (2 was already in map). no shrink.
+    count += 3-0+1=4.  count=10.
+
+  right=4: add 3. freq={1:2,2:2,3:1}. distinct=3. SHRINK (3 > 2):
+      remove [left=0]=1. freq[1]: 2→1 (still in map → distinct stays 3). left=1.
+      remove [left=1]=2. freq[2]: 2→1 (still in map → distinct stays 3). left=2.
+      remove [left=2]=1. freq[1]: 1→0 → key removed. freq={2:1,3:1}. distinct=2. left=3. stop.
+    count += 4-3+1=2.  count=12.
+
+  atMost(2) = 12  ✅
+
+─────────────────────────────────────────────────────────────────────
+  atMost(k=1): count all subarrays with ≤ 1 distinct integers
+─────────────────────────────────────────────────────────────────────
+
+  right=0: [1].     count+=1.  total=1.
+  right=1: add 2. distinct=2 > 1. SHRINK: remove 1. distinct=1. left=1.
+           window=[2]. count+=1.  total=2.
+  right=2: add 1. distinct=2 > 1. SHRINK: remove 2. distinct=1. left=2.
+           window=[1]. count+=1.  total=3.
+  right=3: add 2. distinct=2 > 1. SHRINK: remove 1. distinct=1. left=3.
+           window=[2]. count+=1.  total=4.
+  right=4: add 3. distinct=2 > 1. SHRINK: remove 2. distinct=1. left=4.
+           window=[3]. count+=1.  total=5.
+
+  atMost(1) = 5  ✅
+
+─────────────────────────────────────────────────────────────────────
+
+  exactly(2) = atMost(2) − atMost(1) = 12 − 5 = 7  ✅
+
+  Manual verify — subarrays with EXACTLY 2 distinct:
+    [1,2], [2,1], [1,2,1], [2,1,2], [1,2,1,2], [1,2], [2,3]  →  7 ✓
+
+KEY INVARIANT:
+  "At most K" is monotone (shrinkable). "Exactly K" is not.
+  atMost(K) counts all windows with 0..K of the thing.
+  atMost(K-1) counts all windows with 0..K-1 of the thing.
+  The difference = windows with EXACTLY K of the thing.
+```
 
 **English steps:**
 1. **Write a helper `atMost(nums, k)`** that returns the number of subarrays with the property holding at most `k` times.
@@ -1105,6 +1373,7 @@ public int removeDuplicatesSortedArray(int[] nums) {
 
 ---
 
+<a id="special"></a>
 ## 🌳 Special Topics
 
 ### Special Topic A — The `formed` Counter Trick (for LC 76 / L12) 🟡
@@ -1216,6 +1485,7 @@ These red flags mean sliding window will *not* work:
 
 ---
 
+<a id="walkthroughs"></a>
 ## 🔬 Worked Walkthroughs
 
 Eleven canonical problems — one per structurally unique shape. Every walkthrough follows the 5-part format: Problem → Brute Force → Intuition Bridge → Steps + Code → Transfers To.
@@ -1554,6 +1824,86 @@ KEY INVARIANT:
 
 **Intuition bridge — what cracks it open:** Replacements needed for a window = `windowLen - maxFreqInWindow`. Instead of shrinking until valid and losing progress, slide (not shrink) the window when it becomes invalid. Track `maxFreqEver` — a global high-water mark that only increases. If `windowLen - maxFreqEver > k`, slide one step right. This preserves the length of the best valid window found so far and never shrinks below it.
 
+**🧠 The slide-not-shrink invariant — read this before looking at the code:**
+
+> **We are searching for the LONGEST window. Once we find a window of size X, any window smaller than X is irrelevant — we've already beaten it.**
+
+When the current window becomes invalid (needs too many replacements), standard Pattern 2 shrinks `left` forward until the window is valid again. That might give us a valid window of size 3 when we already found size 5 — useless.
+
+Instead:
+- Window becomes invalid? **Shift the whole window one step right** (slide: `left++` AND `right++`).
+- Window is valid and grows? **Let `right` outrun `left`** (the window expands).
+
+The result: **window size is monotonically non-decreasing**. It either stays the same (slide) or grows (expand). Never shrinks. At the end, `s.length() - left` is always the answer because `right - left + 1` reflects the longest valid window ever seen.
+
+The `maxFreqEver` stale-high-water-mark supports this: even if the actual dominant char changes after a slide, `maxFreqEver` stays at (or above) the true max, making the validity check `windowLen - maxFreqEver ≤ k` a safe lower bound on what a valid window of this size requires.
+
+### 🎨 Visual — slide-not-shrink trace on `s = "AABABBA"`, k = 1
+
+```
+Replacements needed = windowLen - maxFreq(window)
+Window is valid iff replacements ≤ k = 1
+
+s:   A  A  B  A  B  B  A
+idx: 0  1  2  3  4  5  6
+     freq[A]=0, freq[B]=0, maxFreqEver=0, left=0
+
+
+right=0: s[0]='A'. freq[A]=1. maxFreqEver=1.
+  windowLen=1. replacements=1-1=0 ≤ 1. VALID. No slide.
+  best=1.    window=[A]
+
+right=1: s[1]='A'. freq[A]=2. maxFreqEver=2.
+  windowLen=2. replacements=2-2=0 ≤ 1. VALID. No slide.
+  best=2.    window=[A,A]
+
+right=2: s[2]='B'. freq[B]=1. maxFreqEver=max(2,1)=2.  ← A still dominates
+  windowLen=3. replacements=3-2=1 ≤ 1. VALID. No slide.
+  best=3.    window=[A,A,B]
+
+right=3: s[3]='A'. freq[A]=3. maxFreqEver=max(2,3)=3.
+  windowLen=4. replacements=4-3=1 ≤ 1. VALID. No slide.
+  best=4.    window=[A,A,B,A]   ← BEST FOUND: length 4
+
+right=4: s[4]='B'. freq[B]=2. maxFreqEver=max(3,2)=3.  ← A still 3
+  windowLen=5. replacements=5-3=2 > 1. INVALID. SLIDE:
+    freq[s[left=0]='A']-- → freq[A]=2. left=1.
+  windowLen=right-left+1=4-1+1=4. best stays 4.
+  window=[A,B,A,B]
+
+right=5: s[5]='B'. freq[B]=3. maxFreqEver=max(3,3)=3.  ← B now ties A
+  windowLen=5-1+1=5. replacements=5-3=2 > 1. INVALID. SLIDE:
+    freq[s[left=1]='A']-- → freq[A]=1. left=2.
+  windowLen=5-2+1=4. best stays 4.
+  window=[B,A,B,B]
+
+right=6: s[6]='A'. freq[A]=2. maxFreqEver=max(3,2)=3.  ← B still has 3
+  windowLen=6-2+1=5. replacements=5-3=2 > 1. INVALID. SLIDE:
+    freq[s[left=2]='B']-- → freq[B]=2. left=3.
+  windowLen=6-3+1=4. best stays 4.
+  window=[A,B,B,A]
+
+End: s.length()-left = 7-3 = 4.  Answer = 4  ✅
+(Valid window: "AABA" at [0..3] — replace B with A → "AAAA")
+
+
+TRACE SUMMARY — what happened to the window SIZE:
+
+  right: 0   1   2   3   4   5   6
+  left:  0   0   0   0   1   2   3
+  size:  1   2   3   4   4   4   4   ← never decreased after reaching 4
+
+The window hit size 4 at right=3 and then SLID — keeping size 4 — for
+the remainder of the string. It never shrank to 1, 2, or 3.
+
+
+KEY INVARIANT:
+  Window size is MONOTONICALLY NON-DECREASING.
+  An invalid window slides one step (same size) rather than shrinking.
+  Once we find a valid window of size X, we only accept windows of size > X.
+  The final answer = s.length() - left = distance from last left position to end.
+```
+
 **Steps in plain English:**
 
 1. **`int[] freq`** (size 26), `maxFreqEver = 0`, `left = 0`.
@@ -1773,34 +2123,56 @@ private int atMost(int[] nums, int k) {
 
 **Time:** O(n) | **Space:** O(n)
 
-### 🎨 Visual — atMost(2) on [1,2,1,2,3] counts every valid subarray ending at right
+### 🎨 Visual — atMost(2) on [1,2,1,2,3]: step-by-step pointer trace
 
 ```
 nums: [1, 2, 1, 2, 3]
+idx:   0  1  2  3  4
 
-atMost(k=2):
-right=0: window=[1],       distinct=1, count += 1  → total=1
-right=1: window=[1,2],     distinct=2, count += 2  → total=3
-right=2: window=[1,2,1],   distinct=2, count += 3  → total=6
-right=3: window=[1,2,1,2], distinct=2, count += 4  → total=10
-right=4: [3] makes distinct=3 → shrink past left=0(1) left=1(2)
-          window=[1,2,3] left=2, distinct=3 → still 3 → left=3
-          window=[2,3],   distinct=2, count += 2   → total=12
+atMost(k=2) — count all subarrays with ≤ 2 distinct integers:
 
-Wait: after shrinking to [2,3], count += right-left+1 = 4-3+1=2 → total=12
+right=0: add 1. freq={1:1}. distinct=1. left=0. count += 0-0+1=1.  total=1
+           valid sub-arrays ending here: [1]
 
-Hmm, actually from the existing trace: atMost(2)=13. Let me recheck:
-After removing 1 (left=0), window=[2,1,2,3] distinct=3, still>2.
-Remove 2 (left=1), window=[1,2,3] distinct=3, still>2.
-Remove 1 (left=2), window=[2,3] distinct=2, stop. count += 4-3+1=2. total=10+2=12?
+right=1: add 2. freq={1:1,2:1}. distinct=2. left=0. count += 1-0+1=2.  total=3
+           valid sub-arrays ending here: [2], [1,2]
 
-Actually the existing trace shows atMost(2)=13. The key: at right=3, count += 4 (subarrays ending at 3: [2],[1,2],[2,1,2],[1,2,1,2]).
-So the total flow is 1+2+3+4+3=13 from the per-step counts.
+right=2: add 1. freq={1:2,2:1}. distinct=2. left=0. count += 2-0+1=3.  total=6
+           valid sub-arrays ending here: [1], [2,1], [1,2,1]
+
+right=3: add 2. freq={1:2,2:2}. distinct=2. left=0. count += 3-0+1=4.  total=10
+           valid sub-arrays ending here: [2], [1,2], [2,1,2], [1,2,1,2]
+
+right=4: add 3. freq={1:2,2:2,3:1}. distinct=3 > 2. SHRINK:
+           remove [0]=1. freq={1:1,2:2,3:1}. distinct=3. left=1. still > 2.
+           remove [1]=2. freq={1:1,2:1,3:1}. distinct=3. left=2. still > 2.
+           remove [2]=1. freq={2:1,3:1}.      distinct=2. left=3. valid.
+         count += 4-3+1=2.  total=12
+           valid sub-arrays ending here: [3], [2,3]
+
+  Wait — why not total=13? Let's count per-step: 1+2+3+4+2 = 12.
+
+  Manual enumeration of all subarrays with ≤ 2 distinct in [1,2,1,2,3]:
+    Length 1: [1],[2],[1],[2],[3] = 5
+    Length 2: [1,2],[2,1],[1,2],[2,3] = 4
+    Length 3: [1,2,1],[2,1,2] = 2
+    Length 4: [1,2,1,2] = 1
+    Length 5: [1,2,1,2,3] = 0 (has 3 distinct)
+    Total = 5+4+2+1 = 12  ✅   atMost(2) = 12.
+
+atMost(1) — count all subarrays with ≤ 1 distinct:
+  [1],[2],[1],[2],[3] = 5.   atMost(1) = 5.
+
+exactly(2) = atMost(2) − atMost(1) = 12 − 5 = 7  ✅
+
+Manual verify — subarrays with EXACTLY 2 distinct:
+  [1,2], [2,1], [1,2,1], [2,1,2], [1,2,1,2], [1,2], [2,3] = 7.  ✓
+
 
 KEY INVARIANT:
   At each right, count += (right - left + 1) = number of valid subarrays ending here.
   left is always the earliest index that keeps the window valid (≤ k distinct).
-  atMost(K) - atMost(K-1) cancels all subarrays with < K distinct, leaving exactly K.
+  atMost(K) − atMost(K−1) cancels all subarrays with < K distinct, leaving exactly K.
 ```
 
 **Transfers to:**
@@ -1946,6 +2318,7 @@ public List<Integer> findSubstring(String s, String[] words) {
 
 ---
 
+<a id="gotchas"></a>
 ## ⚠️ Gotchas (Silent Bug Hall of Fame)
 
 The criterion: *Could a beginner write code that compiles, runs, doesn't crash, but produces wrong output?* All of these are silent.
@@ -2146,6 +2519,7 @@ Arrays.sort(nums); twoSumSorted(nums, 5);    // ✅
 
 ---
 
+<a id="practice"></a>
 ## 🗺️ Practice Plan — A Progression That Works
 
 Five tiers. Each tier has a clear gating criterion. Top-3 in each tier marked with ⭐.
@@ -2237,6 +2611,7 @@ These are problems where the *spirit* of sliding window applies but you need an 
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 **The mental model:** *Two pointers that move only forward. The window `[left..right]` is the candidate answer. Each element is added once and removed at most once → O(n).*
