@@ -1,1541 +1,689 @@
-# Hybrid Design Problems — DSA + LLD
+# Hybrid Data Structure Design — Deep Dive
 
-> For Kapil: problems that **combine a data structure choice with a system design** — the category that caught you in the WEX interview (LRU Cache with TTL). Read mental model first, problems second.
+> **What this covers:** The pattern of combining two data structures to serve two different query types efficiently. Centered on the In-Memory KV Store with TTL problem — confirmed in a real Docusign interview (Jul 2026).
 
 ---
 
 ## 🎯 Why You're Reading This
 
-In a real interview, "design an LRU Cache" is not a DSA question and not a system design question — it's **both simultaneously**. You need to:
+Some problems cannot be solved optimally with a single data structure. They have **two types of queries** that pull in opposite directions:
 
-1. Pick the right data structure combination (the DSA half)
-2. Design a clean interface with variants (the LLD half)
-3. Handle thread-safety and edge cases (the SDE-3 half)
+| Query type | Best structure |
+|---|---|
+| Lookup by key (point query) | HashMap — O(1) |
+| Range query ordered by some secondary attribute (time, count, priority) | TreeMap — O(log n) with `floorKey / tailMap / headMap` |
 
-This doc covers the **5 most frequently asked hybrid problems** at depth, plus cross-references for 2 more. The WEX miss (LRU + TTL) is covered in the most detail.
+When a problem needs both, you reach for **two structures in parallel** — one per query type. This is the Hybrid Data Structure Design pattern.
 
-> **Lesson learned the hard way (June 2026):** In the WEX hiring manager round, LRU Cache with TTL was asked cold. Remembered PriorityQueue for TTL (correct), but blanked on DoublyLinkedList for LRU eviction — said HashMap only. Missing the second data structure is the most common failure mode on these problems. That's what this doc fixes.
+The anchor problem here: **In-Memory KV Store with TTL** — exactly what Docusign asked about in production interview context (Jul 2026). It is also the gateway to Time-Based KV Store (LC 981), which is structurally identical.
+
+After reading this once you will:
+1. Recognize the dual-query signal in problem statements
+2. Know why a single structure always fails for one of the two query types
+3. Design the Entry class correctly (not the `Object[]` hack)
+4. Code the full solution cleanly from scratch under interview pressure
+5. Handle all follow-ups confidently
 
 ---
 
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 | Tag | Meaning | Action |
-| --- | --- | --- |
-| ✅ **Try Now** | Solvable with concepts in this doc | Open LeetCode, attempt cold, time-box ~30 min |
-| 🟡 **Try After [Section]** | Needs a later section in this doc | Bookmark, return after the named section |
-| 🔴 **Reference Only** | Needs concepts beyond this doc | Read problem + editorial for awareness only |
+|---|---|---|
+| ✅ **Try Now** | Solvable with concepts in this doc | Attempt cold, time-box 25 min |
+| 🟡 **Try After [Section]** | Needs a later section in this doc | Bookmark, return after named section |
+| 🔴 **Reference Only** | Needs concepts beyond this doc | Read editorial, don't attempt cold |
 
 ---
 
-## 🧠 Mental Model — The "HashMap + X" Pattern
+## 🌲 What Is the Dual-Index Pattern?
 
-> **The core insight:** HashMap gives you O(1) lookup by key. In a design problem, O(1) lookup is never enough — you ALSO need to maintain some ordering (by recency, frequency, value, time). HashMap alone cannot do that ordering. So you pair it with a second data structure that does exactly the ordering you need.
+**The core idea:** When a problem requires O(1) lookup by key **and** O(log n) range queries by another dimension (time, value, frequency), no single data structure satisfies both requirements simultaneously.
 
-Every hybrid design problem decomposes into two questions:
+The solution: maintain **two parallel data structures** — each optimized for one query type — and keep them **in sync** on every write (insert, update, delete).
 
-```
-Q1: What do I look up?        → HashMap answers this in O(1)
-Q2: What do I need to order?  → The second DS answers this
-```
+**Simplest mental model:** Imagine a library that maintains two catalogs:
+- **By title (alphabetical)** — find a specific book in O(1) hash lookup
+- **By return-due-date (sorted)** — find all books due this week in O(log n)
 
-The problem title tells you what Q2 requires:
-
-| Problem | What ordering is needed | Second DS |
-| --- | --- | --- |
-| LRU Cache | Evict the Least Recently Used | DoublyLinkedList |
-| LFU Cache | Evict the Least Frequently Used | Frequency buckets (HashMap of LinkedHashSets) |
-| Hit Counter | Count hits in last N seconds | Deque (sliding window) or circular array |
-| Leaderboard | Top-K players by score | TreeMap (score-sorted, O(log N) add/remove) |
-| Rate Limiter | Count requests in sliding window | Deque or AtomicLong + scheduler |
-| Consistent Hashing | Find the nearest node clockwise | TreeMap as circular ring |
-| Task Scheduler | Run the next due task | PriorityQueue (min-heap by run time) |
-
-### 🎨 Visual — The HashMap + X Shape
-
-```
-Every hybrid problem has this anatomy:
-
- ┌──────────────────────────────────────────────────────┐
- │                                                      │
- │   HashMap<Key, Node/Value>                           │
- │   ─────────────────────────                          │
- │   • O(1) lookup "is this key here?"                  │
- │   • O(1) get/update the node itself                  │
- │                                                      │
- │         ↕  Node is SHARED between both structures   │
- │                                                      │
- │   Second Data Structure                              │
- │   ─────────────────────────                          │
- │   • Maintains the ORDERING you need                  │
- │   • Drives eviction / ranking / windowing            │
- │                                                      │
- └──────────────────────────────────────────────────────┘
-
-The Node is the bridge:
-  HashMap points to Node → O(1) access
-  Second DS contains Node → O(1) or O(log N) ordering ops
-
-Without the second DS:     With the second DS:
-  get()   → O(1) ✅          get()   → O(1) ✅
-  put()   → O(1) ✅          put()   → O(1) ✅
-  evict() → O(N) ❌          evict() → O(1) ✅
-```
-
-**KEY INVARIANT:** The Node/value object is always stored in BOTH structures simultaneously. The HashMap finds it in O(1); the second DS positions it for ordering in O(1) or O(log N). The power is in the shared reference — one update touches both.
+When a book is added, both catalogs are updated. When a book is returned, both catalogs are updated. Neither catalog alone serves both query types well.
 
 ---
 
 ## 📖 Terminology Table
 
 | Term | Plain-English meaning |
-| --- | --- |
-| **Eviction policy** | The rule for deciding which entry to remove when the cache is full |
-| **LRU** | Least Recently Used — evict whichever entry was accessed longest ago |
-| **LFU** | Least Frequently Used — evict whichever entry has the lowest access count |
-| **TTL** | Time-To-Live — entries expire after a fixed duration regardless of access |
-| **DoublyLinkedList** | A linked list where each node has pointers to both its prev and next neighbors, enabling O(1) removal from any position |
-| **Sentinel node** | A dummy head/tail node that always exists, so you never have to handle "list is empty" as a special case |
-| **Sliding window** | A time-bounded window that moves forward — old entries fall off the back, new entries enter the front |
-| **Circular array** | An array where index is `time % size`, reusing slots as time advances |
-| **TreeMap** | Java's sorted Map backed by a red-black tree — O(log N) put/remove, O(log N) first()/last(), ceiling()/floor() |
-| **LinkedHashMap** | Java's HashMap that preserves insertion order OR access order — the JDK shortcut for LRU |
-| **minFreq** | A pointer tracking the current minimum frequency bucket — critical for O(1) LFU eviction |
+|---|---|
+| **TTL** (time-to-live) | A duration after which a stored entry is automatically treated as expired and invisible to readers |
+| **Expiry time** | The absolute timestamp at which a key expires = `System.currentTimeMillis() + ttl` |
+| **Lazy expiry** | Expired entries are not proactively deleted; they are removed only when they are accessed. A background thread is NOT required. |
+| **Point query** | Lookup by exact key: `get("docSign")` — HashMap is best |
+| **Range query** | Lookup across a range of sorted keys: "all entries expiring after now" — TreeMap's `tailMap` is best |
+| **Dual-index** | Two parallel data structures indexing the same data on two different keys (primary key + secondary attribute) |
+| **`tailMap(k)`** | TreeMap operation: returns a view of all entries with key ≥ k — O(log n) to find the start point |
+| **`floorKey(k)`** | TreeMap operation: returns the largest key ≤ k — O(log n) |
+| **Entry / Record class** | An inner class grouping related fields (value + expiryTime) so they travel together and are type-safe |
+| **Sentinel** | A pre-inserted boundary node in a linked list to eliminate null-pointer edge cases (used in LRU Cache, a related design problem) |
 
 ---
 
-## 🔹 The 4 Second-DS Archetypes
+## 🧠 Mental Model
 
-Quick reference before the problem deep dives.
+### Why a single structure always fails
 
-### Archetype 1 — DoublyLinkedList (for recency ordering)
+Think through what happens when you try to use only one structure:
 
-Use when: you need O(1) move-to-front and O(1) evict-from-tail.
+**Option A — Only HashMap (key → Entry):**
+- `get("key")` → O(1) ✅
+- `countActive()` → must scan every entry and check `expiry > now` → O(n) ❌
+
+**Option B — Only TreeMap keyed by expiry time (Long → Set\<String\>):**
+- `countActive()` → `tailMap(now+1)` → O(log n) ✅
+- `get("key")` → must scan all expiry buckets looking for the key → O(n) ❌
+
+**Option C — Only TreeMap keyed by primary key (String → Entry):**
+- `get("key")` → O(log n) — better than HashMap by a constant but still not O(1)
+- `countActive()` → scan all entries, check expiry → O(n) ❌
+
+None of these work. **Two structures, two indexes, one consistent state.**
+
+### The sync contract
+
+Every write operation (set, delete) must update BOTH structures:
 
 ```
-head ↔ [most recent] ↔ ... ↔ [least recent] ↔ tail
-        ▲ promote here                  ▲ evict here
+set(key, value, ttl):
+  1. Remove old expiry from TreeMap if key already exists
+  2. Insert new Entry into HashMap
+  3. Insert expiry → key into TreeMap
+
+delete(key):
+  1. Look up Entry in HashMap to get expiry time
+  2. Remove key from that expiry bucket in TreeMap (clean empty bucket)
+  3. Remove key from HashMap
 ```
 
-Signature operations:
-- `moveToFront(node)` — unlink from current position, relink after head
-- `removeLast()` — unlink the node before tail, return it
-
-### Archetype 2 — PriorityQueue / TreeMap (for value/time ordering)
-
-Use when: you need O(log N) min/max retrieval, or ranked ordering.
-- `PriorityQueue` — min/max heap, O(log N) add/poll, O(1) peek
-- `TreeMap` — sorted map, O(log N) all ops, supports range queries
-
-### Archetype 3 — Deque (for time-window sliding)
-
-Use when: you need a sliding window where old entries expire and new ones are added.
-- `ArrayDeque` in Java — O(1) addLast, removeFirst, peekFirst
-- Pattern: remove expired entries from front, add new to back, count size
-
-### Archetype 4 — Frequency Buckets (for frequency ordering)
-
-Use when: you need O(1) LFU operations.
-- `HashMap<Integer, LinkedHashSet<K>>` — maps frequency → set of keys with that frequency
-- Keeps `minFreq` pointer to know which bucket to evict from
+If you update one and forget the other, the structures diverge → silent bugs that only show up in `countActive()`.
 
 ---
 
-## 🔬 Problem 1 — LRU Cache (LC 146)
-
-> ⭐ Most important problem in this doc — the one asked at WEX.
-
-### What it is
-
-Design a cache with capacity N. Supports `get(key)` and `put(key, value)`. When putting into a full cache, evict the Least Recently Used entry. Every `get` and `put` counts as a "use."
-
-### DS Combo
-
-`HashMap<Integer, Node>` + `DoublyLinkedList`
-
-- HashMap: O(1) lookup "does key X exist, and where is its node?"
-- DoublyLinkedList: O(1) promote-to-front on access, O(1) evict-from-tail
-
-### 🎨 Visual — LRU State After Each Operation
+### 🎨 Visual — The Two-Structure Relationship
 
 ```
-Capacity = 3. Operations: put(1,A), put(2,B), put(3,C), get(1), put(4,D)
+WRITE: set("docA", "PDF", 5000ms)  [now = 1000ms, expiry = 6000ms]
+WRITE: set("docB", "SIG", 3000ms)  [now = 1000ms, expiry = 4000ms]
+WRITE: set("docC", "ZIP", 5000ms)  [now = 1000ms, expiry = 6000ms]
 
-After put(1,A), put(2,B), put(3,C):
-  head ↔ [3,C] ↔ [2,B] ↔ [1,A] ↔ tail
-  HashMap: {1→node1, 2→node2, 3→node3}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ STRUCTURE 1: HashMap<String, Entry>
+ (Primary store — answers: what is the value/expiry for this key?)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  "docA" → Entry{ value="PDF", expiryTime=6000 }
+  "docB" → Entry{ value="SIG", expiryTime=4000 }
+  "docC" → Entry{ value="ZIP", expiryTime=6000 }
 
-After get(1):          ← move node1 to front
-  head ↔ [1,A] ↔ [3,C] ↔ [2,B] ↔ tail
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ STRUCTURE 2: TreeMap<Long, Set<String>>
+ (Expiry index — answers: which keys expire in what range?)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  4000ms → { "docB" }
+  6000ms → { "docA", "docC" }
 
-After put(4,D):        ← cache full, evict tail.prev = [2,B]
-  head ↔ [4,D] ↔ [1,A] ↔ [3,C] ↔ tail
-  HashMap: {1→node1, 3→node3, 4→node4}   ← key 2 removed
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ QUERY: countActive() at now = 5000ms
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  expiryIndex.tailMap(5001ms)
+     → returns { 6000ms → {"docA","docC"} }
+     → sum = 2 entries  ← no scan of HashMap needed
+
+ QUERY: get("docB") at now = 5000ms
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  HashMap.get("docB") → Entry{ expiryTime=4000 }
+  now(5000) >= expiryTime(4000) → EXPIRED
+  lazy delete: remove from HashMap + remove from TreeMap bucket
+  return null
+
+KEY INVARIANT:
+  HashMap answers "what is this key's value/expiry?" in O(1).
+  TreeMap answers "how many keys are still alive?" in O(log n).
+  Neither can answer the other's question efficiently.
 ```
 
-**KEY INVARIANT:** The node closest to `head` is the most recently used; the node closest to `tail` is the eviction candidate. Every access promotes the node to head in O(1); every eviction removes from tail in O(1).
+---
 
-### Steps in plain English
+## 🎨 Style Habits
 
-1. **Node class** — holds key, value, prev pointer, next pointer.
-2. **Sentinel head and tail** — always-present dummies; actual entries live between them. Eliminates null checks.
-3. **moveToFront(node)** — unlink the node from wherever it is, relink it right after head.
-4. **removeLast()** — unlink the node just before tail, remove it from the HashMap, return it.
-5. **get(key)** — if key in map: call moveToFront, return value. Else return -1.
-6. **put(key, value)** — if key exists: update value, moveToFront. Else: create node, add to map, insert after head. If size > capacity: removeLast().
+### 🌐 Universal (apply in every hybrid design problem)
+
+1. **Always write an inner Entry/Record class** — never use `Object[]` or `Map.Entry<String, long[]>`. The inner class is type-safe, self-documenting, and easy to extend.
+
+2. **The sync contract is sacred** — every write path touches BOTH structures. If you add a note in the code saying "update HashMap" but forget the TreeMap, you will forget the TreeMap under interview pressure.
+
+3. **Handle the key-already-exists case in `set`** — if the key exists with a different TTL and you overwrite it, the OLD expiry must be removed from the TreeMap first or you'll have a ghost entry that inflates `countActive()`.
+
+4. **Clean up empty TreeMap buckets** — after removing a key from a Set in the TreeMap, if the Set becomes empty, remove the bucket entirely. Otherwise memory leaks accumulate over time.
+
+5. **Name `expiryTime`, not `expiryMs` or `ttl`** — the field is the absolute timestamp, not the duration. Naming it `expiryTime` makes `now >= expiryTime → expired` immediately readable.
+
+### 🔧 Context-specific (KV Store with TTL)
+
+6. **Use `System.currentTimeMillis()` as the clock source** — the problem typically says "wall clock". Centralise this in a single method `now()` so you can easily mock it in tests.
+
+7. **Lazy vs eager expiry** — unless the interviewer asks for a background thread, default to lazy. Mention eager as a follow-up: "we could add a `ScheduledExecutorService` that calls `expiryIndex.headMap(now)` and bulk-deletes."
+
+8. **`computeIfAbsent` over `if (!containsKey) put`** — it is atomic and idiomatic Java for building nested structures.
+
+---
+
+## 🧭 The Pattern — Step by Step
+
+### Design checklist when you see "two query types"
+
+**Steps in plain English:**
+
+1. **Identify the two query types.** One will be key-based (HashMap territory), the other will be range/order-based (TreeMap territory).
+2. **Define the Entry class** — what fields must travel together per primary key?
+3. **Choose the TreeMap key** — what attribute do you need to range-query on? (Expiry time, frequency, priority, etc.)
+4. **Write the sync contract** — for every write operation, list which structures get updated.
+5. **Handle the "already exists" case** — updating a key means removing the old secondary index entry before inserting the new one.
+6. **Clean up empty secondary buckets** — after removing a key from a Set, if the Set is empty, remove the Set from the TreeMap.
+
+---
+
+## 🔬 Worked Walkthrough — In-Memory KV Store with TTL
+
+**Problem context:** Design an in-memory key-value store for document signing sessions. Each entry (a signing URL) has a TTL — after which it expires. Support:
+- `set(key, value, ttlMs)` — store with expiry
+- `get(key)` — return value if alive, null if expired
+- `delete(key)` — remove immediately
+- `countActive()` — count non-expired keys efficiently
+
+---
+
+### Step 1 — The Entry Inner Class
+
+Before writing any data structures, define how a single record is modeled.
+
+**Why not `Object[]`?**
 
 ```java
-class LRUCache {
-    // Step 1 — Node holds key+value + DLL pointers
-    private static class Node {
-        int key;
-        int val;
-        Node prev;
-        Node next;
-        Node(int key, int val) {
-            this.key = key;
-            this.val = val;
+// ❌ BAD — type-unsafe, unreadable
+Object[] entry = store.get("key");
+String value = (String) entry[0];   // hope this is index 0
+long expiry  = (Long)   entry[1];   // hope this is index 1
+```
+
+One transposed index in a late-night interview session = wrong answer. The compiler will not save you.
+
+```java
+// ✅ GOOD — type-safe, self-documenting
+private static class Entry {
+    final String value;
+    final long expiryTime;
+
+    Entry(String value, long expiryTime) {
+        this.value = value;
+        this.expiryTime = expiryTime;
+    }
+}
+```
+
+Now: `entry.value` and `entry.expiryTime` — no ambiguity, no casts, no silent bugs.
+
+> 🧩 **Drill — do this NOW before reading further:**
+> On a blank notepad, write the Entry inner class from memory.
+> It should have: two `final` fields, a constructor. No getters needed for interview code.
+> Check: did you make the fields `final`? Did you write `private static class` not just `class`?
+
+---
+
+### Step 2 — Brute Force (single HashMap, O(n) countActive)
+
+**Discussion:** Start here to show the interviewer you understand the naive approach before jumping to the optimal. The brute force is actually acceptable for small datasets — a Docusign session store with 100 active signers does not need the full optimization.
+
+**Steps in plain English:**
+
+1. Store each `key → Entry(value, expiryTime)` in one HashMap.
+2. `get`: check `now >= entry.expiryTime` → expired → lazy delete → return null. Otherwise return value.
+3. `delete`: remove from HashMap.
+4. `countActive`: scan ALL entries, count those where `entry.expiryTime > now`. O(n).
+
+```java
+class KVStoreBrute {
+
+    private static class Entry {
+        final String value;
+        final long expiryTime;
+
+        Entry(String value, long expiryTime) {
+            this.value = value;
+            this.expiryTime = expiryTime;
         }
     }
 
-    private final int capacity;
-    private final Map<Integer, Node> map = new HashMap<>();
-    // Step 2 — sentinel head and tail (never evicted, never returned)
-    private final Node head = new Node(0, 0);
-    private final Node tail = new Node(0, 0);
+    // Single map — key → (value + expiry) together, no split maps
+    private final Map<String, Entry> store = new HashMap<>();
 
-    public LRUCache(int capacity) {
-        this.capacity = capacity;
-        head.next = tail;
-        tail.prev = head;
+    public void set(String key, String value, long ttlMs) {
+        long expiry = System.currentTimeMillis() + ttlMs;
+        store.put(key, new Entry(value, expiry));
     }
 
-    // Step 3 — unlink node from current position, re-insert after head
-    private void moveToFront(Node node) {
-        unlink(node);
-        insertAfterHead(node);
-    }
-
-    private void unlink(Node node) {
-        node.prev.next = node.next;
-        node.next.prev = node.prev;
-    }
-
-    private void insertAfterHead(Node node) {
-        node.next = head.next;
-        node.prev = head;
-        head.next.prev = node;
-        head.next = node;
-    }
-
-    // Step 4 — remove LRU node (just before tail), delete from map
-    private void removeLast() {
-        Node lru = tail.prev;
-        unlink(lru);
-        map.remove(lru.key);
-    }
-
-    // Step 5 — get: lookup + promote
-    public int get(int key) {
-        if (!map.containsKey(key)) {
-            return -1;
+    public String get(String key) {
+        Entry entry = store.get(key);
+        if (entry == null) {
+            return null;
         }
-        Node node = map.get(key);
-        moveToFront(node);
-        return node.val;
+        if (System.currentTimeMillis() >= entry.expiryTime) {
+            // Lazy expiry — remove on access
+            store.remove(key);
+            return null;
+        }
+        return entry.value;
     }
 
-    // Step 6 — put: update or insert, then evict if over capacity
-    public void put(int key, int value) {
-        if (map.containsKey(key)) {
-            Node node = map.get(key);
-            node.val = value;
-            moveToFront(node);
-        } else {
-            Node node = new Node(key, value);
-            map.put(key, node);
-            insertAfterHead(node);
-            if (map.size() > capacity) {
-                removeLast();
+    public void delete(String key) {
+        store.remove(key);
+    }
+
+    // O(n) — scans all entries every call
+    public int countActive() {
+        long now = System.currentTimeMillis();
+        int count = 0;
+        for (Entry entry : store.values()) {
+            if (entry.expiryTime > now) {
+                count++;
             }
         }
+        return count;
     }
 }
 ```
 
-**Demo:**
-
-```java
-// --- Demo / Calling Code ---
-public static void main(String[] args) {
-    LRUCache cache = new LRUCache(2);
-    cache.put(1, 1);
-    // DLL: head ↔ [1] ↔ tail
-    cache.put(2, 2);
-    // DLL: head ↔ [2] ↔ [1] ↔ tail  (2 is MRU)
-    System.out.println(cache.get(1));
-    // → 1. Promotes key 1 to MRU.
-    // DLL: head ↔ [1] ↔ [2] ↔ tail
-    cache.put(3, 3);
-    // Capacity full. LRU = tail.prev = key 2. Evict 2. Insert 3.
-    // DLL: head ↔ [3] ↔ [1] ↔ tail
-    System.out.println(cache.get(2));
-    // → -1  (evicted)
-    System.out.println(cache.get(3));
-    // → 3
-    cache.put(4, 4);
-    // LRU = tail.prev = key 1. Evict 1. Insert 4.
-    // DLL: head ↔ [4] ↔ [3] ↔ tail
-    System.out.println(cache.get(1));
-    // → -1  (evicted)
-    System.out.println(cache.get(3));
-    // → 3
-    System.out.println(cache.get(4));
-    // → 4
-}
-```
-
-**Time:** get O(1), put O(1), eviction O(1) | **Space:** O(capacity)
-
-> 🧩 **Drill — do this NOW before reading the variants:**
-> On paper, draw the DLL state after: `put(1,1)`, `put(2,2)`, `get(1)`, `put(3,3)`.
-> What gets evicted when `put(3,3)` is called? (Answer: key 2 — it's the LRU after get(1) promoted key 1.)
+**Why this is slow for `countActive`:** Every call is O(n) regardless of result. On a platform like Docusign with millions of active signing sessions, a frequent "active sessions" dashboard call would scan millions of entries every time.
 
 ---
 
-### Variants — How LRU Gets Asked in Real Interviews
+### Step 3 — Optimization Insight
 
-**Variant 1 — LRU with TTL (the WEX question)**
+**The question to ask yourself in the interview:** "What property allows `countActive` to avoid a full scan?"
 
-> *"Entries should also expire after a given TTL. An expired entry should not be returned by get()."*
+An entry is active if `expiryTime > now`. We need all entries where the expiry timestamp is in the future. This is a **range query on a sorted attribute** — specifically, a `tailMap` query on expiry times.
 
-Additional DS: `PriorityQueue<Node>` (min-heap by `expiryTime`).
+If we keep a secondary index sorted by expiry time, `tailMap(now + 1)` gives us only the live entries in O(log n). We never touch expired entries.
 
-Strategy:
-- Each node also stores `long expiryTime = System.currentTimeMillis() + ttlMs`
-- On `get()`: check if `System.currentTimeMillis() > node.expiryTime` → if yes, evict and return -1
-- Lazy eviction: don't scan the heap on every get. Only clean up when the heap top is expired OR when you need to evict for capacity.
-- On `put()`: add node to heap. Before inserting, drain expired entries from heap top.
-
-```java
-// Node gains expiryTime field
-private static class Node {
-    int key;
-    int val;
-    Node prev;
-    Node next;
-    long expiryTime;
-    Node(int key, int val, long ttlMs) {
-        this.key = key;
-        this.val = val;
-        this.expiryTime = System.currentTimeMillis() + ttlMs;
-    }
-}
-
-// min-heap by expiryTime
-private final PriorityQueue<Node> expiryHeap =
-    new PriorityQueue<>(Comparator.comparingLong(n -> n.expiryTime));
-
-public int get(int key) {
-    if (!map.containsKey(key)) {
-        return -1;
-    }
-    Node node = map.get(key);
-    // check TTL expiry
-    if (System.currentTimeMillis() > node.expiryTime) {
-        unlink(node);
-        map.remove(key);
-        return -1;
-    }
-    moveToFront(node);
-    return node.val;
-}
-```
-
-**Time:** get O(log N) amortized (heap drain), put O(log N) | **Space:** O(capacity)
+**The cost of maintaining this index:** Every `set` and `delete` must also update the TreeMap — O(log n) per write. This is a worthwhile trade: writes happen once per session creation, but `countActive` could be called on every dashboard refresh.
 
 ---
 
-**Variant 2 — Thread-safe LRU**
+### 🎨 Visual — Sync Contract for set() When Key Already Exists
 
-> *"Multiple threads will call get() and put() concurrently. Make it safe."*
-
-Two options:
-
-Option A — `synchronized` on the whole cache. Simple, correct, single-lock.
-
-```java
-public synchronized int get(int key) { ... }
-public synchronized void put(int key, int value) { ... }
 ```
+Scenario: set("docA", "newPDF", 8000ms) when "docA" already exists
+  Old entry: Entry{ value="PDF", expiryTime=6000ms }
+  Now = 2000ms → newExpiry = 10000ms
 
-Option B — `ReentrantReadWriteLock`. Multiple readers can get() concurrently; put() takes exclusive write lock.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BEFORE update:
+  HashMap:   "docA" → Entry{ "PDF", 6000 }
+  TreeMap:   6000 → { "docA", "docC" }
 
-```java
-private final ReadWriteLock lock = new ReentrantReadWriteLock();
+❌ WRONG — blindly overwrite HashMap, forget to fix TreeMap:
+  HashMap:   "docA" → Entry{ "newPDF", 10000 }
+  TreeMap:   6000  → { "docA", "docC" }   ← GHOST: "docA" at old expiry
+             10000 → { "docA" }            ← "docA" counted twice!
+  countActive() inflated ✗
 
-public int get(int key) {
-    lock.readLock().lock();
-    try {
-        // ... but moveToFront is a WRITE — so this needs write lock too
-    } finally {
-        lock.readLock().unlock();
-    }
-}
-```
+✅ CORRECT — three-step sync:
+  Step 1: read old entry → oldExpiry = 6000
+  Step 2: remove "docA" from TreeMap bucket at 6000
+          bucket = {"docA","docC"} → {"docC"}  (not empty, keep bucket)
+  Step 3: put new Entry{"newPDF", 10000} in HashMap
+  Step 4: add "docA" to TreeMap bucket at 10000
 
-**Gotcha:** `get()` causes a structural change (moveToFront). So ReadWriteLock doesn't actually help here — get() needs the write lock. In practice: use `synchronized` or `ConcurrentLinkedHashMap` (Guava) for true concurrent LRU.
+AFTER correct update:
+  HashMap:   "docA" → Entry{ "newPDF", 10000 }
+  TreeMap:   6000  → { "docC" }            ← "docA" cleanly removed
+             10000 → { "docA" }
 
-Option C — Java shortcut using `LinkedHashMap` (for simple cases, not multi-threaded):
-
-```java
-class LRUCache extends LinkedHashMap<Integer, Integer> {
-    private final int capacity;
-
-    public LRUCache(int capacity) {
-        // true = access-order (most recent at tail)
-        super(capacity, 0.75f, true);
-        this.capacity = capacity;
-    }
-
-    public int get(int key) {
-        return super.getOrDefault(key, -1);
-    }
-
-    public void put(int key, int value) {
-        super.put(key, value);
-    }
-
-    @Override
-    protected boolean removeEldestEntry(Map.Entry<Integer, Integer> eldest) {
-        return size() > capacity;
-    }
-}
+KEY INVARIANT:
+  Every key appears in EXACTLY ONE expiry bucket in the TreeMap at all times.
+  Updating a key = remove from old bucket + add to new bucket.
 ```
 
 ---
 
-**Variant 3 — LRU-K (evict the entry whose K-th most recent access is oldest)**
+### Step 4 — Optimal Solution (HashMap + TreeMap, O(log n) countActive)
 
-> *"Standard LRU considers only the last access. LRU-K considers the K-th most recent access time."*
+**Steps in plain English:**
 
-Used in database buffer management (PostgreSQL). Each entry stores a deque of the last K access timestamps. The eviction candidate is the entry with the oldest K-th timestamp.
-
-Tag: 🔴 Reference Only. Know it exists, don't implement cold.
-
----
-
-**Variant 4 — How they phrase it**
-
-| Phrasing | It's still LRU Cache |
-| --- | --- |
-| "Design a browser history cache" | LRU, capacity = N pages |
-| "Design a database buffer pool" | LRU or LRU-K eviction |
-| "Design an API response cache that expires stale data" | LRU + TTL (Variant 1) |
-| "Your cache should be safe for concurrent web requests" | Thread-safe LRU (Variant 2) |
-| "Implement get and put in O(1)" | The headline constraint that forces DLL |
-
----
-
-## 🔬 Problem 2 — LFU Cache (LC 460)
-
-> "Design a cache. When full, evict the Least Frequently Used entry. Ties broken by LRU (evict the least recently used among equally-frequent entries)."
-
-### DS Combo
-
-Three HashMaps + `minFreq` pointer:
-
-| Structure | Key | Value | Purpose |
-| --- | --- | --- | --- |
-| `keyToVal` | key | value | O(1) value lookup |
-| `keyToFreq` | key | frequency | O(1) frequency lookup |
-| `freqToKeys` | frequency | `LinkedHashSet<Key>` | O(1) get all keys at that frequency (insertion order = LRU tiebreak) |
-
-`minFreq` — integer tracking the current minimum frequency. The eviction candidate is always `freqToKeys.get(minFreq).first()`.
-
-### 🎨 Visual — LFU State After Operations
-
-```
-Capacity = 2. put(1,A), put(2,B), get(1), put(3,C)
-
-After put(1,A), put(2,B):
-  keyToVal:  {1→A, 2→B}
-  keyToFreq: {1→1, 2→1}
-  freqToKeys: {1 → [1, 2]}   (insertion order: 1 first, then 2)
-  minFreq = 1
-
-After get(1):              ← freq[1] goes 1→2
-  keyToFreq: {1→2, 2→1}
-  freqToKeys: {1 → [2], 2 → [1]}
-  minFreq = 1              ← still 1 (key 2 is at freq 1)
-
-After put(3,C):            ← cache full, evict from freqToKeys[minFreq=1]
-  Evict key 2 (first in freq-1 bucket = LRU among freq-1 keys)
-  Add key 3 with freq 1
-  freqToKeys: {1 → [3], 2 → [1]}
-  minFreq = 1              ← reset to 1 because we inserted a new key
-```
-
-**KEY INVARIANT:** `freqToKeys` maps each frequency to the set of keys at that frequency, in insertion order (so first = LRU). `minFreq` always points to the bucket containing the eviction candidate. It resets to 1 on every put() of a new key.
-
-### Steps in plain English
-
-1. **On get(key):** increment key's frequency, move key from old freq bucket to new freq bucket, update minFreq if old bucket is now empty and equals minFreq.
-2. **On put(key, value):** if key exists, update value and call get() logic to bump frequency. If key is new: evict if full (remove from `freqToKeys[minFreq]`), insert with freq=1, reset minFreq=1.
+1. **Entry inner class** — same as brute force.
+2. **Primary store** — `HashMap<String, Entry>` for O(1) key lookup.
+3. **Expiry index** — `TreeMap<Long, Set<String>>` for O(log n) `tailMap`.
+4. **Helper** — `removeFromIndex(key, expiryTime)` encapsulates the "remove from bucket + clean empty bucket" logic. Reuse it in `set` and `delete` to avoid code duplication.
+5. **set:** If key exists, call `removeFromIndex` with old expiry. Then insert into both structures.
+6. **get:** Look up HashMap. If expired, call `delete` (lazy cleanup of both structures). Return null.
+7. **delete:** `store.remove(key)` returns the entry. Use its `expiryTime` to call `removeFromIndex`.
+8. **countActive:** `expiryIndex.tailMap(now + 1)` → iterate over the returned sub-map and sum set sizes.
 
 ```java
-class LFUCache {
-    private final int capacity;
-    private int minFreq;
-    private final Map<Integer, Integer> keyToVal = new HashMap<>();
-    private final Map<Integer, Integer> keyToFreq = new HashMap<>();
-    // Step 1 — LinkedHashSet preserves insertion order = LRU tiebreak
-    private final Map<Integer, LinkedHashSet<Integer>> freqToKeys = new HashMap<>();
+class KVStoreOptimal {
 
-    public LFUCache(int capacity) {
-        this.capacity = capacity;
-    }
+    // ── Inner Entry class ─────────────────────────────────────────────────
+    private static class Entry {
+        final String value;
+        final long expiryTime;
 
-    public int get(int key) {
-        if (!keyToVal.containsKey(key)) {
-            return -1;
+        Entry(String value, long expiryTime) {
+            this.value = value;
+            this.expiryTime = expiryTime;
         }
-        // Step 1 — bump frequency
-        bumpFreq(key);
-        return keyToVal.get(key);
     }
 
-    public void put(int key, int value) {
-        if (capacity <= 0) {
+    // ── Two parallel structures ───────────────────────────────────────────
+
+    // Structure 1: primary store — O(1) lookup by key
+    private final Map<String, Entry> store = new HashMap<>();
+
+    // Structure 2: expiry index — O(log n) range query by expiry time
+    private final TreeMap<Long, Set<String>> expiryIndex = new TreeMap<>();
+
+    // ── Helper — shared by set() and delete() ─────────────────────────────
+    private void removeFromIndex(String key, long expiryTime) {
+        Set<String> bucket = expiryIndex.get(expiryTime);
+        if (bucket == null) {
             return;
         }
-        if (keyToVal.containsKey(key)) {
-            keyToVal.put(key, value);
-            bumpFreq(key);
-            return;
-        }
-        // Step 2 — evict if full
-        if (keyToVal.size() >= capacity) {
-            evictLFU();
-        }
-        // Step 2 — insert new key with freq 1
-        keyToVal.put(key, value);
-        keyToFreq.put(key, 1);
-        freqToKeys.computeIfAbsent(1, k -> new LinkedHashSet<>()).add(key);
-        minFreq = 1;
-    }
-
-    private void bumpFreq(int key) {
-        int freq = keyToFreq.get(key);
-        keyToFreq.put(key, freq + 1);
-        freqToKeys.get(freq).remove(key);
-        if (freqToKeys.get(freq).isEmpty()) {
-            freqToKeys.remove(freq);
-            if (minFreq == freq) {
-                minFreq++;
-            }
-        }
-        freqToKeys.computeIfAbsent(freq + 1, k -> new LinkedHashSet<>()).add(key);
-    }
-
-    private void evictLFU() {
-        LinkedHashSet<Integer> minFreqKeys = freqToKeys.get(minFreq);
-        // first() = insertion order = least recently used among min-freq keys
-        int evictKey = minFreqKeys.iterator().next();
-        minFreqKeys.remove(evictKey);
-        if (minFreqKeys.isEmpty()) {
-            freqToKeys.remove(minFreq);
-        }
-        keyToVal.remove(evictKey);
-        keyToFreq.remove(evictKey);
-    }
-}
-```
-
-**Demo:**
-
-```java
-// --- Demo / Calling Code ---
-public static void main(String[] args) {
-    LFUCache cache = new LFUCache(2);
-    cache.put(1, 1);
-    // keyToFreq: {1→1}, freqToKeys: {1→[1]}, minFreq=1
-    cache.put(2, 2);
-    // keyToFreq: {1→1,2→1}, freqToKeys: {1→[1,2]}, minFreq=1
-    System.out.println(cache.get(1));
-    // → 1. bumpFreq(1): keyToFreq: {1→2,2→1}, freqToKeys: {1→[2], 2→[1]}, minFreq=1
-    cache.put(3, 3);
-    // full. Evict from minFreq=1: first of [2] = key 2. Insert 3 with freq=1. minFreq=1.
-    // keyToFreq: {1→2,3→1}, freqToKeys: {1→[3], 2→[1]}
-    System.out.println(cache.get(2));
-    // → -1  (evicted)
-    System.out.println(cache.get(3));
-    // → 3. bumpFreq(3): freq-1 bucket empty → remove, minFreq was 1 → minFreq=2.
-    // keyToFreq: {1→2,3→2}, freqToKeys: {2→[1,3]}
-    cache.put(4, 4);
-    // full. Evict from minFreq=2: first of [1,3] = key 1 (LRU tiebreak). Insert 4. minFreq=1.
-    // keyToFreq: {3→2,4→1}, freqToKeys: {1→[4], 2→[3]}
-    System.out.println(cache.get(1));
-    // → -1  (evicted)
-    System.out.println(cache.get(3));
-    // → 3
-    System.out.println(cache.get(4));
-    // → 4
-}
-```
-
-**Time:** get O(1), put O(1) | **Space:** O(capacity)
-
-### Variants
-
-| Phrasing | It's still LFU |
-| --- | --- |
-| "Evict the least popular entry" | LFU |
-| "TTL + LFU combined" | Add expiryTime to each node + PriorityQueue drain |
-| "What if two entries have the same frequency?" | LRU tiebreak — already handled by LinkedHashSet insertion order |
-
-> 🧩 **Try these:**
-> - ✅ LC 146 LRU Cache — prerequisite for LFU; do this first
-> - 🟡 LC 460 LFU Cache — attempt after fully understanding LFU steps above
-> - 🔴 LC 432 All O(1) Data Structure — increment/decrement with O(1) getMaxKey/getMinKey; needs doubly-linked list of buckets
-
----
-
-## 🔬 Problem 3 — Hit Counter (LC 362)
-
-> "Design a hit counter. `hit(timestamp)` records a hit at that second. `getHits(timestamp)` returns the count of hits in the past 5 minutes (300 seconds). Timestamps arrive in non-decreasing order."
-
-### DS Combo — Option A: Circular Array (O(1) everything)
-
-`int[] times[300]` + `int[] hits[300]`
-
-- Index into array: `timestamp % 300`
-- If `times[slot] == timestamp`: increment `hits[slot]`
-- If `times[slot] != timestamp`: this slot is from a different second (≥300s ago) — reset it
-
-### 🎨 Visual — Circular Array Slots
-
-```
-Array size = 300 (one slot per second in a 5-minute window)
-
-timestamp=1  → slot 1%300=1   → times[1]=1,  hits[1]=1
-timestamp=2  → slot 2%300=2   → times[2]=2,  hits[2]=1
-timestamp=301 → slot 301%300=1 → times[1] was 1 ≠ 301 → RESET times[1]=301, hits[1]=1
-
-getHits(timestamp=302):
-  Scan all 300 slots
-  If times[slot] > timestamp - 300:  count += hits[slot]
-  (slot 1 has times[1]=301 > 2 → included)
-  (slot 2 has times[2]=2 > 2 → NOT included — too old)
-```
-
-**KEY INVARIANT:** `times[slot]` acts as a "generation tag." If it matches the current timestamp, the slot belongs to this second. If it doesn't, the slot's data is stale and must be reset. This makes the circular array self-cleaning without an explicit expiry step.
-
-```java
-class HitCounter {
-    private final int[] times = new int[300];
-    private final int[] hits = new int[300];
-
-    public void hit(int timestamp) {
-        int slot = timestamp % 300;
-        if (times[slot] != timestamp) {
-            // Step 1 — stale slot from 300+ seconds ago, reset it
-            times[slot] = timestamp;
-            hits[slot] = 1;
-        } else {
-            // Step 2 — same second, increment
-            hits[slot]++;
+        bucket.remove(key);
+        // Clean up empty buckets — prevent memory leak and wasteful tailMap iteration
+        if (bucket.isEmpty()) {
+            expiryIndex.remove(expiryTime);
         }
     }
 
-    public int getHits(int timestamp) {
-        int total = 0;
-        for (int i = 0; i < 300; i++) {
-            // Step 3 — only count slots within the last 300 seconds
-            if (timestamp - times[i] < 300) {
-                total += hits[i];
-            }
-        }
-        return total;
-    }
-}
-```
+    // ── Public API ────────────────────────────────────────────────────────
 
-**Demo:**
+    public void set(String key, String value, long ttlMs) {
+        long newExpiry = System.currentTimeMillis() + ttlMs;
 
-```java
-// --- Demo / Calling Code ---
-public static void main(String[] args) {
-    HitCounter counter = new HitCounter();
-    counter.hit(1);
-    counter.hit(2);
-    counter.hit(3);
-    System.out.println(counter.getHits(4));
-    // → 3. Hits at t=1,2,3. Diffs: 3,2,1 — all < 300.
-    counter.hit(300);
-    System.out.println(counter.getHits(300));
-    // → 4. Hits at t=1,2,3,300. Diffs: 299,298,297,0 — all < 300.
-    System.out.println(counter.getHits(301));
-    // → 3. Hit at t=1: diff=300, NOT < 300 → excluded. Hits at t=2,3,300 remain.
-}
-```
-
-**Time:** hit O(1), getHits O(300) = O(1) | **Space:** O(300) = O(1)
-
----
-
-### DS Combo — Option B: Deque (easier to explain, handles variable windows)
-
-`Deque<Integer>` of timestamps (one entry per hit).
-
-- `hit(ts)`: addLast(ts)
-- `getHits(ts)`: while peekFirst() <= ts - 300, removeFirst(). Return size().
-
-**Time:** hit O(1), getHits O(N) worst case (N = hits in window) | **Space:** O(N)
-
-Use this when the window size is not fixed (e.g., "last N seconds" where N varies).
-
-### Variants
-
-| Phrasing | It's still Hit Counter |
-| --- | --- |
-| "Count requests per user in the last minute" | Rate limiter = Hit Counter per key |
-| "Multi-granularity: hits per second, minute, hour" | Three circular arrays, one per granularity |
-| "Thread-safe hit counter" | `synchronized hit/getHits` or `AtomicIntegerArray` for hits[] |
-
-> 🧩 **Try these:**
-> - ✅ LC 362 Design Hit Counter — use circular array template above
-
----
-
-## 🔬 Problem 4 — Leaderboard (LC 1244)
-
-> "Design a Leaderboard. `addScore(playerId, score)` adds (not replaces) score. `top(K)` returns sum of scores of top K players. `reset(playerId)` resets score to 0."
-
-### DS Combo
-
-`HashMap<Integer, Integer>` (playerId → score) + `TreeMap<Integer, Integer>` (score → count of players with that score)
-
-- HashMap: O(1) lookup of a player's current score
-- TreeMap: sorted by score, supports O(log N) add/remove, O(K log N) top-K traversal
-
-### 🎨 Visual — Leaderboard State
-
-```
-addScore(1, 73), addScore(2, 56), addScore(3, 39), addScore(4, 51), addScore(5, 4)
-
-HashMap:    {1→73, 2→56, 3→39, 4→51, 5→4}
-TreeMap:    {4→1, 39→1, 51→1, 56→1, 73→1}
-               ↑ score → count of players with that score
-
-top(3):
-  Iterate TreeMap in DESCENDING order (highest scores first)
-  Take 73 (count=1, total=73, remaining K=2)
-  Take 56 (count=1, total=129, remaining K=1)
-  Take 51 (count=1, total=180, remaining K=0)
-  Return 180
-```
-
-**KEY INVARIANT:** TreeMap is keyed by score (not playerId). This allows O(log N) score insertions and O(K) top-K traversal regardless of total players. When updating a player's score, remove the old score from TreeMap (decrement count), add the new score.
-
-```java
-class Leaderboard {
-    private final Map<Integer, Integer> playerScore = new HashMap<>();
-    // TreeMap: score → number of players with that score
-    private final TreeMap<Integer, Integer> scoreCount = new TreeMap<>();
-
-    public void addScore(int playerId, int score) {
-        int currentScore = playerScore.getOrDefault(playerId, 0);
-        int newScore = currentScore + score;
-        playerScore.put(playerId, newScore);
-
-        // Step 1 — remove old score from TreeMap
-        if (currentScore > 0) {
-            scoreCount.put(currentScore,
-                scoreCount.get(currentScore) - 1);
-            if (scoreCount.get(currentScore) == 0) {
-                scoreCount.remove(currentScore);
-            }
+        // If key already exists, remove it from its OLD expiry bucket first
+        Entry existing = store.get(key);
+        if (existing != null) {
+            removeFromIndex(key, existing.expiryTime);
         }
 
-        // Step 2 — add new score to TreeMap
-        scoreCount.put(newScore,
-            scoreCount.getOrDefault(newScore, 0) + 1);
+        // Insert into primary store
+        store.put(key, new Entry(value, newExpiry));
+
+        // Insert into expiry index
+        expiryIndex.computeIfAbsent(newExpiry, k -> new HashSet<>()).add(key);
     }
 
-    public int top(int k) {
-        int total = 0;
-        int remaining = k;
-        // Step 3 — iterate descending (highest scores first)
-        for (Map.Entry<Integer, Integer> entry :
-                scoreCount.descendingMap().entrySet()) {
-            int score = entry.getKey();
-            int count = entry.getValue();
-            int take = Math.min(remaining, count);
-            total += score * take;
-            remaining -= take;
-            if (remaining == 0) {
-                break;
-            }
+    public String get(String key) {
+        Entry entry = store.get(key);
+        if (entry == null) {
+            return null;
         }
-        return total;
+        if (System.currentTimeMillis() >= entry.expiryTime) {
+            // Lazy delete — cleans BOTH structures via delete()
+            delete(key);
+            return null;
+        }
+        return entry.value;
     }
 
-    public void reset(int playerId) {
-        int currentScore = playerScore.getOrDefault(playerId, 0);
-        playerScore.remove(playerId);
-        if (currentScore > 0) {
-            scoreCount.put(currentScore,
-                scoreCount.get(currentScore) - 1);
-            if (scoreCount.get(currentScore) == 0) {
-                scoreCount.remove(currentScore);
-            }
+    public void delete(String key) {
+        // store.remove returns the entry or null if absent
+        Entry entry = store.remove(key);
+        if (entry != null) {
+            removeFromIndex(key, entry.expiryTime);
         }
     }
-}
-```
 
-**Demo:**
-
-```java
-// --- Demo / Calling Code ---
-public static void main(String[] args) {
-    Leaderboard board = new Leaderboard();
-    board.addScore(1, 73);
-    board.addScore(2, 56);
-    board.addScore(3, 39);
-    board.addScore(4, 51);
-    board.addScore(5, 4);
-    // playerScore: {1→73,2→56,3→39,4→51,5→4}
-    // scoreCount (TreeMap): {4→1, 39→1, 51→1, 56→1, 73→1}
-    System.out.println(board.top(3));
-    // → 180. Descending: 73 + 56 + 51 = 180.
-    board.reset(1);
-    // playerScore: {2→56,3→39,4→51,5→4}. scoreCount removes 73.
-    System.out.println(board.top(3));
-    // → 146. Descending: 56 + 51 + 39 = 146.
-    board.addScore(1, 10);
-    // player 1 re-enters with score 10.
-    System.out.println(board.top(3));
-    // → 146. Descending: 56+51+39=146. Player 1 (score=10) not in top 3.
-}
-```
-
-**Time:** addScore O(log N), top O(K log N), reset O(log N) | **Space:** O(N)
-
-### Variants
-
-| Phrasing | It's still Leaderboard |
-| --- | --- |
-| "Return top K player IDs, not their sum" | Store `TreeMap<Integer, List<Integer>>` (score → list of playerIds) |
-| "Score is set, not added" | Simpler: direct put in both maps |
-| "Find rank of a player" | `scoreCount.tailMap(score + 1)` counts players above this score |
-| "Concurrent leaderboard" | `ConcurrentSkipListMap` instead of TreeMap |
-
-> 🧩 **Try these:**
-> - ✅ LC 1244 Design a Leaderboard — template above is nearly the solution
-> - 🟡 LC 703 Kth Largest Element in a Stream — min-heap keeps top-K, no TreeMap needed
-> - 🔴 LC 295 Find Median from Data Stream — two-heap approach, needs heap deep dive
-
----
-
-## 🔬 Problem 5 — Rate Limiter
-
-> Design a per-user API rate limiter. Each user is allowed at most `maxRequests` calls within a `windowMs`-millisecond window. Implement `boolean allowRequest(String userId)` — return `true` if the request is allowed, `false` if throttled.
-
-### What it is
-
-The rate limiter is unique among hybrid problems: **there is no single correct data structure**. Four algorithms solve the same problem with different tradeoffs. Interviews test whether you know all four and can pick the one that fits the given constraints. The most common failure mode: defaulting to one algorithm without mentioning the others.
-
-### DS Combo — Algorithm Picker
-
-| Algorithm | Data Structure | When to pick | Burst behavior |
-| --- | --- | --- | --- |
-| **Fixed Window Counter** | `Map<String, long[]>` — {count, windowStart} | "Simplest implementation" | Allows 2× burst at window boundary |
-| **Sliding Window Log** | `Map<String, Deque<Long>>` — timestamps | "Exact correctness required" | Accurate; O(maxRequests) memory per user |
-| **Token Bucket** ⭐ | `Map<String, double[]>` — {tokens, lastRefillMs} | "Real-world default / allow bursts" | Natural burst from accumulated tokens |
-| **Sliding Window Counter** | `Map<String, long[]>` — {prev, curr, winStart} | "O(1) memory, approximate is OK" | Weighted estimate, ~5% error |
-
-> **Interview default:** Start with Token Bucket and explain the tradeoff table. If the interviewer says "exact accuracy" → pivot to Sliding Window Log. If they say "simplest" → Fixed Window Counter.
-
----
-
-### Algorithm 1 — Fixed Window Counter
-
-**DS:** `Map<String, long[]>` where `entry = [requestCount, windowStartMs]`
-
-Divide time into fixed buckets (e.g., one bucket per minute). Count requests in the current bucket. Reset count when the bucket rolls over.
-
-#### 🎨 Visual — Fixed Window Boundary Burst
-
-```
-Limit: 3 req / 60s. Window starts at t=0, t=60, t=120 ...
-
-  t=58s: [req1, req2, req3] ← window 1, count=3, full
-  t=59s: DENIED
-
-  t=60s: NEW WINDOW → count resets to 0
-  t=60s: [req1, req2, req3] ← window 2, all allowed
-
-PROBLEM: 6 requests between t=58s and t=62s — 2× the limit.
-Each window sees at most 3, so both pass. The boundary is invisible.
-
-         Window 1            Window 2
-  ───────────────────┼──────────────────────
-  count:    3         │count:    3
-  0s                 60s                120s
-
-KEY INVARIANT:
-  If now - windowStart >= windowSize: reset count=0, windowStart=now.
-  If count < maxRequests: count++, allow. Else: deny.
-```
-
-**Steps in plain English:**
-
-1. **Init** — create entry `[0, now]` if absent.
-2. **Roll window** — if `now - windowStart >= windowMs`, reset `count = 0`, update `windowStart = now`.
-3. **Check** — if `count < maxRequests`, increment and allow. Else deny.
-
-```java
-class FixedWindowRateLimiter {
-    // entry = { requestCount, windowStartMs }
-    private final Map<String, long[]> windows = new ConcurrentHashMap<>();
-    private final int maxRequests;
-    private final long windowMs;
-
-    public FixedWindowRateLimiter(int maxRequests, long windowMs) {
-        this.maxRequests = maxRequests;
-        this.windowMs = windowMs;
-    }
-
-    public boolean allowRequest(String userId) {
+    // O(log n) to find the tail boundary + O(k) to sum live buckets
+    public int countActive() {
         long now = System.currentTimeMillis();
-        // Step 1 — create entry if absent
-        windows.putIfAbsent(userId, new long[]{ 0, now });
-        long[] entry = windows.get(userId);
-        // Step 2 — lock per-user entry (not the whole map — too coarse)
-        synchronized (entry) {
-            // Step 2 — roll window if expired
-            if (now - entry[1] >= windowMs) {
-                entry[0] = 0;
-                entry[1] = now;
-            }
-            // Step 3 — check count and increment
-            if (entry[0] < maxRequests) {
-                entry[0]++;
-                return true;
-            }
-            return false;
+        // tailMap(now + 1): all expiry timestamps strictly greater than now
+        Map<Long, Set<String>> liveBuckets = expiryIndex.tailMap(now + 1);
+        int count = 0;
+        for (Set<String> bucket : liveBuckets.values()) {
+            count += bucket.size();
         }
+        return count;
     }
 }
 ```
 
-**Demo:**
-
-```java
-// --- Demo / Calling Code ---
-public static void main(String[] args) {
-    // 3 requests per 60 seconds
-    FixedWindowRateLimiter limiter = new FixedWindowRateLimiter(3, 60_000);
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (count=1)
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (count=2)
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (count=3, at limit)
-    System.out.println(limiter.allowRequest("alice"));
-    // → false (throttled — window not yet expired)
-    System.out.println(limiter.allowRequest("bob"));
-    // → true  (separate user, independent window)
-}
-```
-
-**Time:** O(1) | **Space:** O(users)
+> 🧩 **Drill — do this NOW before reading further:**
+> Close this doc. Write the `set()` method from memory.
+> Checklist: (1) compute newExpiry, (2) check existing and call removeFromIndex, (3) store.put, (4) expiryIndex.computeIfAbsent.add.
+> If you missed step 2, that is the most common interview mistake on this problem.
 
 ---
 
-### Algorithm 2 — Sliding Window Log
-
-**DS:** `Map<String, Deque<Long>>` — each user's deque stores exact request timestamps.
-
-Store every request timestamp. On each call, evict timestamps older than `windowMs` from the front of the deque. Count remaining; if `< maxRequests`, allow.
-
-#### 🎨 Visual — Sliding Window Log Eviction
+### Step 5 — Full Dry Run
 
 ```
-Limit: 3 req / 60,000ms. User "alice". Each "|" = 10,000ms.
+All times in ms. Clock advances as shown.
 
-t=10,000  → log: [10000]               size=1 → ALLOW
-t=20,000  → log: [10000, 20000]        size=2 → ALLOW
-t=50,000  → log: [10000, 20000, 50000] size=3 → ALLOW
-t=60,000  → evict? 60000-10000=50000 < 60000 → no eviction
-              log: [10000, 20000, 50000], size=3 → DENIED
+t=0:    set("docA", "contract_v1", 5000)
+          newExpiry = 5000
+          existing = null (skip removeFromIndex)
+          store:   { "docA" → Entry{"contract_v1", 5000} }
+          index:   { 5000 → {"docA"} }
 
-t=70,001  → evict: 70001-10000=60001 >= 60000 → remove 10000
-              log: [20000, 50000], size=2
-              → add 70001 → size=3 → ALLOW
+t=1000: set("docB", "nda_draft", 3000)
+          newExpiry = 4000
+          store:   { "docA"→{5000}, "docB"→{4000} }
+          index:   { 4000 → {"docB"}, 5000 → {"docA"} }
 
-No boundary burst: the window truly slides with wall clock time.
-Any 60,000ms interval contains at most 3 requests.
+t=2000: set("docA", "contract_v2", 4000)   ← UPDATE existing key
+          existing = Entry{5000}
+          removeFromIndex("docA", 5000):
+            bucket {5000} → remove "docA" → empty → remove bucket
+          newExpiry = 6000
+          store:   { "docA"→{6000}, "docB"→{4000} }
+          index:   { 4000 → {"docB"}, 6000 → {"docA"} }
 
-KEY INVARIANT:
-  Deque front = oldest timestamp still in scope.
-  Evict from front while (now - front) >= windowMs.
-  Deque size = exact request count in the current window.
+t=4500: countActive()
+          tailMap(4501) → { 6000 → {"docA"} }
+          count = 1   ← "docB" expired at 4000 < 4500
+
+t=4500: get("docB")
+          entry.expiryTime = 4000, now = 4500 ≥ 4000 → EXPIRED
+          delete("docB"):
+            store.remove("docB") → Entry{4000}
+            removeFromIndex("docB", 4000) → bucket empty → remove
+          index now: { 6000 → {"docA"} }
+          return null ✓
+
+t=5000: get("docA")
+          entry.expiryTime = 6000, now = 5000 < 6000 → ALIVE
+          return "contract_v2" ✓
 ```
-
-**Steps in plain English:**
-
-1. **Init** — create empty `ArrayDeque` if absent.
-2. **Evict** — poll from front while `now - front >= windowMs`.
-3. **Check** — if `deque.size() < maxRequests`, add `now` to back and allow. Else deny.
-
-```java
-class SlidingWindowLogRateLimiter {
-    private final Map<String, Deque<Long>> logs = new ConcurrentHashMap<>();
-    private final int maxRequests;
-    private final long windowMs;
-
-    public SlidingWindowLogRateLimiter(int maxRequests, long windowMs) {
-        this.maxRequests = maxRequests;
-        this.windowMs = windowMs;
-    }
-
-    public boolean allowRequest(String userId) {
-        long now = System.currentTimeMillis();
-        // Step 1 — create deque if absent
-        logs.putIfAbsent(userId, new ArrayDeque<>());
-        Deque<Long> log = logs.get(userId);
-        synchronized (log) {
-            // Step 2 — evict timestamps outside the window
-            while (!log.isEmpty() && now - log.peekFirst() >= windowMs) {
-                log.pollFirst();
-            }
-            // Step 3 — admit if under limit
-            if (log.size() < maxRequests) {
-                log.addLast(now);
-                return true;
-            }
-            return false;
-        }
-    }
-}
-```
-
-**Demo:**
-
-```java
-// --- Demo / Calling Code ---
-public static void main(String[] args) {
-    // 3 requests per 60 seconds, exact sliding window
-    SlidingWindowLogRateLimiter limiter = new SlidingWindowLogRateLimiter(3, 60_000);
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (log: [t0])
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (log: [t0, t1])
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (log: [t0, t1, t2], at limit)
-    System.out.println(limiter.allowRequest("alice"));
-    // → false (3 timestamps still in [now-60000, now] window)
-    System.out.println(limiter.allowRequest("bob"));
-    // → true  (separate user, empty deque)
-}
-```
-
-**Time:** O(maxRequests) amortized per request (eviction cost) | **Space:** O(users × maxRequests)
 
 ---
 
-### Algorithm 3 — Token Bucket ⭐ (Real-World Default)
+## ⏱️ Complexity Table
 
-**DS:** Inner `Bucket` class — `{double tokens, long lastRefillMs}` per user.
+| Operation | Brute Force | Optimal |
+|---|---|---|
+| `set` (new key) | O(1) | O(log n) |
+| `set` (update key) | O(1) | O(log n) |
+| `get` | O(1) | O(log n) lazy |
+| `delete` | O(1) | O(log n) |
+| `countActive` | O(n) | O(log n + k) |
+| Space | O(n) | O(n) |
 
-Each user has a bucket holding up to `capacity` tokens. Tokens refill continuously at `refillRate` per second — but computed **lazily** on each request based on elapsed time. One request consumes one token.
-
-#### 🎨 Visual — Token Bucket Lazy Refill
-
-```
-Capacity = 5, refillRate = 1 token/sec. User "alice".
-
-t=0s:   bucket=[5.0] ← starts full
-        5 rapid requests → [4.0] [3.0] [2.0] [1.0] [0.0] — all ALLOWED
-        (burst absorbed by accumulated tokens)
-
-t=0.5s: request arrives.
-        elapsed=500ms → earned=0.5 tokens → bucket=[0.5]
-        0.5 < 1 → DENIED (partial token, not enough)
-
-t=1.0s: request arrives.
-        elapsed=500ms → earned=0.5 tokens → bucket=[1.0]
-        1.0 >= 1 → consume → bucket=[0.0] → ALLOWED
-
-t=6.0s: 5 seconds of silence.
-        elapsed=5000ms → earned=5.0 → bucket=[5.0] (capped at capacity)
-        User has full burst capacity again.
-
-KEY INVARIANT:
-  On every call (even DENIED): tokens = min(capacity, tokens + elapsed × rate).
-  If tokens >= 1.0: consume 1.0 token, allow. Else: deny.
-  lastRefillMs always updates — this is the lazy refill mechanism.
-```
-
-**Steps in plain English:**
-
-1. **Init** — create `Bucket` with `tokens = capacity`, `lastRefillMs = now`.
-2. **Refill** — compute `elapsed = now - lastRefill`, add `elapsed × ratePerMs` to tokens, cap at capacity, update `lastRefillMs`.
-3. **Consume** — if `tokens >= 1.0`, decrement by 1.0 and allow. Else deny.
-
-```java
-class TokenBucketRateLimiter {
-    private static class Bucket {
-        double tokens;
-        long lastRefillMs;
-        Bucket(int capacity, long now) {
-            this.tokens = capacity;
-            this.lastRefillMs = now;
-        }
-    }
-
-    private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
-    private final int capacity;
-    private final double ratePerMs;  // tokens per millisecond
-
-    // capacity = max burst size; refillRatePerSecond = steady-state throughput
-    public TokenBucketRateLimiter(int capacity, int refillRatePerSecond) {
-        this.capacity = capacity;
-        this.ratePerMs = (double) refillRatePerSecond / 1000.0;
-    }
-
-    public boolean allowRequest(String userId) {
-        long now = System.currentTimeMillis();
-        // Step 1 — init bucket at full capacity for new users
-        Bucket b = buckets.computeIfAbsent(userId,
-            k -> new Bucket(capacity, now));
-        synchronized (b) {
-            // Step 2 — lazy refill based on elapsed time
-            long elapsed = now - b.lastRefillMs;
-            b.tokens = Math.min(capacity, b.tokens + elapsed * ratePerMs);
-            b.lastRefillMs = now;
-            // Step 3 — consume one token if available
-            if (b.tokens >= 1.0) {
-                b.tokens -= 1.0;
-                return true;
-            }
-            return false;
-        }
-    }
-}
-```
-
-**Demo:**
-
-```java
-// --- Demo / Calling Code ---
-public static void main(String[] args) throws InterruptedException {
-    // capacity=3 tokens, refill at 1 token/sec
-    TokenBucketRateLimiter limiter = new TokenBucketRateLimiter(3, 1);
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (bucket: 3 → 2.0)
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (bucket: 2 → 1.0)
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (bucket: 1 → 0.0, burst absorbed)
-    System.out.println(limiter.allowRequest("alice"));
-    // → false (0 tokens, throttled; lastRefillMs still updated)
-    Thread.sleep(1100);
-    // 1.1 seconds pass → earned 1.1 tokens → bucket = min(3, 0 + 1.1) = 1.1
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (bucket: 1.1 → 0.1)
-    System.out.println(limiter.allowRequest("bob"));
-    // → true  (new user, starts full at 3 tokens)
-}
-```
-
-**Time:** O(1) | **Space:** O(users)
-
----
-
-### Algorithm 4 — Sliding Window Counter (Approximation)
-
-**DS:** `Map<String, long[]>` where `entry = [prevCount, currCount, currWindowStartMs]`
-
-Keep two adjacent counters: previous window count and current window count. Estimate the sliding window count using how far through the current window we are. This gives O(1) space at the cost of ~5% approximation error.
-
-**Steps in plain English:**
-
-1. **Init** — create entry `[0, 0, now]` if absent.
-2. **Roll window** — if `now >= windowStart + windowMs`, advance: `prevCount = currCount`, reset `currCount = 0`, update `windowStart`.
-3. **Estimate** — `elapsed = now - windowStart`. `estimated = prevCount × (1 - elapsed/windowMs) + currCount`.
-4. **Check** — if `estimated < maxRequests`, increment `currCount` and allow. Else deny.
-
-```java
-class SlidingWindowCounterRateLimiter {
-    // entry = { prevWindowCount, currWindowCount, currWindowStartMs }
-    private final Map<String, long[]> counters = new ConcurrentHashMap<>();
-    private final int maxRequests;
-    private final long windowMs;
-
-    public SlidingWindowCounterRateLimiter(int maxRequests, long windowMs) {
-        this.maxRequests = maxRequests;
-        this.windowMs = windowMs;
-    }
-
-    public boolean allowRequest(String userId) {
-        long now = System.currentTimeMillis();
-        // Step 1 — init entry if absent
-        counters.putIfAbsent(userId, new long[]{ 0, 0, now });
-        long[] entry = counters.get(userId);
-        synchronized (entry) {
-            long prevCount = entry[0];
-            long currCount = entry[1];
-            long windowStart = entry[2];
-            // Step 2 — roll window if current window has expired
-            if (now >= windowStart + windowMs) {
-                long skipped = (now - windowStart) / windowMs;
-                // If exactly one window passed, prev = last curr; otherwise prev = 0 (too stale)
-                entry[0] = (skipped == 1) ? currCount : 0;
-                entry[1] = 0;
-                entry[2] = windowStart + skipped * windowMs;
-                prevCount = entry[0];
-                currCount = 0;
-                windowStart = entry[2];
-            }
-            // Step 3 — weighted estimate of requests in the last windowMs
-            double elapsed = now - windowStart;
-            double prevWeight = 1.0 - (elapsed / windowMs);
-            long estimated = (long)(prevCount * prevWeight) + currCount;
-            // Step 4 — admit if under limit
-            if (estimated < maxRequests) {
-                entry[1]++;
-                return true;
-            }
-            return false;
-        }
-    }
-}
-```
-
-**Demo:**
-
-```java
-// --- Demo / Calling Code ---
-public static void main(String[] args) {
-    // 3 requests per 60 seconds, O(1) approximation
-    SlidingWindowCounterRateLimiter limiter = new SlidingWindowCounterRateLimiter(3, 60_000);
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (estimated ≈ 0 + 0 = 0 < 3; currCount=1)
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (estimated ≈ 0 + 1 = 1 < 3; currCount=2)
-    System.out.println(limiter.allowRequest("alice"));
-    // → true  (estimated ≈ 0 + 2 = 2 < 3; currCount=3)
-    System.out.println(limiter.allowRequest("alice"));
-    // → false (estimated ≈ 3 >= 3; throttled)
-    System.out.println(limiter.allowRequest("bob"));
-    // → true  (separate user, independent counters)
-}
-```
-
-**Time:** O(1) | **Space:** O(users) — O(1) per user vs O(maxRequests) for Sliding Log
-
-**Accuracy:** ~95% (< 5% error at window boundaries). Cloudflare uses this algorithm in production for its API rate limiting layer.
-
----
-
-### Variants
-
-| Variant | Adaptation |
-| --- | --- |
-| Rate limit by IP instead of userId | Change map key to client IP — identical logic |
-| Rate limit by user + endpoint | Key = `userId + ":" + endpoint` — map handles the rest |
-| Distributed rate limiter (multi-node) | Replace in-memory Map with Redis; `INCR` + `EXPIRE` for Fixed Window; Lua script for atomicity |
-| Leaky bucket (smoothed output) | Queue incoming requests; drain at constant rate — smooths traffic, no burst; different from Token Bucket |
-| Allow a one-time burst above limit | Token Bucket with `capacity > 1-second refill amount` — idle users accumulate extra tokens |
-
-> 🧩 **Try these:**
-> - ✅ **Implement Fixed Window + Sliding Log from memory** — no code lookup, 20 min each; test with the boundary burst example above
-> - ✅ **Token Bucket from memory** — remember: refill on every call (including DENIED ones), cap at capacity
-> - 🟡 **Draw the boundary burst on paper** — explain in one sentence why Fixed Window allows 2× requests, then implement the Sliding Log fix
-> - 🔴 **Distributed Redis rate limiter** — needs Redis + Lua knowledge; reference only during DSA prep
-
----
-
-## 🔗 Cross-References (Consistent Hashing, Task Scheduler)
-
-These two are also hybrid problems but **live in SystemDesignConcepts** (they have more system design depth than DSA depth). Rate Limiter is now fully covered in **Problem 5** above.
-
-| Problem | DS Core | System Add-on | Lives in |
-| --- | --- | --- | --- |
-| **Consistent Hashing** | `TreeMap<Long, Node>` as circular ring, `ceilingKey()` for lookup | Virtual nodes, node add/remove, hotspot prevention | `SystemDesignConcepts/05-consistent-hashing.md` (planned) |
-| **Task Scheduler** | `PriorityQueue<Task>` sorted by nextRunTime | Delayed retry, recurring jobs, executor design | `SystemDesignConcepts/` (Phase 2 — not yet written) |
+k = number of distinct expiry buckets still alive (in practice much smaller than n)
 
 ---
 
 ## ⚠️ Gotchas — Silent Bug Hall of Fame
 
-**Gotcha 1 — LRU: forgetting the `key` field in the DLL Node.**
+### Bug 1 — Forgetting to Remove Old Expiry on Update
 
-The DLL Node MUST store the key, not just the value. When you evict the tail node, you remove it from the HashMap using `node.key`. Without the key in the node, you can't do the HashMap removal.
+**Symptom:** `countActive()` returns inflated numbers over time. Subtle — only shows up when keys are updated, not on initial inserts.
 
 ```java
-// ❌ wrong — node doesn't know its own key
-private static class Node {
-    int val;
-    Node prev, next;
-}
-// When removeLast() runs, you can't do map.remove(???)
+// ❌ WRONG — blindly overwrites HashMap but leaves stale TreeMap entry
+store.put(key, new Entry(value, newExpiry));
+expiryIndex.computeIfAbsent(newExpiry, k -> new HashSet<>()).add(key);
+// "docA" now listed under BOTH old expiry AND new expiry in the TreeMap
+```
 
-// ✅ right
-private static class Node {
-    int key;   // ← mandatory
-    int val;
-    Node prev, next;
+```java
+// ✅ FIX — always remove old expiry first
+Entry existing = store.get(key);
+if (existing != null) {
+    removeFromIndex(key, existing.expiryTime);
+}
+store.put(key, new Entry(value, newExpiry));
+expiryIndex.computeIfAbsent(newExpiry, k -> new HashSet<>()).add(key);
+```
+
+---
+
+### Bug 2 — Not Cleaning Up Empty TreeMap Buckets
+
+**Symptom:** Memory leak. After many deletions, the TreeMap retains empty `HashSet` objects. `tailMap` iteration visits them wastefully.
+
+```java
+// ❌ WRONG — leaves empty set in TreeMap
+bucket.remove(key);
+// Missing the cleanup below
+```
+
+```java
+// ✅ FIX — always clean empty buckets
+bucket.remove(key);
+if (bucket.isEmpty()) {
+    expiryIndex.remove(expiryTime);
 }
 ```
 
 ---
 
-**Gotcha 2 — LRU: moveToFront during put() for existing keys.**
+### Bug 3 — Using `tailMap(now)` Instead of `tailMap(now + 1)`
 
-When `put(key, value)` updates an existing key, it must ALSO call moveToFront. Forgetting this means updated keys don't count as "recently used" and get evicted too early.
+**Symptom:** Keys expiring exactly at `now` are counted as active when they should be expired.
 
 ```java
-// ❌ wrong — updates value but doesn't update recency
-public void put(int key, int value) {
-    if (map.containsKey(key)) {
-        map.get(key).val = value;
-        // forgot: moveToFront(map.get(key))
-    }
-}
+// ❌ WRONG — includes entries where expiryTime == now (already dead)
+expiryIndex.tailMap(now)
+```
 
-// ✅ right
-public void put(int key, int value) {
-    if (map.containsKey(key)) {
-        Node node = map.get(key);
-        node.val = value;
-        moveToFront(node);
-    }
+```java
+// ✅ FIX — strictly greater than now
+expiryIndex.tailMap(now + 1)
+```
+
+An entry with `expiryTime == now` has `now >= expiryTime` → it IS expired by the `get` check. `tailMap(now)` includes it. `tailMap(now + 1)` excludes it. Consistent.
+
+---
+
+### Bug 4 — Calling delete() on an Absent Key
+
+**Symptom:** NullPointerException when `store.remove(key)` returns null.
+
+```java
+// ❌ WRONG — assumes entry always exists
+Entry entry = store.remove(key);
+removeFromIndex(key, entry.expiryTime);  // NPE if key was not in store
+```
+
+```java
+// ✅ FIX — null check
+Entry entry = store.remove(key);
+if (entry != null) {
+    removeFromIndex(key, entry.expiryTime);
 }
 ```
 
 ---
 
-**Gotcha 3 — LFU: minFreq reset on new key insertion.**
+### Bug 5 — Using Object[] Instead of Entry Class (Design Bug)
 
-Whenever you insert a brand new key (not an update), reset `minFreq = 1`. A new key always has frequency 1. If you don't reset, you might evict from the wrong bucket.
+Not a runtime crash — a maintenance bomb. Object[] means casting everywhere and index-position coupling that breaks the moment a follow-up adds a third field.
 
 ```java
-// ❌ wrong — doesn't reset minFreq
-public void put(int key, int value) {
-    // ... insert new key with freq 1 ...
-    freqToKeys.computeIfAbsent(1, k -> new LinkedHashSet<>()).add(key);
-    // forgot: minFreq = 1;
-}
-
-// ✅ right
-freqToKeys.computeIfAbsent(1, k -> new LinkedHashSet<>()).add(key);
-minFreq = 1;
+// ❌ WRONG — fragile, unreadable
+Object[] entry = store.get(key);
+long expiry = (Long) entry[1];  // what if follow-up adds lastAccessTime at [1]?
 ```
 
----
-
-**Gotcha 4 — LFU: after bumpFreq, check if the old freq bucket is now empty before updating minFreq.**
-
 ```java
-// ❌ wrong — blindly increments minFreq
-private void bumpFreq(int key) {
-    int freq = keyToFreq.get(key);
-    freqToKeys.get(freq).remove(key);
-    minFreq++;   // WRONG — minFreq only increments if the old bucket is empty
-}
-
-// ✅ right
-private void bumpFreq(int key) {
-    int freq = keyToFreq.get(key);
-    keyToFreq.put(key, freq + 1);
-    freqToKeys.get(freq).remove(key);
-    if (freqToKeys.get(freq).isEmpty()) {
-        freqToKeys.remove(freq);
-        if (minFreq == freq) {
-            minFreq++;   // only bump if the emptied bucket was the minimum
-        }
-    }
-    freqToKeys.computeIfAbsent(freq + 1, k -> new LinkedHashSet<>()).add(key);
+// ✅ FIX — extend the class, compile-time safety guaranteed
+private static class Entry {
+    final String value;
+    final long expiryTime;
+    long lastAccessTime;  // easy to add, named, typed, compiler-enforced
 }
 ```
 
 ---
 
-**Gotcha 5 — Hit Counter: using `>=` vs `>` for the 300-second window.**
-
-"Hits in the past 300 seconds" including the current second means `timestamp - times[i] < 300`, NOT `<= 300`.
-
-```java
-// ❌ wrong — excludes hits from exactly 300s ago (within the window)
-if (timestamp - times[i] < 300) { ... }
-
-// ✅ right (depends on problem — re-read: "in the past 5 minutes" = [ts-299, ts])
-// if current second counts: timestamp - times[i] <= 299 i.e. < 300
-// if problem says "strictly past": timestamp - times[i] < 300
-// The LC 362 version: hits in [ts-299, ts], so < 300 is correct
-```
-
----
-
-**Gotcha 6 — Leaderboard: forgetting to handle score=0 when resetting.**
-
-After `reset()`, calling `addScore()` again must not try to remove a score of 0 from the TreeMap (key 0 was never added).
-
-```java
-// ✅ guard against removing 0 from TreeMap
-public void reset(int playerId) {
-    int currentScore = playerScore.getOrDefault(playerId, 0);
-    playerScore.remove(playerId);
-    if (currentScore > 0) {   // ← guard
-        scoreCount.put(currentScore, scoreCount.get(currentScore) - 1);
-        if (scoreCount.get(currentScore) == 0) {
-            scoreCount.remove(currentScore);
-        }
-    }
-}
-```
-
----
-
-**Gotcha 7 — Rate Limiter: synchronizing on the whole method vs. per-user.**
-
-Using `synchronized` on the method makes every user's request block on every other user — a global bottleneck. Synchronize on the per-user entry instead.
-
-```java
-// ❌ wrong — global lock; all users block each other
-public synchronized boolean allowRequest(String userId) { ... }
-
-// ✅ right — lock per-user entry only
-public boolean allowRequest(String userId) {
-    long[] entry = windows.computeIfAbsent(userId, k -> new long[]{ 0, now });
-    synchronized (entry) {
-        // check and update entry
-    }
-}
-```
-
----
-
-**Gotcha 8 — Token Bucket: forgetting to update lastRefillMs on DENIED requests.**
-
-If you skip the refill step when denying, the next allowed request will retroactively earn tokens for all the "quiet" time during the throttle period — causing a sudden burst to be allowed.
-
-```java
-// ❌ wrong — only refills on allowed requests
-if (b.tokens >= 1.0) {
-    b.tokens -= 1.0;
-    return true;
-}
-// skipped: b.lastRefillMs = now on denied path
-
-// ✅ right — always update lastRefillMs, even when denying
-b.tokens = Math.min(capacity, b.tokens + elapsed * ratePerMs);
-b.lastRefillMs = now;   // ← runs before the if-check, always
-if (b.tokens >= 1.0) {
-    b.tokens -= 1.0;
-    return true;
-}
-return false;
-```
-
----
-
-**Gotcha 9 — Thread-safety: get() on LRU is a write operation.**
-
-Beginners try to use ReadWriteLock, giving get() the read lock. But get() calls moveToFront() which mutates the DLL. It needs the WRITE lock.
-
-```java
-// ❌ wrong — get() mutates, so readLock is incorrect
-public int get(int key) {
-    lock.readLock().lock();   // WRONG
-    try { ... moveToFront(node); ... }
-    finally { lock.readLock().unlock(); }
-}
-
-// ✅ right — or just use synchronized for simplicity
-public synchronized int get(int key) { ... }
-public synchronized void put(int key, int value) { ... }
-```
+> **Lesson learned the hard way (Jul 2026):** In the first draft of this note, `Object[]` was used for the primary store in both brute force and optimal. The `(Long)` cast on index 1 would have been a silent footgun in any follow-up asking to "add a third field." The Entry class costs 5 lines and pays back every time.
 
 ---
 
 ## 🗺️ Practice Plan
 
-Time-box each problem to 35 minutes. If stuck after 25 min, read the template above, then re-attempt.
+### Tier 1 — Directly apply this pattern
 
-> **Reminder of tags:** ✅ Try Now · 🟡 Try after named prerequisite · 🔴 Reference Only
+> 🧩 **Try these (build the muscle first):**
+> - ✅ LC 981 Time Based Key-Value Store — same dual-structure pattern. No `countActive`, so simpler first attempt. HashMap + TreeMap with `floorKey`.
+> - ✅ LC 380 Insert Delete GetRandom O(1) — HashMap + ArrayList for dual access patterns. Different secondary structure, same concept.
+> - 🟡 In-Memory KV Store with TTL (this problem) — attempt after reading this doc fully, then code it from memory.
 
----
+### Tier 2 — Extend the pattern
 
-### Tier 1 — Foundational 2 (do these before anything else)
+> 🧩 **Try after Tier 1:**
+> - 🟡 LC 146 LRU Cache — HashMap + Doubly Linked List. Dual structure with O(1) for both get and eviction order.
+> - 🟡 LC 1670 Design Front Middle Back Queue — dual Deque for position-based access.
+> - 🔴 LC 460 LFU Cache — HashMap + TreeMap (frequency → list). More complex secondary key. Attempt only after LC 146 is comfortable.
 
-These two problems force you to build the DLL from scratch. Until you can do this from memory, you're not ready for the variants.
+### Tier 3 — Advanced / Reference Only
 
-1. ✅ **LC 146 LRU Cache** — implement from scratch using the DLL template in this doc
-2. ✅ **LC 362 Design Hit Counter** — circular array variant first, deque variant second
-
----
-
-### Tier 2 — Core Hybrid Problems
-
-3. ✅ **LC 1244 Design a Leaderboard** — HashMap + TreeMap template
-4. 🟡 **LC 460 LFU Cache** — attempt after LC 146 is muscle memory; the three-HashMap approach is counter-intuitive without that foundation
-
----
-
-### Tier 3 — Variants and Extensions
-
-5. 🟡 **LRU Cache with TTL** — add PriorityQueue to LC 146 (variant described in this doc; attempt after Tier 2)
-6. 🟡 **LC 703 Kth Largest Element in a Stream** — min-heap keeps a window of top-K; simpler than leaderboard
-7. 🟡 **LC 295 Find Median from Data Stream** — two heaps (max-heap lower half, min-heap upper half); attempt after heap deep dive
-
----
-
-### Tier 4 — Reference Only (multi-pattern / advanced)
-
-8. 🔴 **LC 432 All O(1) Data Structure** — doubly-linked list of frequency buckets with O(1) getMaxKey/getMinKey; hard to design cold; read editorial
-9. 🔴 **Consistent Hashing** — see `SystemDesignConcepts/05-consistent-hashing.md` (planned)
-10. ✅ **Rate Limiter** — implement all 4 algorithms (Fixed Window, Sliding Log, Token Bucket, Sliding Counter); explain the tradeoff table without notes
-
----
-
-### How to use this plan
-
-- **Pace:** 1 problem per session, not 3 in one night
-- **When stuck:** at 25 min, re-read the template, not the answer
-- **Revision:** after Tier 1-2, redo LC 146 completely from memory (DLL + HashMap, no LinkedHashMap shortcut)
-- **Victory criterion:** can implement LRU Cache (DLL variant, not LinkedHashMap) and LRU+TTL from scratch in under 30 minutes without looking at notes
+> 🧩 **Reference only (read editorial, don't attempt cold):**
+> - 🔴 LC 295 Find Median from Data Stream — two heaps (max-heap + min-heap). Same "two structures, two access patterns" philosophy but the secondary structure is a heap.
+> - 🔴 LC 352 Data Stream as Disjoint Intervals — TreeMap for merge-by-range queries. Complex merge logic on top of the dual-structure base.
 
 ---
 
 ## 🧾 TL;DR — One-Page Summary
 
-- **The pattern** = HashMap (O(1) lookup) + second DS (ordering/eviction/windowing)
-- **The 4 archetypes of "second DS":** DoublyLinkedList (recency), TreeMap/PriorityQueue (value ordering), Deque (time window), Frequency buckets (frequency ordering)
-- **LRU Cache:** HashMap + DLL | get O(1), put O(1) | Node must store key | sentinel head/tail eliminates null checks
-- **LRU + TTL:** add PriorityQueue min-heap by expiryTime | get checks expiry before returning | drain heap on put
-- **LFU Cache:** 3 HashMaps + minFreq pointer | all O(1) | reset minFreq=1 on new key insert | LinkedHashSet preserves LRU tiebreak
-- **Hit Counter:** circular array (O(1) time/space) or Deque (O(N) space, handles variable windows)
-- **Leaderboard:** HashMap + TreeMap | addScore O(log N), top O(K log N) | score is the TreeMap key, not playerId
-- **Rate Limiter:** 4 algorithms — Fixed Window (simplest, boundary burst bug), Sliding Log (exact, O(maxReq) memory), Token Bucket ⭐ (real-world default, burst-friendly), Sliding Counter (O(1) approx) | thread safety = per-user `synchronized (entry)`, not global lock
-- **Gotcha 1 (LRU):** Node must store `key` — you need it for HashMap.remove() on eviction
-- **Gotcha 2 (LFU):** reset minFreq=1 on every new key insert, nowhere else
-- **Gotcha 3 (thread-safety):** LRU's get() is a write operation (calls moveToFront) — it needs the write lock
-- **Tier 1 (must master):** LC 146, LC 362
-- **Tier 2:** LC 1244, LC 460
-- **WEX lesson (June 2026):** answered PriorityQueue for TTL ✅ but missed DoublyLinkedList for LRU ❌. Second DS is always the miss.
+**The signal:** A problem has two query types — one needs O(1) key lookup, the other needs O(log n) sorted range access.
+
+**The solution:** Two parallel structures:
+- `HashMap<String, Entry>` — answers key-based point queries in O(1)
+- `TreeMap<Long, Set<String>>` — answers time/range queries in O(log n)
+
+**The Entry class:** Always write an inner class. Never `Object[]`. Compile-time type safety, zero casting, easy to extend with a third field.
+
+**The sync contract:** Every write (set, delete) touches BOTH structures. Missing either one creates ghost entries that silently corrupt `countActive`.
+
+**The three things to get right:**
+
+| Thing | What to do |
+|---|---|
+| `set` with existing key | Remove old expiry from TreeMap FIRST |
+| `delete` | Null-check the returned entry before removing from index |
+| `countActive` | Use `tailMap(now + 1)` not `tailMap(now)` |
+
+**Follow-up answers at a glance:**
+
+| Follow-up | Answer |
+|---|---|
+| Thread safety | `ConcurrentHashMap` + `ReentrantReadWriteLock` on TreeMap |
+| Sliding TTL (refresh on get) | On live `get`, call `set(key, value, originalTtl)` again |
+| Background eviction | `ScheduledExecutorService` calling `expiryIndex.headMap(now)` and bulk-deleting |
+| Third field (e.g. last-access-time) | Add it to the Entry class — zero structural change |
 
 ---
 
 ## 🔄 Changelog
 
 | Date | Change |
-| --- | --- |
-| June 2026 | Created. Covers LRU, LFU, Hit Counter, Leaderboard at depth + cross-refs for Rate Limiter, Consistent Hashing, Task Scheduler. Triggered by WEX LRU+TTL interview miss. |
-| July 2026 | **Added Problem 5 — Rate Limiter.** Covers all 4 algorithms (Fixed Window, Sliding Log, Token Bucket, Sliding Counter) with full Java code, visuals, and tradeoff table. Moved Rate Limiter from cross-ref (planned external file) to first-class problem in this doc. Added Gotchas 7 and 8 for rate limiter-specific bugs. |
-| July 2026 | **Added Demo / Calling Code blocks** after every class implementation (LRU, LFU, Hit Counter, Leaderboard, all 4 Rate Limiter algorithms). Each demo shows exact method call sequence with inline comments showing expected output and internal state after each operation. |
+|---|---|
+| Jul 2026 | **File created.** In-Memory KV Store with TTL deep dive. Triggered by Docusign interview confirmation (friend's Q2, Jul 2026). Covers Entry class design, dual-structure rationale, sync contract, gotchas, and practice plan. Previous stub content replaced with full deep dive. |

@@ -206,6 +206,18 @@ Apply this to every **Pattern section** and every **Worked Walkthrough** in a de
 | WW-7 — LC 380 Insert Delete GetRandom | Type 2 (no trace) + Type 3 (swap-with-last invariant missing) | ✅ done July 2026 |
 | WW-8 — LC 146 LRU Cache | Type 2 (no trace) + Type 3 (DLL+map invariant missing) | ✅ done July 2026 |
 
+### `DSA/DeepDive/binary-search-fundamentals.md`
+
+> Created July 2026 from scratch following all current standards. No inherited gaps. Register here for future audits.
+
+| Location | Gap type | Status |
+|---|---|---|
+| All 5 patterns | Types 1–5 applied at creation | ✅ clean at creation |
+| Style Habits — Method Fallbacks | Type 5 applied at creation (ceiling division fallback) | ✅ clean at creation |
+| All 9 walkthroughs | 5-part format applied at creation | ✅ clean at creation |
+
+---
+
 ### `DSA/DeepDive/graphs-fundamentals.md`
 
 > Audited in parallel session. Three SP visuals added (BFS-vs-Dijkstra, Bellman-Ford trace, Floyd-Warshall relay). No known gaps as of June 2026.
@@ -229,3 +241,4 @@ Apply this to every **Pattern section** and every **Worked Walkthrough** in a de
 | July 2026 | Created. Captures 4 upgrade types identified from two-pointers review. Known gaps table seeded with two-pointers and graphs files. |
 | July 2026 | **Added Upgrade Type 5 — Missing Method Fallbacks.** Triggered by gap found in `hashmaps-fundamentals.md` vs `arrays-and-hashing.md` (playbook had fallback section, deep-dive did not). Added Type 5 to the per-section checklist as a whole-file audit item. Added hashmaps to Known Gaps table (✅ done). |
 | July 2026 | **Full hashmaps-fundamentals.md upgrade (Types 2, 3).** Applied running traces to all 6 patterns and all 8 walkthroughs. KEY INVARIANT callouts added for Pattern 4 (prefix count), WW-4 (bucket sort), WW-7 (swap-with-last), WW-8 (LRU DLL). Pattern 6 completed (steps + template code + trace). Pattern 5 marked deferred. Known Gaps table updated with 14 new rows, all ✅ done. |
+| July 2026 | **Registered binary-search-fundamentals.md.** File created from scratch applying all 5 upgrade types at creation time — no inherited gaps. Added to Known Gaps table as clean baseline for future audits. |

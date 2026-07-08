@@ -4,6 +4,12 @@
 > **Format:** Live coding, 45–60 min, 1–2 problems. Brute force NOT accepted — must reach optimal.
 > **Source:** Compiled from real Curefit interview reports (2021–2025, LeetCode Discuss / GFG / Glassdoor)
 
+> ⚠️ **Post-Interview Update (Round 1 — Jul 2026):**
+> The actual questions asked were NOT from the top 10 list above.
+> Q1: Maximize Distance to Closest Person (LC #849) — Gap Scanning pattern
+> Q2: Minimize Max Gap after removing K gems — Sliding Window on Diffs pattern
+> Both are added below as **Bonus Section** for Round 2 prep.
+
 ---
 
 ## Table of Contents
@@ -18,6 +24,15 @@
 8. [Longest Univalue Path in Binary Tree](#8-longest-univalue-path-in-binary-tree--lc-687)
 9. [Jump Game II](#9-jump-game-ii--lc-45)
 10. [Word Break](#10-word-break--lc-139)
+
+---
+
+### ⚠️ Bonus — Actual Round 1 Questions (Missed Patterns)
+
+11. [Maximize Distance to Closest Person](#11-maximize-distance-to-closest-person--lc-849) ← **Q1 asked in Round 1**
+12. [Minimize Max Gap After K Removals](#12-minimize-max-gap-after-k-removals--custom) ← **Q2 asked in Round 1**
+13. [Magnetic Force Between Two Balls](#13-magnetic-force-between-two-balls--lc-1552) ← same pattern family as Q2
+14. [Split Array Largest Sum](#14-split-array-largest-sum--lc-410) ← same pattern family as Q2
 
 ---
 
@@ -1828,5 +1843,603 @@ public boolean wordBreak(String s, List<String> wordDict) {
 
 **Q4: Why not use a Trie instead of HashSet?**
 > Trie avoids repeated `substring()` allocations. Build a Trie from the dictionary, then during the DP inner loop, walk the Trie character by character from position `j`. When you hit a word-end node, that's a valid split point. Keeps it O(n²) without the hidden O(k) substring cost.
+
+---
+
+---
+
+# ⚠️ Bonus Section — Actual Round 1 Questions
+
+> These two patterns were **NOT in the original top 10** but were **actually asked in Round 1 (Jul 2026)**.
+> Curefit uses custom array-manipulation variants — not standard LeetCode problems.
+> The pattern family: **Gap scanning on sorted/indexed arrays** + **Sliding window min-of-max**.
+> Master these before Round 2.
+
+---
+
+## 11. Maximize Distance to Closest Person — LC #849
+
+**Difficulty:** Medium | **Pattern:** Gap Scanning (Greedy)
+**Asked in:** Round 1 Q1 — exact problem. Phrasing: *"find the seat with maximum distance to nearest person"*
+
+---
+
+### 🎯 Problem Statement
+
+An array `seats` where `seats[i] = 1` means a person is seated, `seats[i] = 0` means empty. Find the **index** of the empty seat that maximizes the minimum distance to the nearest occupied seat. Return the first such seat on ties.
+
+```
+Example:
+seats = [1, 0, 0, 0, 1, 0, 1]
+Output: 2
+
+At index 2: nearest person is at 0 (dist 2) and 4 (dist 2) → min = 2
+At index 1: min(1, 3) = 1
+At index 3: min(3, 1) = 1
+At index 5: min(1, 1) = 1
+→ index 2 has the maximum min-distance of 2 ✅
+```
+
+---
+
+### 🧠 Discussion — How to Think About This
+
+Empty seats sit inside **gaps** between occupied seats (or between an edge and the first/last person). The best seat in any gap is at the **midpoint** of that gap.
+
+Three types of gaps:
+1. **Left edge gap** — from index 0 to first person. Best seat = index 0, distance = first person's index.
+2. **Middle gap** — between two adjacent people at `L` and `R`. Best seat = midpoint, distance = `(R - L) / 2`.
+3. **Right edge gap** — from last person to end. Best seat = last index, distance = `n - 1 - lastPerson`.
+
+---
+
+### 🐌 Brute Force — O(n²)
+
+For each empty seat, scan left and right to find the nearest person.
+
+```java
+public int maxDistToClosest(int[] seats) {
+    int n = seats.length;
+    int maxDist = 0;
+    int bestSeat = -1;
+
+    for (int i = 0; i < n; i++) {
+        if (seats[i] == 0) {
+            int left = Integer.MAX_VALUE;
+            int right = Integer.MAX_VALUE;
+            // Scan left
+            for (int l = i - 1; l >= 0; l--) {
+                if (seats[l] == 1) {
+                    left = i - l;
+                    break;
+                }
+            }
+            // Scan right
+            for (int r = i + 1; r < n; r++) {
+                if (seats[r] == 1) {
+                    right = r - i;
+                    break;
+                }
+            }
+            int dist = Math.min(left, right);
+            if (dist > maxDist) {
+                maxDist = dist;
+                bestSeat = i;
+            }
+        }
+    }
+    return bestSeat;
+}
+```
+
+---
+
+### 💡 Idea Behind Optimisation — Gap Scanning O(n) / O(1)
+
+Scan once, track `lastPerson`. When you hit a new person:
+- If `lastPerson == -1`: left edge gap of size `i` → bestSeat = 0.
+- Else: middle gap → midpoint = `lastPerson + (i - lastPerson) / 2`, distance = `(i - lastPerson) / 2`.
+
+After the loop: right edge gap = `n - 1 - lastPerson`.
+
+### 🎨 Visual — Gap Types
+
+```
+seats = [1, 0, 0, 0, 1, 0, 1]
+         ↑              ↑     ↑
+         L              M     R
+
+Left edge gap:  none (first person at index 0)
+Middle gap 1:   L=0, R=4 → dist=(4-0)/2=2, midSeat=0+2=2 ← WINNER
+Middle gap 2:   L=4, R=6 → dist=(6-4)/2=1, midSeat=4+1=5
+Right edge:     lastPerson=6, right=7-1-6=0 → no gain
+
+KEY INVARIANT:
+  For middle gap [L..R]: best seat is floor midpoint = L + (R-L)/2.
+  For left edge gap [0..R]: best seat is 0, distance = R.
+  For right edge gap [L..n-1]: best seat is n-1, distance = n-1-L.
+  Process all three; track max distance seen.
+```
+
+---
+
+### 🚀 Optimal Java Solution
+
+```java
+public int maxDistToClosest(int[] seats) {
+    int n = seats.length;
+    int maxDist = 0;
+    int bestSeat = -1;
+    int lastPerson = -1;
+
+    for (int i = 0; i < n; i++) {
+        if (seats[i] == 1) {
+            if (lastPerson == -1) {
+                // Left edge gap — best seat is index 0
+                if (i > maxDist) {
+                    maxDist = i;
+                    bestSeat = 0;
+                }
+            } else {
+                // Middle gap between two people
+                int halfGap = (i - lastPerson) / 2;
+                int midSeat = lastPerson + halfGap;
+                if (halfGap > maxDist) {
+                    maxDist = halfGap;
+                    bestSeat = midSeat;
+                }
+            }
+            lastPerson = i;
+        }
+    }
+
+    // Right edge gap — process AFTER the loop (lastPerson is now final)
+    int rightGap = n - 1 - lastPerson;
+    if (rightGap > maxDist) {
+        bestSeat = n - 1;
+    }
+
+    return bestSeat;
+}
+```
+
+> ⚠️ **Bug Kapil made in Round 1:** Right edge check was placed INSIDE the for loop.
+> At i=0 (first person), `lastPerson` becomes 0, so `rightGap = n-1-0 = n-1` — massively wrong.
+> It must be OUTSIDE the loop — only then does `lastPerson` hold the true last person's index.
+
+---
+
+### ⏱️ Complexity
+
+| Approach | Time | Space |
+|---|---|---|
+| Brute Force | O(n²) | O(1) |
+| **Gap Scanning (optimal)** | **O(n)** | **O(1)** |
+
+---
+
+### 🔁 Follow-Up Questions
+
+**Q1: What if there are no empty seats?**
+> Return -1. Guard: `if (!Arrays.stream(seats).anyMatch(s -> s == 0)) return -1;`
+
+**Q2: What if there's only one person?**
+> Both edge cases activate. Left edge from 0 to person, right edge from person to n-1. Return whichever end is farther.
+
+**Q3: What if we want the distance value, not the seat index?**
+> Track `maxDist` and return it instead of `bestSeat`.
+
+**Q4: Two-pass prefix-suffix variant — explain it.**
+> `left[i]` = distance to nearest person on the left (infinity if none).
+> `right[i]` = distance to nearest person on the right (infinity if none).
+> `answer = argmax of min(left[i], right[i])` over all empty seats.
+> O(n) time, O(n) space — easier to code, good to mention as alternative.
+
+---
+
+---
+
+## 12. Minimize Max Gap After K Removals — Custom
+
+**Difficulty:** Medium-Hard | **Pattern:** Sliding Window Min-of-Max on Diff Array
+**Asked in:** Round 1 Q2 — exact problem (gems variant). Phrasing: *"remove K gems from sorted array, minimize largest gap between adjacent remaining gems"*
+
+---
+
+### 🎯 Problem Statement
+
+Given a sorted array `arr` of N elements, remove exactly K elements to minimize the **maximum gap** between any two adjacent remaining elements.
+
+```
+Example:
+arr = [12, 16, 22, 31, 31, 38], K = 3
+Output: 6
+
+Keep 3 gems: [12, 16, 22] → gaps = [4, 6] → max = 6
+All other windows of 3 give a larger max gap.
+```
+
+---
+
+### 🧠 Discussion — How to Think About This
+
+**Key insight 1 — Diff array:** Gaps between adjacent kept elements are what matter. Compute `diffs[i] = arr[i+1] - arr[i]` for all consecutive pairs.
+
+**Key insight 2 — Contiguous window:** Since the array is sorted, the optimal N-K elements to keep are always a **contiguous subarray**. Why? Skipping any interior element in a sorted array can only widen the gap between its neighbors — never reduce it. So we never benefit from non-contiguous selection.
+
+**Key insight 3 — Sliding window:** We need to find the window of size `N-K` in `arr` (equivalently, a window of `N-K-1` diffs) whose **maximum diff is smallest**.
+
+```
+keep = N - K = 6 - 3 = 3
+windowSize on diffs = keep - 1 = 2
+
+diffs = [4, 6, 9, 0, 7]
+
+Windows of size 2:
+  [4,6]  → max=6   ← corresponds to arr[0..2] = [12,16,22]
+  [6,9]  → max=9
+  [9,0]  → max=9
+  [0,7]  → max=7
+
+Min of maxes = 6 ✅
+```
+
+---
+
+### 🐌 Brute Force — Try All C(N, N-K) Subsets
+
+```java
+// O(C(N,K) * N) — exponential for large K
+// Enumerate all subsets of size N-K, compute max gap, track minimum
+// Only mention this — don't code it
+```
+
+---
+
+### 💡 Idea Behind Optimisation — Sliding Window O(N × K)
+
+1. Compute diffs array (size N-1).
+2. Slide a window of size `keep-1 = N-K-1` over diffs.
+3. For each window, compute the max diff.
+4. Return the minimum across all window maxes.
+
+### 🎨 Visual — Sliding Window on Diffs
+
+```
+arr   = [12, 16, 22, 31, 31, 38]
+         ↑────────────↑           window 1: [12,16,22], keep=3
+              ↑────────────↑      window 2: [16,22,31]
+                   ↑────────────↑ window 3: [22,31,31]
+                        ↑────────────↑ window 4: [31,31,38]
+
+diffs = [ 4,   6,   9,   0,   7 ]
+        [← w1 →]
+             [← w2 →]
+                  [← w3 →]
+                       [← w4 →]
+
+Window 1 max = max(4,6) = 6   ← minimum!
+Window 2 max = max(6,9) = 9
+Window 3 max = max(9,0) = 9
+Window 4 max = max(0,7) = 7
+
+Answer = 6 ✅
+
+KEY INVARIANT:
+  Window of N-K consecutive elements in arr
+  = window of N-K-1 consecutive diffs.
+  Best window = one with smallest max diff.
+```
+
+---
+
+### 🚀 Optimal Java Solution
+
+```java
+public static int minimizeMaxGap(int[] arr, int k) {
+    int n = arr.length;
+    int keep = n - k;
+
+    // Step 1: Compute consecutive diffs of the sorted array
+    int[] diffs = new int[n - 1];
+    for (int i = 0; i < n - 1; i++) {
+        diffs[i] = arr[i + 1] - arr[i];
+    }
+
+    // Step 2: Sliding window of size (keep-1) over diffs
+    // Find the window with the smallest maximum diff
+    int windowSize = keep - 1;
+    int minMaxGap = Integer.MAX_VALUE;
+
+    for (int i = 0; i <= diffs.length - windowSize; i++) {
+        int windowMax = 0;
+        for (int j = i; j < i + windowSize; j++) {
+            windowMax = Math.max(windowMax, diffs[j]);
+        }
+        minMaxGap = Math.min(minMaxGap, windowMax);
+    }
+
+    return minMaxGap;
+}
+```
+
+**O(N) optimal — Sliding Window Max with Monotonic Deque (mention as follow-up):**
+
+```java
+public static int minimizeMaxGapOptimal(int[] arr, int k) {
+    int n = arr.length;
+    int keep = n - k;
+    int windowSize = keep - 1;
+
+    int[] diffs = new int[n - 1];
+    for (int i = 0; i < n - 1; i++) {
+        diffs[i] = arr[i + 1] - arr[i];
+    }
+
+    // Monotonic deque — front always holds index of max in current window
+    Deque<Integer> deque = new ArrayDeque<>();
+    int minMaxGap = Integer.MAX_VALUE;
+
+    for (int i = 0; i < diffs.length; i++) {
+        // Remove indices that are out of the current window
+        while (!deque.isEmpty() && deque.peekFirst() < i - windowSize + 1) {
+            deque.pollFirst();
+        }
+        // Maintain decreasing order — remove smaller elements from back
+        while (!deque.isEmpty() && diffs[deque.peekLast()] <= diffs[i]) {
+            deque.pollLast();
+        }
+        deque.offerLast(i);
+
+        // Window is full — record the max (front of deque)
+        if (i >= windowSize - 1) {
+            minMaxGap = Math.min(minMaxGap, diffs[deque.peekFirst()]);
+        }
+    }
+
+    return minMaxGap;
+}
+```
+
+---
+
+### ⏱️ Complexity
+
+| Approach | Time | Space |
+|---|---|---|
+| Brute Force (all subsets) | O(C(N,K) × N) | O(N) |
+| Sliding Window (simple) | O(N × K) | O(N) |
+| **Monotonic Deque (optimal)** | **O(N)** | **O(N)** |
+
+---
+
+### 🔁 Follow-Up Questions
+
+**Q1: Prove that the optimal selection is always a contiguous window.**
+> In a sorted array, suppose we select non-contiguous elements — i.e., we skip index `m` between kept elements at `i` and `j` (i < m < j). The gap is `arr[j] - arr[i]`.
+> If instead we kept `arr[m]` and dropped either `i` or `j`, our gaps would be `arr[m]-arr[i]` and `arr[j]-arr[m]`, both ≤ `arr[j]-arr[i]` (since array is sorted).
+> So contiguous is always at least as good. ✅
+
+**Q2: What if K ≥ N-2? (Edge case — the problem says K < N-2 but worth knowing)**
+> If we keep only 2 elements, we pick the pair with minimum difference — just the minimum adjacent diff in the entire array.
+
+**Q3: What if the array is NOT sorted?**
+> Sort it first (O(N log N)), then apply the same approach. The contiguous window insight only holds for sorted arrays.
+
+**Q4: Binary Search variant — how would you solve this with binary search?**
+> Binary search on the answer `g` (max gap). For each `g`, check: can we keep N-K elements such that all consecutive gaps ≤ g? Greedy check: scan the diffs, count the longest run of consecutive diffs all ≤ g. If that run length ≥ N-K-1, feasible. O(N log(maxGap)) time.
+
+---
+
+---
+
+## 13. Magnetic Force Between Two Balls — LC #1552
+
+**Difficulty:** Medium | **Pattern:** Binary Search on Answer + Greedy Check
+**Pattern family:** Same as Q2 — "minimize/maximize a gap value" but solved with binary search instead of sliding window
+
+---
+
+### 🎯 Problem Statement
+
+Place `m` balls in `n` baskets (positions given in an array). Maximize the **minimum** magnetic force (distance) between any two balls.
+
+```
+Example:
+position = [1, 2, 3, 4, 7], m = 3
+Output: 3
+
+Place balls at positions 1, 4, 7 → gaps: 3, 3 → minimum = 3
+```
+
+---
+
+### 🧠 Discussion
+
+**Why binary search?** The answer (minimum gap) lies in range `[1, max(position) - min(position)]`. For any candidate gap `g`:
+- **Feasibility check:** Can we place `m` balls such that every pair is at least `g` apart?
+- **Greedy:** Sort positions. Place first ball at `position[0]`. For each subsequent position, place a ball only if it's at least `g` away from the last placed ball. Count how many balls we can place.
+- If count ≥ m → gap `g` is feasible → try larger.
+- If count < m → gap `g` too large → try smaller.
+
+This is a classic **binary search on the answer** pattern.
+
+---
+
+### 🚀 Java Solution
+
+```java
+public int maxDistance(int[] position, int m) {
+    Arrays.sort(position);
+    int lo = 1;
+    int hi = position[position.length - 1] - position[0];
+    int result = 1;
+
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (canPlace(position, m, mid)) {
+            // mid is feasible — try larger gap
+            result = mid;
+            lo = mid + 1;
+        } else {
+            // mid too large — reduce
+            hi = mid - 1;
+        }
+    }
+
+    return result;
+}
+
+private boolean canPlace(int[] pos, int m, int minGap) {
+    int count = 1;
+    int lastPlaced = pos[0];
+
+    for (int i = 1; i < pos.length; i++) {
+        if (pos[i] - lastPlaced >= minGap) {
+            count++;
+            lastPlaced = pos[i];
+            if (count == m) {
+                return true;
+            }
+        }
+    }
+
+    return count >= m;
+}
+```
+
+---
+
+### ⏱️ Complexity
+
+| | Value |
+|---|---|
+| **Time** | O(N log N + N log D) where D = max position range |
+| **Space** | O(1) |
+
+---
+
+### 🔁 Follow-Up
+
+**Q: How does this relate to the Gems Q2 problem?**
+> Q2 (Gems): minimize the maximum gap → sliding window approach works because we keep a fixed count of elements.
+> LC #1552: maximize the minimum gap → binary search on answer works because we're optimizing a threshold.
+> Both are "optimize a gap value" problems. When count of kept elements is fixed → sliding window. When you need to binary search a threshold → binary search on answer + greedy check.
+
+---
+
+---
+
+## 14. Split Array Largest Sum — LC #410
+
+**Difficulty:** Hard | **Pattern:** Binary Search on Answer + Greedy Check
+**Pattern family:** Same binary search on answer — directly related to Q2 and LC #1552
+
+---
+
+### 🎯 Problem Statement
+
+Split array `nums` into `k` non-empty subarrays to **minimize the largest subarray sum**.
+
+```
+Example:
+nums = [7, 2, 5, 10, 8], k = 2
+Output: 18
+
+Split: [7,2,5] and [10,8] → sums 14 and 18 → max = 18
+Other splits give larger max.
+```
+
+---
+
+### 🧠 Discussion
+
+Same binary search template as LC #1552:
+- Binary search on the answer `g` (maximum allowed subarray sum).
+- **Feasibility check:** Can we split into ≤ k subarrays each with sum ≤ g?
+- **Greedy:** Greedily fill each subarray until adding next element would exceed `g`. Count subarrays needed.
+
+---
+
+### 🚀 Java Solution
+
+```java
+public int splitArray(int[] nums, int k) {
+    int lo = Arrays.stream(nums).max().getAsInt();
+    int hi = Arrays.stream(nums).sum();
+    int result = hi;
+
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (canSplit(nums, k, mid)) {
+            result = mid;
+            hi = mid - 1;
+        } else {
+            lo = mid + 1;
+        }
+    }
+
+    return result;
+}
+
+private boolean canSplit(int[] nums, int k, int maxSum) {
+    int subarrays = 1;
+    int currentSum = 0;
+
+    for (int num : nums) {
+        if (currentSum + num > maxSum) {
+            // Start a new subarray
+            subarrays++;
+            currentSum = num;
+            if (subarrays > k) {
+                return false;
+            }
+        } else {
+            currentSum += num;
+        }
+    }
+
+    return true;
+}
+```
+
+---
+
+### ⏱️ Complexity
+
+| | Value |
+|---|---|
+| **Time** | O(N log(sum)) |
+| **Space** | O(1) |
+
+---
+
+### 🔁 The Pattern Family — One Template, Many Problems
+
+```
+Binary Search on Answer template:
+
+lo = minimum possible answer
+hi = maximum possible answer
+
+while (lo <= hi):
+    mid = lo + (hi - lo) / 2
+    if feasible(mid):
+        result = mid
+        move boundary toward better answer
+    else:
+        move boundary away
+
+feasible(mid) = greedy check in O(N)
+```
+
+| Problem | Binary Search on | Feasible if |
+|---|---|---|
+| LC #1552 Magnetic Force | minimum gap | can place m balls with gap ≥ mid |
+| LC #410 Split Array | maximum subarray sum | can split into ≤ k parts with sum ≤ mid |
+| Gems Q2 (Round 1) | maximum gap | can keep N-K gems with gap ≤ mid |
+| LC #875 Koko Eating | eating speed | can eat all bananas in h hours at speed mid |
+
+> **Lesson learned the hard way (Jul 2026):** Curefit's Q2 (Gems) belongs to this binary search family. The sliding window approach also works but binary search on answer is the more generalizable pattern — and the one an interviewer expects you to reach for at SDE 3 level.
 
 ---

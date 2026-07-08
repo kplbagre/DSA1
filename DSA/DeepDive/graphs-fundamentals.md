@@ -3768,6 +3768,125 @@ Collections.reverse(path);
 
 ---
 
+### 0-1 BFS — Deque Shortest Path (Weights ∈ {0, 1} Only)
+
+> **The signal:** edge weights are ONLY 0 or 1. Dijkstra works but is O((V+E) log V). 0-1 BFS is O(V+E) — no priority queue, no log factor. Uses a plain `Deque` (double-ended queue — a queue that supports insertion at both front and back).
+
+> **The invariant:** cost-0 edges are "free" — the neighbor is equally close. Push it to the **front** (process this level). Cost-1 edges add distance — push to the **back** (process next level). The deque front always holds the minimum-cost element, exactly like a priority queue, but without sorting.
+
+**When to use 0-1 BFS vs alternatives:**
+
+| Edge weights | Algorithm | Time |
+|---|---|---|
+| All equal (=1) | Regular BFS | O(V + E) |
+| Only 0 or 1 | **0-1 BFS with Deque** | **O(V + E)** |
+| Non-negative integers | Dijkstra | O((V + E) log V) |
+| Negative allowed | Bellman-Ford | O(V · E) |
+
+**Steps in plain English:**
+
+1. Initialize `dist[]` to ∞ for all nodes; set `dist[src] = 0`.
+2. Seed the deque with the source node.
+3. While the deque is not empty: poll from the **front**.
+4. For each neighbor, compute `newDist = dist[curr] + edgeCost` (edgeCost = 0 or 1).
+5. If `newDist < dist[neighbor]` — update dist, then:
+   - edgeCost = 0 → `deque.addFirst(neighbor)` (same cost level, process immediately)
+   - edgeCost = 1 → `deque.addLast(neighbor)` (next cost level, process later)
+
+### 🎨 Visual — Deque Behavior: addFirst vs addLast
+
+```
+Grid problem: each cell has a sign pointing one direction.
+Moving IN the sign direction = cost 0 (free).
+Moving AGAINST/PERPENDICULAR = cost 1 (change the sign).
+
+Cell (0,0): sign points RIGHT →
+
+             cost=0 move               cost=1 move
+             (go RIGHT, follow sign)   (go DOWN, change sign)
+             neighbor = (0,1)          neighbor = (1,0)
+
+Deque BEFORE processing (0,0):
+  FRONT [ (0,0) dist=0 ] BACK
+
+Processing (0,0):
+  → neighbor (0,1): edgeCost=0 → addFirst
+  → neighbor (1,0): edgeCost=1 → addLast
+
+Deque AFTER processing (0,0):
+  FRONT [ (0,1) dist=0 ] [ (1,0) dist=1 ] BACK
+         ↑ free move first                ↑ costly move deferred
+
+Next poll: (0,1) dist=0  ← processed at "level 0" (same cost as start)
+
+KEY INVARIANT:
+  The deque front always holds the minimum-cost unvisited node.
+  addFirst (cost-0) keeps this level's cost constant.
+  addLast  (cost-1) defers processing to the next cost level.
+  Result: deque front is monotonically non-decreasing in cost.
+  → Same correctness guarantee as Dijkstra, but O(1) insert instead of O(log n).
+```
+
+**Canonical problem — LC 1368 Min Cost to Make at Least One Valid Path in a Grid:**
+
+Each cell `grid[i][j]` has a sign: 1=right, 2=left, 3=down, 4=up. Moving in the signed direction costs 0. Any other direction costs 1. Find minimum cost to reach `(m-1, n-1)` from `(0,0)`.
+
+```java
+public int minCost(int[][] grid) {
+    int m = grid.length;
+    int n = grid[0].length;
+
+    // Directions: 0=right, 1=left, 2=down, 3=up
+    // grid values: 1=right, 2=left, 3=down, 4=up (1-indexed → use d+1 to compare)
+    int[][] dirs = { {0,1}, {0,-1}, {1,0}, {-1,0} };
+
+    int[][] dist = new int[m][n];
+    for (int[] row : dist) {
+        Arrays.fill(row, Integer.MAX_VALUE);
+    }
+    dist[0][0] = 0;
+
+    Deque<int[]> deque = new ArrayDeque<>();
+    deque.addFirst(new int[]{ 0, 0 });
+
+    while (!deque.isEmpty()) {
+        int[] curr = deque.pollFirst();
+        int r = curr[0];
+        int c = curr[1];
+
+        for (int d = 0; d < 4; d++) {
+            int nr = r + dirs[d][0];
+            int nc = c + dirs[d][1];
+            if (nr < 0 || nr >= m || nc < 0 || nc >= n) {
+                continue;
+            }
+            // grid[r][c] is 1-indexed; d is 0-indexed → compare with d+1
+            int edgeCost = (grid[r][c] == d + 1) ? 0 : 1;
+            int newDist = dist[r][c] + edgeCost;
+
+            if (newDist < dist[nr][nc]) {
+                dist[nr][nc] = newDist;
+                if (edgeCost == 0) {
+                    deque.addFirst(new int[]{ nr, nc });   // free move — same level
+                } else {
+                    deque.addLast(new int[]{ nr, nc });    // costly move — next level
+                }
+            }
+        }
+    }
+    return dist[m - 1][n - 1];
+}
+```
+
+> ⚠️ **Common mistake — using `>` instead of `>=` for skip check:** Unlike Dijkstra (where you skip if `d > dist[u]` due to stale heap entries), 0-1 BFS doesn't re-insert stale entries as aggressively. The `newDist < dist[nr][nc]` check already prevents redundant processing. Don't add a Dijkstra-style stale check here — it breaks the algorithm.
+
+> 🧩 **Try these (0-1 BFS ladder):**
+> - 🟡 **LC 1368** Min Cost to Make at Least One Valid Path in a Grid — canonical 0-1 BFS on a grid
+> - 🟡 **LC 2290** Minimum Obstacle Removal to Reach Corner — same pattern; 0=free, 1=obstacle (cost to remove)
+> - 🔴 **LC 1129** Shortest Path with Alternating Colors — 0-1 BFS on a graph with state = (node, last_color_used)
+
+---
+
 ### Bellman-Ford Algorithm [Striver G-41]
 
 > **What it does:** computes shortest paths from a single source, **even with negative edge weights**. Also detects negative cycles.

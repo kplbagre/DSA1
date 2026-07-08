@@ -15,6 +15,7 @@
 | July 2026 | Walkthroughs extended to 3 more files: hashmaps-fundamentals.md (8 WW), linked-list-fundamentals.md (8 WW), sets-fundamentals.md (7 WW). All replaced old 3-walkthrough format with 5-part WW format. |
 | July 2026 | Phase 1 "Setup Before the Algorithm" sections added to hashmaps, linked-list, and sets — the 3 files missed in the original Task 2 pass. Each has: type decision table, Phase 1 code stubs, pre-flight checklist. |
 | July 2026 | Phase 1 sections completed for last 2 remaining files: dp-fundamentals.md (🔨 Translating the Problem Into a DP State — 5 input formats × decision table + stubs + checklist) and two-pointers-sliding-window-fundamentals.md (renamed 🛠️ Java Skeleton to 🔨 Setup — Phase 1, added framing blockquote). All 11 DeepDive files now have Phase 1 sections. |
+| July 2026 | **`binary-search-fundamentals.md` created.** New DeepDive for binary search — triggered by gem-gap problem in a real interview. Covers 5 variants (Classic, Bisect, Rotated Array, Answer Space, 2D Matrix), 9 walkthroughs (WW-1 to WW-9 including gem-gap as WW-7 and LC 410 as 🔴 reference-only WW-9), Phase 1 decision framework (lo/hi initialisation table + `lo <= hi` vs `lo < hi` decision table + mid formula), 6 gotchas, 5-tier practice plan. All standards applied from creation: 5 patterns with full motivation/naive/insight/visual/KEY INVARIANT structure, Method Fallbacks section, lesson-learned callout. |
 
 ---
 
