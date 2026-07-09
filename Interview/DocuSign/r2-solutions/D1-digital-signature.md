@@ -6,6 +6,22 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **PKI / Security fundamentals** (asymmetric crypto, X.509, certificate chains) | `Production-Grade/Auth-and-Security/13-security-pki.md` | Digital signatures are built on RSA/ECDSA key pairs — you must explain: how a private key signs a document hash, how a public key verifies it, and what tamper-evidence means at the byte level |
+| **Auth / Authz fundamentals** | `Production-Grade/Auth-and-Security/27-auth-authz-fundamentals.md` | Multi-party signing needs identity verification for each signer — know JWT-based signer identity, role-scoped access to envelopes, and how OAuth 2.0 scopes map to envelope permissions |
+| **State machines / workflows** | `Production-Grade/System-Design-Patterns/49-state-machines-workflows.md` | The envelope lifecycle (Created → Sent → Partially Signed → Fully Signed → Voided) is a state machine — routing_order drives sequential vs parallel signing |
+| **Message queues (Kafka)** | `Core-Architecture/Service-Communication/19-message-queues-kafka-rabbitmq.md` | Webhook fan-out after each signing event — the Connect webhook system is a Kafka consumer publishing to external HTTP endpoints |
+| **Idempotency** | `Foundations/Concurrency-and-Consistency/04-idempotency.md` | Signing must be idempotent — a network retry on "Apply Signature" must not double-apply or corrupt the audit trail |
+| **Multi-step processes** | `Patterns/DeepDive/05-multi-step-processes.md` | Sequential signing (Signer 1 must complete before Signer 2 receives the document) is a multi-step workflow with dependency ordering |
+| **CAP theorem** | `Core-Architecture/Distributed-Systems/34-cap-theorem-consistency-models.md` | Signed records = CP (you cannot have two conflicting "signed" states); notifications = AP (delivery staleness is acceptable, duplicates are recoverable) |
+
+---
+
 ## 🎯 What Is This System?
 
 **In plain English:** A digital signature system lets one or more parties sign a legal document electronically using public-key cryptography. The system proves that a specific person signed a specific document at a specific time — and that the document has not been altered since — creating a tamper-evident, legally admissible audit trail.
@@ -1044,6 +1060,35 @@ If DocuSign's own server stamps "signed at 2026-06-24 15:14:00 UTC," a signer's 
 
 **In an interview:** "For legally defensible timestamps, I'd integrate RFC 3161 — after each signature, we obtain a timestamp token from an independent TSA like DigiCert. The TSA signs our signature hash with their own key and their own timestamp. This means even if someone disputes DocuSign's server clock, we have an independent cryptographic proof from a globally trusted third party. The TSA token is embedded directly in the signed PDF per PAdES standards." That sentence separates you from every candidate who says "we store `CURRENT_TIMESTAMP` from the DB."
 
+8. **Embedded signing — Fast Path + Safe Path (confirmed probe topic from 2025 candidate reports):**
+
+DocuSign's embedded signing flow is a specific design question interviewers probe from within D1. Most candidates describe only the signing ceremony; interviewers push on what happens after the signature and how you confirm completion programmatically.
+
+**The embedded signing flow:**
+1. Sender calls API → creates envelope → receives a `signingUrl` from DocuSign
+2. That URL is embedded in the sender's web application (iframe or redirect)
+3. Signer completes the signing ceremony inside the embedded experience
+4. DocuSign calls the `returnUrl` configured on the envelope with event status as a query param
+
+**The Three Signals (say all three in the interview):**
+
+| Signal | What it is | Trust level |
+|---|---|---|
+| `returnUrl` callback | UI callback fired by DocuSign with `event=signing_complete` query param | **Fast path — do NOT trust alone** |
+| `Envelopes:get` REST call | Backend calls `GET /v2/accounts/{id}/envelopes/{envelopeId}` to read actual status | **Safe path — authoritative** |
+| Connect webhook | DocuSign's Connect fires `envelope-completed` to your registered callback URL async | **Audit path — compliance record** |
+
+**Why `returnUrl` alone fails:** The returnUrl is a browser callback — the query params can be spoofed by a malicious signer who knows your endpoint. Example: signer constructs `https://yourapp.com/signing/complete?event=signing_complete&envelopeId=XYZ` without actually signing → your app thinks the document is complete.
+
+**Correct pattern:**
+1. `returnUrl` fires → update UI ("signing complete") as a UX fast path
+2. Immediately call `Envelopes:get` from backend → confirm `status = "completed"` is the actual DocuSign state
+3. Connect webhook fires async → write to audit log (immutable event record)
+
+**Candidates who stop at returnUrl fail the probe.** This is explicitly flagged in 2025 candidate reports as a rejection reason.
+
+**In an interview:** "For embedded signing confirmation I use three signals: returnUrl for fast UI feedback, Envelopes:get REST call for authoritative backend confirmation, and the Connect webhook for audit trail. I never treat the returnUrl alone as sufficient — it can be spoofed, and the network can drop the callback before the backend processes it."
+
 **Your answer should include:**
 
 > "The audit trail is immutable at the database level — a trigger prevents any UPDATE or DELETE. This ensures non-repudiation: John can't deny signing because the audit_signature_events table is tamper-proof. The timestamp is UTC (never local), and we store the certificate serial number, which proves which key was used. If John disputes the signature, we produce: (1) the audit log entry, (2) the certificate chain (proving his cert was issued by our CA), (3) the signature hash (proving it's cryptographically valid), and (4) the context (IP, user-agent, browser). This is legally defensible under ESIGN Act and acceptable in court."
@@ -1160,4 +1205,5 @@ If DocuSign's own server stamps "signed at 2026-06-24 15:14:00 UTC," a signer's 
 | Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **Certificate revocation check latency** — OCSP is 50–200ms (unusable on critical path); CRL cached as Redis HashSet, refreshed every 60s; O(1) `SISMEMBER` check under 1ms; 60-second revocation window is explicit trade-off; (2) **Temporal as alternative to custom state machine** — custom FSM works for MVP at 35 sig/sec; Temporal handles expiry timers, escalation, conditional routing, and legal hold natively with full execution history; migration decision: Temporal at DocuSign's actual workflow complexity; (3) **UTC timestamp strategy for multi-jurisdiction legal compliance** — `TIMESTAMP WITH TIME ZONE` in Postgres always stores UTC; log user's declared timezone alongside UTC; court-presentable via UTC + timezone derivation. |
 | Jul 5, 2026 | **Section 6 restructured into 2-stage progressive HLD.** Stage 1 (monolith + direct DB) — identifies two breaking points: sync webhook couples external system availability to signing success; uncached cert lookup hits DB on every sign request. Stage 2 (service split + Redis + Kafka) — cert cache in Redis (sub-ms CRL check + cert PEM TTL); Kafka decouples webhook delivery (signing returns immediately after publish); PKI infrastructure separated. Four decision tables added: key management (Hosted CA ✅ vs BYOK ❌ vs Hybrid ⚠️), audit trail immutability (DB trigger ✅ vs application-only ❌ vs blockchain ❌), signing workflow (state machine ✅ vs set ❌ vs event-sourced ⚠️), webhook delivery (Kafka ✅ vs Redis pub/sub ❌ vs sync HTTP ❌). Verdict alignment verified: all Section 6 table verdicts match Section 7 deep dive choices (Hosted CA ✅, DB trigger ✅, state machine ✅). |
 | Jul 6, 2026 | **🔑 Technology Quick Reference table added.** 15-row glossary covering asymmetric encryption, private/public key, RSA, PKI, X.509 certificate, CA, HSM, non-repudiation, BYOK, OCSP, CRL, audit trail, webhook, envelope — inserted before Section 0. |
+| Jul 9, 2026 | **Section 11 addition.** Embedded signing Fast Path + Safe Path pattern added: returnUrl (fast UI path — do NOT trust alone), Envelopes:get REST call (safe authoritative confirmation), Connect webhook (async audit record). Explains why returnUrl-only is a probe failure reason. Three-signal pattern with trust levels table and spoofing attack example. |
 | Jul 5, 2026 | **Section 10 business impact pass.** Added explicit **Business impact:** label to all 3 trade-offs — compliance officer timing out during live legal hearing due to unindexed audit log full table scan, HSM compromise making every historical DocuSign signature legally contestable at $1.5M/year key-loss support cost, non-repudiation destroyed when audit record digest doesn't match signature invalidating a court-submitted contract. |

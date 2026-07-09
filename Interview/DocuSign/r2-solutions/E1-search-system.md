@@ -6,6 +6,21 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **Elasticsearch / inverted index** | `Production-Grade/Performance-Optimization/32-elasticsearch-inverted-index.md` | The core data structure — you must be able to explain how the inverted index maps token → [doc_id, position] and why it makes full-text search O(1) per term instead of O(N) table scan |
+| **DB sharding strategy** | `Core-Architecture/Database-Core/38-sharding-strategy.md` | Elasticsearch indices are sharded across nodes — know primary shard routing, replica shards for read availability, and rebalancing when nodes are added |
+| **Hot partition problem** | `Core-Architecture/Database-Core/45-hot-partition-problem.md` | Trending queries create hot shards — know how to detect and mitigate with query caching, shard rebalancing, and adaptive routing |
+| **Scaling reads** | `Patterns/DeepDive/01-scaling-reads.md` | Search is almost exclusively reads — replica shards for horizontal read scaling, query cache for repeated identical queries |
+| **Caching fundamentals** | `Foundations/Performance-and-Scale/03-caching.md` | Top-K query result caching in Redis — TTL tuning, cache-aside pattern for search results, when NOT to cache (personalised results) |
+| **Database indexing** | `Foundations/Data-Fundamentals/50-database-indexing.md` | Document metadata stored in a relational DB alongside the search index needs proper indexing for filter queries (by date, category, owner) |
+
+---
+
 ## 🎯 What Is This System?
 
 **In plain English:** A search system accepts text queries and returns ranked results from an index of documents, products, or web pages — in milliseconds, even when the index contains billions of entries. The ranking must feel relevant (matching intent, not just keywords), and the index must stay up to date as new content is added.

@@ -4,6 +4,22 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **Idempotency** (core + advanced) | `Foundations/Concurrency-and-Consistency/04-idempotency.md` | Preventing double-charges on payment retry is the #1 correctness problem here — idempotency key pattern is mandatory, not optional |
+| **Idempotency (advanced)** | `Foundations/Concurrency-and-Consistency/04-idempotency_advanced.md` | Distributed idempotency across the billing service and the payment gateway |
+| **Outbox / CDC pattern** | `Foundations/Data-Fundamentals/07-cdc-outbox.md` | The outbox pattern is the safe way to atomically write the payment record AND publish the `payment_succeeded` event — this is the correct answer to "what if the server crashes after charging but before writing to the DB?" |
+| **Saga pattern** | `Core-Architecture/Resilience-and-Fault-Tolerance/23-saga-pattern.md` | Distributed compensating transactions — know when to use Saga vs two-phase commit and what happens when a saga step fails mid-flow |
+| **Two-phase commit vs Saga** | `Core-Architecture/Resilience-and-Fault-Tolerance/36-two-phase-commit-vs-saga.md` | Why 2PC is wrong for a billing system that spans a payment gateway (external service) |
+| **Retry / exponential backoff** | `Core-Architecture/Resilience-and-Fault-Tolerance/35-retry-exponential-backoff-patterns.md` | Payment retry logic with jitter — the 7-day dunning schedule is an application of this pattern |
+| **Multi-step processes** | `Patterns/DeepDive/05-multi-step-processes.md` | The billing flow (charge → entitle → notify → invoice) is a multi-step workflow — know how to model state transitions and recover from partial failure |
+
+---
+
 ## 🎯 What Is This System?
 
 **In plain English:** A subscription billing system charges customers on a recurring schedule (monthly or yearly), handles mid-cycle plan changes with prorated credits, retries failed payments with exponential backoff, and fans out billing events to downstream services — entitlement, email, and analytics.
@@ -967,6 +983,327 @@ For a subscription billing system, every financial event creates two ledger entr
 ## Section 15 — 🧾 TL;DR Answer Summary
 
 > "I'd design a flat-rate subscription billing API using three key components working together: a state machine that owns all subscription lifecycle transitions (PENDING → ACTIVE → PAST_DUE → CANCELLED), a Redis-backed idempotency layer on the payment endpoint to prevent double-charges on retries, and an outbox pattern that atomically writes both the subscription update and a Kafka event in one DB transaction — so downstream entitlement, notification, and analytics services consume events independently without tight coupling to the payment path. The renewal scheduler uses random jitter to spread 100K renewals over 60 minutes, avoiding a thundering herd against Stripe's rate limits. For DocuSign specifically, I'd apply SOLID principles at the API layer — the billing service depends on an IPaymentProcessor interface (not Stripe directly), downstream consumers are added as new Kafka consumer groups without touching billing code (OCP), and the subscription_events table is INSERT-only for SOC 2 audit compliance."
+
+---
+
+---
+
+## 🔌 LLD Drill-Down — Class Structure for the Billing Service
+
+> **Trigger:** Interviewer says "Walk me through the class design for the billing service" or "Show me how the state machine and outbox work at the code level" — expected follow-up after the outbox + Kafka HLD discussion.
+>
+> **What they're testing:** Whether you understand that (1) the state machine is a pure function with no side effects, (2) the outbox write and subscription update are in one `@Transactional` method — not two separate calls, and (3) the `IPaymentProcessor` interface is the DIP boundary that makes the whole thing testable and swappable.
+
+---
+
+### 🧠 Mental Model Before You Draw
+
+The billing service has three clearly separated concerns:
+
+- **State machine** — pure function: `(currentStatus, event) → nextStatus`. No I/O. No DB. Just logic.
+- **BillingService** — orchestrator: Redis idempotency check → charge processor → `@Transactional` write (subscription + outbox together)
+- **OutboxProcessor** — background poller: reads unprocessed outbox rows → publishes to Kafka → marks processed
+
+The critical point to say out loud: **"There's no Java `synchronized` here. The concurrency guarantee is Postgres — I use `SELECT FOR UPDATE` inside the `@Transactional` block to lock the subscription row before reading its state and applying the transition. Two threads trying to cancel the same subscription at the same time — one gets the lock, applies the transition, commits. The other gets the lock after commit, sees `status='CANCELLED'`, applies `CANCELLED + cancel event → InvalidTransitionException`."**
+
+---
+
+### 🏗️ Class Structure
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    BillingController                         │
+│  POST /v1/payments   → BillingService.charge()              │
+│  DELETE /subscriptions/{id} → BillingService.cancel()       │
+└──────────────────────────────────────────────────────────────┘
+        │ calls
+        ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    BillingService                            │
+│  - paymentProcessor: IPaymentProcessor  (DIP boundary)      │
+│  - subscriptionRepo: SubscriptionRepository                  │
+│  - outboxRepo:       OutboxRepository                        │
+│  - redis:            RedisTemplate                           │
+│  - stateMachine:     SubscriptionStateMachine                │
+│  + charge(request, idempotencyKey): PaymentResponse          │
+│  + cancel(subscriptionId, userId):  void                     │
+│  + upgrade(subscriptionId, newPlanId): void                  │
+└──────────────────────────────────────────────────────────────┘
+        │                            │
+   ┌────▼────────────┐    ┌──────────▼──────────┐
+   │ IPaymentProcessor│    │ SubscriptionStateMachine│
+   │ (interface — DIP)│    │ + transition(status,  │
+   │ + charge(...)    │    │   event): SubscriptionStatus │
+   │ + refund(...)    │    │   throws InvalidTransition- │
+   └────┬────────────┘    │   Exception            │
+        │                 └─────────────────────────┘
+   ┌────▼──────────────────┐
+   │ StripePaymentProcessor│   (also: BraintreePaymentProcessor)
+   │ - stripeClient        │
+   │ + charge(amount, ...)  │
+   │ + refund(chargeId)     │
+   └───────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│                    OutboxProcessor                           │
+│  @Scheduled(fixedDelay=100ms)                               │
+│  → reads unprocessed outbox rows                            │
+│  → publishes to Kafka                                        │
+│  → marks processed_at                                        │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 🖊️ Critical Classes — Write These in the Interview
+
+**SubscriptionStatus + SubscriptionEvent (enums — write first, they anchor everything else):**
+
+```java
+public enum SubscriptionStatus {
+    PENDING, ACTIVE, PAST_DUE, CANCELLED, PAUSED
+}
+
+public enum SubscriptionEvent {
+    PAYMENT_SUCCEEDED, PAYMENT_FAILED, RETRIES_EXHAUSTED, CANCEL_REQUESTED, REACTIVATED
+}
+```
+
+**SubscriptionStateMachine — pure function, no I/O:**
+
+```java
+/**
+ * Pure state machine — no DB, no Kafka, no side effects.
+ * Given a (currentStatus, event) pair, returns the next valid status.
+ * Throws InvalidTransitionException for illegal transitions.
+ * This is the single source of truth for subscription lifecycle logic.
+ */
+public class SubscriptionStateMachine {
+
+    private static final Map<String, SubscriptionStatus> TRANSITIONS = new HashMap<>();
+
+    static {
+        // key = "FROM_STATUS:EVENT" → value = TO_STATUS
+        TRANSITIONS.put("PENDING:PAYMENT_SUCCEEDED",   SubscriptionStatus.ACTIVE);
+        TRANSITIONS.put("ACTIVE:PAYMENT_FAILED",       SubscriptionStatus.PAST_DUE);
+        TRANSITIONS.put("ACTIVE:CANCEL_REQUESTED",     SubscriptionStatus.CANCELLED);
+        TRANSITIONS.put("PAST_DUE:PAYMENT_SUCCEEDED",  SubscriptionStatus.ACTIVE);
+        TRANSITIONS.put("PAST_DUE:RETRIES_EXHAUSTED",  SubscriptionStatus.CANCELLED);
+        TRANSITIONS.put("CANCELLED:REACTIVATED",       SubscriptionStatus.PENDING);
+    }
+
+    public SubscriptionStatus transition(SubscriptionStatus current, SubscriptionEvent event) {
+        String key = current.name() + ":" + event.name();
+        SubscriptionStatus next = TRANSITIONS.get(key);
+        if (next == null) {
+            throw new InvalidTransitionException(
+                "No valid transition from " + current + " on event " + event
+            );
+        }
+        return next;
+    }
+}
+```
+
+**IPaymentProcessor — the DIP boundary (makes Stripe swappable):**
+
+```java
+/**
+ * DIP: BillingService depends on this abstraction, not on StripePaymentProcessor.
+ * Swap payment processors by injecting a different @Bean — no billing logic changes.
+ * In tests: inject MockPaymentProcessor → no real money, no Stripe calls.
+ */
+public interface IPaymentProcessor {
+    ChargeResult charge(int amountCents, String currencyCode, String customerId);
+    void refund(String chargeId);
+}
+```
+
+**BillingService — the orchestrator (the class the interviewer most wants to see):**
+
+```java
+public class BillingService {
+
+    private final IPaymentProcessor paymentProcessor;
+    private final SubscriptionRepository subscriptionRepo;
+    private final OutboxRepository outboxRepo;
+    private final RedisTemplate<String, String> redis;
+    private final SubscriptionStateMachine stateMachine;
+
+    /**
+     * Charge a subscription payment.
+     * Order of operations:
+     *   1. Check Redis idempotency key — return cached result if seen before
+     *   2. Charge payment processor (Stripe) — external, unrecoverable if double-charged
+     *   3. @Transactional: apply state machine transition + write outbox row (atomic)
+     *   4. Cache result in Redis with 24h TTL
+     *
+     * Concurrency: @Transactional + SELECT FOR UPDATE locks the subscription row.
+     * Two threads racing on the same subscription: one commits, the other reads
+     * updated state and applies its transition from the committed state.
+     */
+    public PaymentResponse charge(PaymentRequest request, String idempotencyKey) {
+        // Step 1: idempotency check
+        String cacheKey = "idempotency:" + idempotencyKey;
+        String cached = redis.opsForValue().get(cacheKey);
+        if (cached != null) {
+            return deserialize(cached, PaymentResponse.class);
+        }
+
+        // Step 2: charge payment processor (Stripe)
+        // This happens OUTSIDE the DB transaction — Stripe is external and cannot be rolled back
+        ChargeResult chargeResult = paymentProcessor.charge(
+            request.getAmountCents(),
+            request.getCurrencyCode(),
+            request.getCustomerId()
+        );
+
+        // Step 3: atomic DB write — subscription update + outbox event in ONE transaction
+        persistPaymentAndOutbox(request.getSubscriptionId(), chargeResult);
+
+        PaymentResponse response = PaymentResponse.success(chargeResult.getChargeId());
+
+        // Step 4: cache for future idempotent retries (24h TTL)
+        redis.opsForValue().set(cacheKey, serialize(response), Duration.ofHours(24));
+
+        return response;
+    }
+
+    /**
+     * Single @Transactional method containing BOTH the subscription update
+     * and the outbox insert. They commit together or rollback together.
+     * This is what prevents the dual-write problem.
+     */
+    @Transactional
+    public void persistPaymentAndOutbox(UUID subscriptionId, ChargeResult chargeResult) {
+        // SELECT FOR UPDATE: row-level Postgres lock prevents concurrent updates
+        Subscription sub = subscriptionRepo.findByIdForUpdate(subscriptionId);
+
+        // Apply state machine transition — throws InvalidTransitionException for illegal events
+        SubscriptionStatus nextStatus = stateMachine.transition(
+            sub.getStatus(), SubscriptionEvent.PAYMENT_SUCCEEDED
+        );
+
+        sub.setStatus(nextStatus);
+        sub.setLastChargeId(chargeResult.getChargeId());
+        sub.setRetryCount(0);
+        subscriptionRepo.save(sub);
+
+        // Outbox row: same transaction — committed atomically with subscription update
+        outboxRepo.insert(
+            subscriptionId,
+            "SUBSCRIPTION_ACTIVATED",
+            buildOutboxPayload(subscriptionId, chargeResult)
+        );
+        // @Transactional commits here: both rows or neither
+    }
+
+    /**
+     * Cancel a subscription — applies CANCEL_REQUESTED event via state machine.
+     * No payment processor call — purely a state transition.
+     */
+    @Transactional
+    public void cancel(UUID subscriptionId, UUID actorUserId) {
+        Subscription sub = subscriptionRepo.findByIdForUpdate(subscriptionId);
+
+        SubscriptionStatus nextStatus = stateMachine.transition(
+            sub.getStatus(), SubscriptionEvent.CANCEL_REQUESTED
+        );
+
+        sub.setStatus(nextStatus);
+        sub.setCancelledAt(Instant.now());
+        subscriptionRepo.save(sub);
+
+        outboxRepo.insert(
+            subscriptionId,
+            "SUBSCRIPTION_CANCELLED",
+            buildCancelPayload(subscriptionId, actorUserId)
+        );
+    }
+}
+```
+
+**OutboxProcessor — the background poller:**
+
+```java
+/**
+ * Runs every 100ms as a Spring @Scheduled task.
+ * Publishes unprocessed outbox rows to Kafka, then marks them processed.
+ * At-least-once delivery: if it crashes between publish and markProcessed,
+ * the row is re-published on next cycle — consumers MUST be idempotent.
+ */
+@Component
+public class OutboxProcessor {
+
+    private final OutboxRepository outboxRepo;
+    private final KafkaTemplate<String, String> kafkaTemplate;
+
+    @Scheduled(fixedDelay = 100)
+    public void processOutbox() {
+        List<OutboxEvent> pending = outboxRepo.findUnprocessed(100);
+
+        for (OutboxEvent event : pending) {
+            try {
+                kafkaTemplate.send(
+                    "subscription-events",
+                    event.getAggregateId().toString(),   // partition key: subscription_id
+                    event.getPayload()
+                ).get(5, TimeUnit.SECONDS);              // block — wait for Kafka ack
+
+                outboxRepo.markProcessed(event.getId());
+            } catch (Exception e) {
+                // Log and skip — will retry on next poll cycle
+                log.error("Outbox publish failed for event {}, will retry", event.getId(), e);
+            }
+        }
+    }
+}
+```
+
+---
+
+### 🔁 Concurrency — The Core Point
+
+```
+Two users cancel the same subscription at the same time:
+
+Thread A                                Thread B
+  findByIdForUpdate(sub_123)           findByIdForUpdate(sub_123)
+    → Postgres: acquires row lock →       → Postgres: BLOCKS (waiting for lock)
+  stateMachine.transition(ACTIVE, CANCEL_REQUESTED) → CANCELLED
+  save(sub_123, status=CANCELLED)
+  outboxRepo.insert(SUBSCRIPTION_CANCELLED)
+  COMMIT  ← releases lock
+                                          ← Postgres: lock acquired, reads committed state
+                                          stateMachine.transition(CANCELLED, CANCEL_REQUESTED)
+                                            → throws InvalidTransitionException
+                                          @Transactional: rollback
+
+Result: exactly one CANCELLED event published. No duplicate events.
+
+KEY INVARIANT:
+   The state machine + SELECT FOR UPDATE is the concurrency guard.
+   No Java synchronized. The DB is the single source of truth.
+```
+
+---
+
+### 🔬 LLD Interview Probes — B1 Specific
+
+**Q: "Walk me through what happens if the server crashes after Stripe charges the card but before the DB transaction commits."**
+> Stripe has already charged the card. The outbox row and subscription update were never committed — the DB rolled back. The client's idempotency key was never cached in Redis (that happens after the transaction). When the client retries (or when the renewal scheduler retries), it hits a Redis miss (idempotency key not there) and re-calls `paymentProcessor.charge()`. But Stripe is idempotent — if we pass the same `idempotencyKey` to Stripe in the request, Stripe recognizes it and returns the original `charge_id` without charging again. So: same idempotency key → same Stripe charge_id → same DB write. No double-charge. This is why the idempotency key flows all the way to the Stripe API call, not just the BillingService layer.
+
+**Q: "Why is `persistPaymentAndOutbox()` a separate method from `charge()`? Why not make the entire charge() method @Transactional?"**
+> Two reasons. First, Stripe's `charge()` call must be outside the transaction. If we include it inside, the DB transaction holds open while Stripe takes 1-2 seconds to respond. Postgres row lock is held for those 1-2 seconds — every other thread trying to touch this subscription row is blocked. Second, if Stripe times out and throws, a surrounding `@Transactional` would roll back the DB — even though Stripe may have actually charged the card (ambiguous timeout). Keeping Stripe outside the transaction avoids holding DB locks during external I/O.
+
+**Q: "How do you prevent the renewal scheduler from charging the same subscription twice in one billing cycle?"**
+> The renewal scheduler uses a unique constraint: `(subscription_id, billing_date)` in a `renewal_jobs` table. Before enqueueing a charge, it inserts a row. If the scheduler runs twice (pod restart, duplicate trigger), the second INSERT fails the unique constraint — the charge is never queued twice. The charge itself also carries an idempotency key: `"renewal:" + subscriptionId + ":" + billingDate` — so even if two charges somehow get enqueued, Stripe deduplicates on the idempotency key.
+
+**Q: "What happens if the OutboxProcessor publishes to Kafka, then crashes before marking `processed_at`?"**
+> The row remains `processed_at IS NULL`. On the next poll cycle, it's picked up again and published to Kafka again. This is at-least-once delivery — the downstream consumer (e.g., `EntitlementConsumer`) receives the event twice. This is why every consumer must be idempotent: before processing, check `SELECT 1 FROM processed_events WHERE event_id = ?`. If already processed, skip. The event_id in the Kafka message is the outbox row's UUID — stable across retries.
+
+**Q: "If DocuSign adds a new downstream consumer — say, a Salesforce CRM sync consumer — what code changes are needed?"**
+> Zero changes to BillingService. Zero changes to OutboxProcessor. Add one new Kafka consumer group: `SalesforceConsumer` with `@KafkaListener(topics="subscription-events", groupId="salesforce-sync")`. Each consumer group gets all events independently — Kafka offsets are per-group. This is the OCP (Open/Closed Principle) payoff: the billing system is closed to modification but open to extension via new consumer groups. That's the architectural argument for Kafka over sync HTTP: adding a downstream never touches billing code.
 
 ---
 

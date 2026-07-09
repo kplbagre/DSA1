@@ -78,6 +78,29 @@ A compact string encoding of a geographic coordinate (lat/lng). The string is a 
 
 ---
 
+## H
+
+### HMAC — Hash-based Message Authentication Code
+
+A cryptographic signature computed by applying a hash function (typically SHA-256) to the message content combined with a shared secret key. Only parties who know the secret key can generate or verify the signature. Used to prove that a message was sent by a known party and has not been tampered with in transit.
+
+```
+Sender:   signature = HMAC-SHA256(secret_key, message_body)
+          → sends message + X-Signature header
+
+Receiver: expected = HMAC-SHA256(secret_key, message_body)
+          → constant-time compare: expected == received?
+          → mismatch → reject (tampered or wrong sender)
+```
+
+- **Why constant-time comparison matters:** A naive `signature.equals(received)` returns early on the first mismatched byte, leaking timing information an attacker can exploit. Use `MessageDigest.isEqual()` or `hmac.verify()` which always compare all bytes.
+- **Replay attack risk:** HMAC alone proves authenticity but not freshness. Include a timestamp in the payload and reject any message older than 5 minutes to prevent replaying a valid signature from a previously intercepted request.
+- **When used in patterns:** Webhook delivery (provider signs outgoing POST; receiver verifies before processing); API request signing (AWS Signature Version 4)
+- **Full note:** `../Core-Architecture/Service-Communication/53-webhooks.md` (Section 4 — signature verification code)
+- **In interview, if asked:** "I use HMAC-SHA256 with a shared secret to verify webhook payloads. The provider signs the request body with our shared secret; I recompute the HMAC on the raw body and compare in constant time. If they match, the payload is authentic. I also check a timestamp header and reject anything older than 5 minutes to prevent replay attacks."
+
+---
+
 ## I
 
 ### ICE / STUN / TURN (WebRTC)
@@ -330,3 +353,4 @@ workflow OrderFlow(order):
 | Date | Change |
 |---|---|
 | July 2026 | **File created.** Initial pass: Redis ZSET, Pub/Sub, INCR, MULTI/EXEC, Lua, SETNX, GEOADD, TTL; APNs, FCM; ICE/STUN/TURN; Kafka topic/consumer group/partition/offset/retention; DLQ; PostGIS; Geohash; Cassandra; Temporal; AWS Step Functions. All terms sourced from Patterns DeepDive/Reference notes 01–09. |
+| July 9, 2026 | Added **HMAC** (H section) — cryptographic signature primitive used in webhook verification and API signing. Referenced from `53-webhooks.md`. |

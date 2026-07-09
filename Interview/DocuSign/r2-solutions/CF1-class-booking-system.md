@@ -6,6 +6,22 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **Distributed locking** | `Foundations/Concurrency-and-Consistency/06-distributed-locking.md` | Preventing double-booking when two users hit Reserve simultaneously for the last spot — Redis `SET NX PX` distributed lock is the core answer |
+| **Optimistic / pessimistic locking** | `Foundations/Concurrency-and-Consistency/01-optimistic-pessimistic-locking.md` | Know the trade-off: pessimistic locking (SELECT FOR UPDATE) vs optimistic (version column + retry) — and when each is appropriate for high-contention booking |
+| **Dealing with contention** | `Patterns/DeepDive/04-dealing-with-contention.md` | Hot slots (7am Saturday yoga) create write contention — know sharded counters, queue-based serialization, and why blind writes fail |
+| **Inventory management / booking** | `Production-Grade/System-Design-Patterns/42-inventory-management-booking.md` | The canonical booking pattern: reserve → confirm → release; how to implement it safely with timeouts and cleanup jobs |
+| **Isolation levels** (phantom reads, serializable) | `Foundations/Concurrency-and-Consistency/41-isolation-levels-dirty-reads.md` | Without SERIALIZABLE isolation, two transactions can both read "1 spot available" and both commit — know which isolation level prevents this and at what cost |
+| **Idempotency** | `Foundations/Concurrency-and-Consistency/04-idempotency.md` | User taps Reserve twice (double tap, network retry) — idempotency key on the booking operation ensures only one reservation is created |
+| **State machines / workflows** | `Production-Grade/System-Design-Patterns/49-state-machines-workflows.md` | Booking lifecycle: Reserved → Confirmed → Cancelled → WaitlistPromoted — valid transitions must be enforced |
+
+---
+
 ## 🎯 What Is This System?
 
 **In plain English:** A fitness class booking system lets users browse available class slots (yoga, cycling, HIIT), reserve a spot, and join a waitlist when the class is full. When someone cancels, the next waitlist user is automatically promoted and given a time window to claim the released spot.
@@ -725,6 +741,303 @@ On restart, Redis replays the log. If DECR was fsynced before crash (within the 
 ## Section 15 — 🧾 TL;DR Answer Summary
 
 > "I'd design Cult.fit's class booking system around a Redis-first seat counter with atomic Lua scripts for the critical hot path, backed by Postgres as durable source of truth. The core insight is that Redis DECR is atomic in Redis's single-threaded model — 1,000 concurrent bookings on a 15-seat yoga class all get serialized at the Redis level with no lock contention. Soft reservations with 5-minute TTL prevent seat squatting, and a background job reconciles expired reservations and auto-promotes the waitlist. Kafka decouples notifications and analytics from the booking critical path — a notification failure never fails a booking. The hardest failure mode is Redis crash post-DECR pre-Postgres-write, mitigated by AOF persistence and a 5-minute reconciliation job. For Cure.fit specifically, I'd add API Gateway rate limiting to absorb the 7 PM booking surge, and late-cancellation fee enforcement at the service layer — 2-hour cutoff is a business rule the backend must own."
+
+---
+
+---
+
+## 🔌 LLD Drill-Down — Class Structure for the Booking Service
+
+> **Trigger:** Interviewer says "Walk me through the class design for the booking service" or "Show me how you'd model the seat reservation" — expected follow-up after the Redis atomic DECR HLD discussion.
+>
+> **What they're testing:** Whether you understand that the concurrency guarantee lives in Redis (not Java `synchronized`), how soft reservations model as a domain object with state transitions, and how the Postgres + Redis layers interact cleanly.
+
+---
+
+### 🧠 Mental Model Before You Draw
+
+The booking system has two layers of state:
+- **Redis** — transient seat counter (`capacity - bookings`), soft reservation TTL keys
+- **Postgres** — durable bookings (source of truth)
+
+The class design must reflect this: `BookingService` orchestrates Redis → Postgres in the right order. The critical insight: the `DECR` happens in Redis first. If it succeeds, we write to Postgres. If Postgres write fails, we `INCR` Redis back (compensating action).
+
+**Key insight to say out loud:** "There's no Java `synchronized` here. The atomicity guarantee is in Redis's single-threaded model — the Lua script serializes all DECR operations. My Java class just calls Redis and trusts it."
+
+---
+
+### 🏗️ Class Structure
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                      BookingController                     │
+│  POST /bookings      → BookingService.reserve()            │
+│  POST /bookings/{id}/confirm → BookingService.confirm()    │
+│  DELETE /bookings/{id}       → BookingService.cancel()     │
+└────────────────────────────────────────────────────────────┘
+         │ calls
+         ▼
+┌────────────────────────────────────────────────────────────┐
+│                      BookingService                        │
+│  - seatCounter: SeatCounter       (wraps Redis)            │
+│  - bookingRepo: BookingRepository (wraps Postgres)         │
+│  - waitlistService: WaitlistService                        │
+│  + reserve(classId, userId): SeatReservation               │
+│  + confirm(bookingId, userId): Booking                     │
+│  + cancel(bookingId, userId): void                         │
+└────────────────────────────────────────────────────────────┘
+         │
+   ┌─────┴─────────────────────┐
+   ▼                           ▼
+┌─────────────────┐    ┌─────────────────────────┐
+│  SeatCounter    │    │  BookingRepository       │
+│  (Redis layer)  │    │  (Postgres layer)        │
+│  + decrement()  │    │  + insert(booking)       │
+│  + increment()  │    │  + updateStatus(id, st.) │
+│  + getCount()   │    │  + findById(id)          │
+└─────────────────┘    └─────────────────────────┘
+
+BookingStatus (enum): SOFT_RESERVED, CONFIRMED, CANCELLED, EXPIRED
+
+SeatReservation (domain object — returned on reserve())
+  - reservationId: String       ← = bookingId
+  - classId:       String
+  - userId:        String
+  - status:        BookingStatus  (SOFT_RESERVED)
+  - expiresAt:     Instant        ← TTL expiry timestamp
+
+Booking (domain object — returned on confirm())
+  - bookingId:     String
+  - classId:       String
+  - userId:        String
+  - status:        BookingStatus  (CONFIRMED)
+  - confirmedAt:   Instant
+```
+
+---
+
+### 🔌 Key Interface
+
+```java
+/**
+ * Wraps all Redis seat counter operations.
+ * BookingService never writes Redis keys directly.
+ * Separates Redis concern from booking business logic. SoC.
+ */
+public interface SeatCounter {
+
+    // Returns remaining count after decrement; -1 if no seats left
+    int decrement(String classId);
+
+    // Compensating action — called on Postgres write failure
+    void increment(String classId);
+
+    int getAvailableCount(String classId);
+
+    // Sets a soft reservation TTL key for the user-class pair
+    void setSoftReservation(String classId, String userId, Duration ttl);
+
+    boolean hasSoftReservation(String classId, String userId);
+}
+```
+
+---
+
+### 🖊️ Critical Classes — Write These in the Interview
+
+**BookingService — the orchestrator (this is the class the interviewer wants to see):**
+
+```java
+public class BookingService {
+
+    private final SeatCounter seatCounter;
+    private final BookingRepository bookingRepo;
+    private final WaitlistService waitlistService;
+
+    private static final Duration SOFT_RESERVATION_TTL = Duration.ofMinutes(5);
+
+    /**
+     * Reserve a seat (soft reservation).
+     * Order of operations:
+     *   1. DECR Redis counter atomically → if -1, no seats, reject
+     *   2. Write SOFT_RESERVED booking to Postgres
+     *   3. Set TTL key for auto-expiry
+     *   4. If Postgres fails → INCR Redis back (compensating action)
+     *
+     * No Java synchronized — Redis single-threaded model serializes DECR.
+     */
+    public SeatReservation reserve(String classId, String userId) {
+        // Step 1: Atomic seat claim in Redis
+        int remaining = seatCounter.decrement(classId);
+        if (remaining < 0) {
+            throw new NoSeatsAvailableException("Class " + classId + " is fully booked.");
+        }
+
+        // Step 2: Persist to Postgres
+        String reservationId = UUID.randomUUID().toString();
+        Instant expiresAt = Instant.now().plus(SOFT_RESERVATION_TTL);
+
+        try {
+            bookingRepo.insert(reservationId, classId, userId,
+                BookingStatus.SOFT_RESERVED, expiresAt);
+        } catch (Exception e) {
+            // Compensating action — Postgres write failed, release the seat
+            seatCounter.increment(classId);
+            throw new BookingException("Failed to persist reservation.", e);
+        }
+
+        // Step 3: Set soft reservation TTL key (for auto-expiry lookup)
+        seatCounter.setSoftReservation(classId, userId, SOFT_RESERVATION_TTL);
+
+        return new SeatReservation(reservationId, classId, userId,
+            BookingStatus.SOFT_RESERVED, expiresAt);
+    }
+
+    /**
+     * Confirm a soft reservation → payment has been taken.
+     * Transitions: SOFT_RESERVED → CONFIRMED
+     */
+    public Booking confirm(String bookingId, String userId) {
+        Booking booking = bookingRepo.findById(bookingId);
+
+        if (booking.getStatus() != BookingStatus.SOFT_RESERVED) {
+            throw new InvalidBookingStateException(
+                "Cannot confirm booking in state: " + booking.getStatus()
+            );
+        }
+        if (!booking.getUserId().equals(userId)) {
+            throw new UnauthorizedException("Booking does not belong to user.");
+        }
+        if (Instant.now().isAfter(booking.getExpiresAt())) {
+            throw new ReservationExpiredException("Soft reservation has expired.");
+        }
+
+        bookingRepo.updateStatus(bookingId, BookingStatus.CONFIRMED);
+        return bookingRepo.findById(bookingId);
+    }
+
+    /**
+     * Cancel a booking → return seat to Redis counter.
+     * Late cancellation fee is a business rule enforced here (not in Redis).
+     */
+    public void cancel(String bookingId, String userId) {
+        Booking booking = bookingRepo.findById(bookingId);
+
+        if (booking.getStatus() == BookingStatus.CANCELLED) {
+            return;   // idempotent — already cancelled
+        }
+
+        // Business rule: late cancellation fee (< 2 hours before class)
+        boolean isLateCancellation = isWithinCutoff(booking.getClassStartTime(), Duration.ofHours(2));
+
+        bookingRepo.updateStatus(bookingId, BookingStatus.CANCELLED);
+        seatCounter.increment(booking.getClassId());   // return seat to Redis
+
+        // Promote next person from waitlist
+        waitlistService.promoteNext(booking.getClassId());
+
+        if (isLateCancellation) {
+            // Charge late-cancel fee — async, via event/Kafka
+            // lateCancellationEventPublisher.publish(bookingId, userId);
+        }
+    }
+
+    private boolean isWithinCutoff(Instant classStartTime, Duration cutoff) {
+        return Instant.now().isAfter(classStartTime.minus(cutoff));
+    }
+}
+```
+
+**RedisSeatCounter — the Redis implementation:**
+
+```java
+/**
+ * Redis-backed seat counter using Lua script for atomic DECR.
+ * Key: seat_count:{classId}
+ * Lua atomicity: no other Redis command runs between GET and DECR.
+ * This is the distributed concurrency guarantee — not Java synchronized.
+ */
+public class RedisSeatCounter implements SeatCounter {
+
+    private static final String DECR_LUA =
+        "local count = tonumber(redis.call('GET', KEYS[1])) " +
+        "if count == nil or count <= 0 then return -1 end " +
+        "return redis.call('DECR', KEYS[1])";
+
+    private final RedisClient redisClient;
+
+    @Override
+    public int decrement(String classId) {
+        String key = "seat_count:" + classId;
+        return (int) redisClient.eval(DECR_LUA, key);
+    }
+
+    @Override
+    public void increment(String classId) {
+        redisClient.incr("seat_count:" + classId);
+    }
+
+    @Override
+    public void setSoftReservation(String classId, String userId, Duration ttl) {
+        String key = "soft_reservation:" + classId + ":" + userId;
+        redisClient.setex(key, ttl.getSeconds(), "1");
+    }
+
+    @Override
+    public boolean hasSoftReservation(String classId, String userId) {
+        return redisClient.exists("soft_reservation:" + classId + ":" + userId);
+    }
+
+    @Override
+    public int getAvailableCount(String classId) {
+        String val = redisClient.get("seat_count:" + classId);
+        return val == null ? 0 : Integer.parseInt(val);
+    }
+}
+```
+
+---
+
+### 🔁 Concurrency — The Core Point
+
+```
+1000 users simultaneously hit POST /bookings for a 15-seat yoga class:
+
+Thread 1:  RedisSeatCounter.decrement("yoga-7pm") → Lua runs → count=14 → proceed
+Thread 2:  RedisSeatCounter.decrement("yoga-7pm") → Lua runs → count=13 → proceed
+...
+Thread 15: RedisSeatCounter.decrement("yoga-7pm") → Lua runs → count=0  → proceed
+Thread 16: RedisSeatCounter.decrement("yoga-7pm") → Lua runs → count=-1 → REJECT
+...
+Thread 1000: REJECT
+
+No Java synchronized needed. Redis single-threaded execution model
+serializes all 1000 DECR calls. One by one. No race possible.
+```
+
+**The only race is Redis crash between DECR and Postgres write:**
+- DECR committed (Redis log fsynced), Postgres write fails → `increment()` compensates
+- DECR committed, app server crashes before Postgres write → reconciliation job detects: `Redis counter < (capacity - confirmed_bookings)` → `INCR` Redis back
+- AOF persistence minimizes this window to <1 second
+
+---
+
+### 🔬 LLD Interview Probes — CF1 Specific
+
+**Q: "Walk me through what happens when 1000 users hit /bookings at 7 PM for a 15-seat class."**
+> All 1000 HTTP requests reach the API Gateway. Each one calls `BookingService.reserve()`. Inside, each calls `RedisSeatCounter.decrement()` — a Redis Lua script. Redis executes them one at a time (single-threaded). First 15 decrement from 15 down to 0 and get a valid reservation. Requests 16-1000 get -1 from the Lua script and receive a 409. No overselling. No Java locking.
+
+**Q: "What happens if the Postgres write fails after Redis DECR succeeds?"**
+> `reserve()` catches the exception and calls `seatCounter.increment(classId)` — compensating action returns the seat to Redis. The user gets an error response. The seat counter is restored. Another user can now take that seat. This is a mini-saga: DECR is the forward action, INCR is the compensating rollback.
+
+**Q: "A user reserves a seat but never confirms (payment fails). How does the seat get returned?"**
+> Two mechanisms: (1) The `soft_reservation:{classId}:{userId}` Redis key has a 5-minute TTL — when it expires, the seat is logically freed. (2) A reconciliation job runs every 5 minutes: `SELECT count(*) FROM bookings WHERE class_id=X AND status='SOFT_RESERVED' AND expires_at < NOW()` — for each expired row, update status to EXPIRED and INCR Redis counter. The reconciliation job is the safety net for any key expiry edge cases.
+
+**Q: "How does the waitlist work at the class design level?"**
+> `WaitlistService` wraps a Redis `ZSET` keyed by `waitlist:{classId}`. On join-waitlist: `ZADD waitlist:{classId} {timestamp} {userId}` — timestamp is the score, giving FIFO ordering. On cancellation: `BookingService.cancel()` calls `waitlistService.promoteNext(classId)` which calls `ZPOPMIN waitlist:{classId}` — pops the earliest timestamp. That userId gets a soft reservation (same `reserve()` flow, bypass the DECR because they're being promoted, or DECR has already been incremented on cancel).
+
+**Q: "Why is BookingStatus an enum and not just a String in the DB?"**
+> Enums enforce valid state transitions at the Java layer before the DB sees them. `confirm()` checks `booking.getStatus() != BookingStatus.SOFT_RESERVED` — if we used a String, "SoFt_ReSeRvEd" would pass the equals check and corrupt state. The enum also makes `switch` statements exhaustive — adding a new status forces updating every switch that processes bookings. At interview: "I'd store it as a VARCHAR in Postgres — the DB stores strings, Java enforces the enum. No DB migration needed when I add a state."
 
 ---
 

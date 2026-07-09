@@ -6,6 +6,22 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **Outbox / CDC pattern** | `Foundations/Data-Fundamentals/07-cdc-outbox.md` | The triggering microservice must atomically write its DB record AND publish the event to Kafka — the outbox pattern prevents the "payment succeeded but event never published" failure mode |
+| **Idempotency** | `Foundations/Concurrency-and-Consistency/04-idempotency.md` | At-least-once Kafka delivery means the notification worker may consume the same event twice — idempotency key (idempotency_key + channel) in the sent_notifications table prevents duplicate emails |
+| **Message queues (Kafka + SQS)** | `Core-Architecture/Service-Communication/19-message-queues-kafka-rabbitmq.md` | Kafka as the durable event bus; SQS as the per-channel delivery queue — know why two queue layers, when to use dead-letter queues, and partition key design |
+| **Push notifications fan-out** | `Core-Architecture/Service-Communication/46-push-notifications-fanout.md` | APNs and FCM have completely different token formats, payload sizes, and failure semantics — know the token lifecycle and how to handle token expiry |
+| **Feed and fan-out** | `Patterns/DeepDive/03-feed-and-fanout.md` | One event → multiple channels (email + SMS + push) is a fan-out — know when to use pull-on-read vs push-on-write for channel delivery |
+| **Retry / exponential backoff** | `Core-Architecture/Resilience-and-Fault-Tolerance/35-retry-exponential-backoff-patterns.md` | Provider failure (SendGrid down) triggers retry with backoff + jitter — know the formula and how the dead-letter queue captures exhausted retries |
+| **Caching fundamentals** | `Foundations/Performance-and-Scale/03-caching.md` | User channel preferences are read on every notification — cache with short TTL to avoid DB lookup per delivery, invalidate on preference update |
+
+---
+
 ## 🎯 What Is This System?
 
 **In plain English:** A notification service is a standalone system that receives events from other microservices ("payment failed", "document signed", "new comment") and delivers messages to users across multiple channels — email, SMS, and push notification — based on each user's preferences, exactly once, with retry on failure.
@@ -981,6 +997,26 @@ Notifications are critical to DocuSign's product. When a document is ready for s
 
 5. **High availability**: Notifications are on the critical path. If the notification service is down, customers can't sign documents. 99.9% SLO is non-negotiable.
 
+6. **SLA-based queue isolation — from Docusign Engineering Blog (mid-2025):**
+
+The existing design uses per-channel queues (email / SMS / push). Docusign's own engineering blog reveals they also isolate by **SLA class** — a completely different dimension of isolation:
+
+| Queue Class | SLA Target | What goes in this queue |
+|---|---|---|
+| **Live Queue** | P95 < 15 minutes | User-facing real-time requests — "You have a document to sign" |
+| **Bulk Queue** | Flexible SLA | Batch jobs — nightly reminder digests, bulk send of 50K envelopes |
+| **Workflow Queue** | Per-workflow SLA | Orchestrated multi-step workflows — sequential signing chains, conditional routing |
+
+**Why this matters — head-of-line blocking.** If a bulk import of 50K envelopes generates 50K notifications and they enter the same queue as a live signing request, the live request waits behind 50,000 messages. A signer sees a 10-minute delay receiving their email.
+
+**Fix: Two-tier priority model.** Inbound events carry `"priority": "high"` (live signing) vs `"priority": "bulk"` (batch). Fan-out Service routes to the SLA-appropriate queue. Live queue consumers are a larger, always-warm fleet. Bulk queue consumers auto-scale.
+
+Your per-channel queues remain — they handle the *channel* dimension. SLA queues handle the *priority* dimension. Full topology for production: `email-high`, `email-bulk`, `sms-high`, `push-high`. For MVP: at minimum separate `high` and `bulk` before channel split.
+
+7. **CAP theorem position for notifications:**
+
+Notifications are **AP** (availability over consistency). Staleness is acceptable — a signer receiving their email 30 seconds later than the exact moment of status change is not legally material. Contrast with signed document records (CP). State this explicitly: "For this service I choose AP — a duplicate notification is recoverable (user ignores it); a notification that never arrives is not."
+
 **Your answer should include:**
 
 > "Notifications are event-driven via Kafka. When a document is ready for the next signer, the Document Service publishes an event. The Notification Service consumes it, checks the signer's preferences (cached in Redis), respects quiet hours (converted to the user's timezone), and fans out to the user's enabled channels (email, SMS, push) via separate SQS queues. Each channel retries with exponential backoff on transient failures. Idempotency keys prevent duplicate emails (if the Kafka consumer restarts). The entire flow is audited: every notification delivery attempt is logged to notification_status for compliance. If a notification fails permanently, it goes to a dead-letter queue for manual inspection by support."
@@ -1152,6 +1188,233 @@ Notifications are critical to DocuSign's product. When a document is ready for s
 
 ---
 
+---
+
+## 🔌 LLD Drill-Down — Class Structure for the Notification Delivery Layer
+
+> **Trigger:** Interviewer says "Walk me through the class structure for the delivery layer" or "How would you model the channel handlers?" — this is the expected LLD follow-up for D3.
+>
+> **What they're testing:** Observer / Strategy pattern for extensible channel delivery, and whether you understand WHY synchronous observer calls fail at 35K notifs/sec.
+
+---
+
+### 🧠 Mental Model Before You Draw
+
+The fan-out service receives one notification event and must dispatch to N channels (email, SMS, push). Each channel is independent — SMS failing must not block email. Each channel handler is pluggable — adding Slack = one new class.
+
+This is **Observer meets Strategy**: Observer for the "fire to all interested channels" pattern; Strategy for each channel's delivery algorithm.
+
+**But here's the critical interview insight:** A naive Observer calls each handler synchronously inline. At 35K notifs/sec, a Twilio 500 response blocks the entire thread for the timeout duration. The correct answer is: the fan-out service publishes to per-channel SQS queues (async). The Observer interface is still the design — but execution is decoupled.
+
+---
+
+### 🏗️ Class Structure
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    NotificationFanoutService                 │
+│  - handlers: Map<DeliveryChannel, DeliveryHandler>           │
+│  - preferenceService: UserPreferenceService                  │
+│  - queueClient: SqsClient                                    │
+│  + fanout(NotificationEvent event): void                     │
+└──────────────────────────────────────────────────────────────┘
+         │ dispatches to
+         ▼
+┌──────────────────────────┐     ┌──────────────────────────────┐
+│  <<interface>>           │     │  UserPreferenceService        │
+│  DeliveryHandler         │     │  + getPreferences(userId)     │
+│  + deliver(event): void  │     │  (Redis cache, 5-min TTL)     │
+└──────────┬───────────────┘     └──────────────────────────────┘
+           │ implements
+  ┌────────┴──────────────────────────┐
+  │                                   │
+EmailDeliveryHandler    SmsDeliveryHandler    PushDeliveryHandler
+(enqueues to           (enqueues to           (enqueues to
+ email-queue)           sms-queue)             push-queue)
+
+DeliveryChannel (enum): EMAIL, SMS, PUSH
+
+NotificationEvent
+  - eventId:    String          ← idempotency key
+  - userId:     String
+  - type:       NotificationType  (SIGNING_REQUEST, COMPLETED, REMINDER)
+  - payload:    Map<String, Object>
+  - createdAt:  Instant
+
+NotificationStatus (enum): PENDING, DELIVERED, FAILED, SKIPPED
+```
+
+---
+
+### 🔌 Key Interfaces
+
+```java
+/**
+ * Contract for every delivery channel.
+ * Adding Slack = one new class, zero changes to FanoutService.
+ * Open-Closed Principle + Separation of Concerns.
+ */
+public interface DeliveryHandler {
+
+    DeliveryChannel getChannel();
+
+    // Enqueues to the channel-specific SQS queue.
+    // Does NOT call SendGrid/Twilio directly — the SQS worker does that.
+    // This makes deliver() fast and non-blocking (~1ms per call).
+    void deliver(NotificationEvent event);
+}
+```
+
+```java
+public enum DeliveryChannel {
+    EMAIL,
+    SMS,
+    PUSH
+}
+```
+
+---
+
+### 🖊️ Critical Classes — Write These in the Interview
+
+**NotificationFanoutService — the core class:**
+
+```java
+public class NotificationFanoutService {
+
+    private final Map<DeliveryChannel, DeliveryHandler> handlers;
+    private final UserPreferenceService preferenceService;
+
+    public NotificationFanoutService(
+            List<DeliveryHandler> handlers,
+            UserPreferenceService preferenceService) {
+        this.handlers = handlers.stream()
+            .collect(Collectors.toMap(DeliveryHandler::getChannel, h -> h));
+        this.preferenceService = preferenceService;
+    }
+
+    /**
+     * Fan-out one event to all channels the user has opted in to.
+     * Each DeliveryHandler enqueues to its SQS queue — non-blocking.
+     * If one channel fails to enqueue, others are NOT affected (try-catch per channel).
+     */
+    public void fanout(NotificationEvent event) {
+        UserPreferences prefs = preferenceService.getPreferences(event.getUserId());
+        for (DeliveryChannel channel : prefs.getEnabledChannels()) {
+            DeliveryHandler handler = handlers.get(channel);
+            if (handler != null) {
+                try {
+                    handler.deliver(event);
+                } catch (Exception e) {
+                    // Log and continue — one channel failure must not block others
+                    // In production: publish to a dead-letter topic for alerting
+                }
+            }
+        }
+    }
+}
+```
+
+**EmailDeliveryHandler — one concrete channel (SMS and Push follow same pattern):**
+
+```java
+/**
+ * Enqueues the notification to the email-specific SQS queue.
+ * The SQS worker (separate service) calls SendGrid.
+ * Why not call SendGrid directly here?
+ * → At 35K notifs/sec, a 2s SendGrid timeout blocks this thread for 2 seconds.
+ *   With 10 threads, we'd be stuck after 5 concurrent failures.
+ *   Enqueuing to SQS is <5ms and never blocks on provider availability.
+ */
+public class EmailDeliveryHandler implements DeliveryHandler {
+
+    private final SqsClient sqsClient;
+    private final String emailQueueUrl;
+
+    @Override
+    public DeliveryChannel getChannel() {
+        return DeliveryChannel.EMAIL;
+    }
+
+    @Override
+    public void deliver(NotificationEvent event) {
+        String messageBody = serialize(event);
+        sqsClient.sendMessage(emailQueueUrl, messageBody);
+    }
+
+    private String serialize(NotificationEvent event) {
+        // JSON serialization — in production use Jackson ObjectMapper
+        return "{\"eventId\":\"" + event.getEventId() + "\",\"userId\":\"" + event.getUserId() + "\"}";
+    }
+}
+```
+
+**The SQS worker that actually calls SendGrid (separate from the fan-out service):**
+
+```java
+/**
+ * Polls email-queue and calls SendGrid.
+ * Separate from the fan-out path — failures here trigger SQS retry, not fan-out retry.
+ * Idempotency: checks event_id in Redis before calling SendGrid.
+ */
+public class EmailWorker {
+
+    private final SendGridClient sendGridClient;
+    private final RedisClient redisClient;
+    private static final Duration IDEMPOTENCY_TTL = Duration.ofHours(24);
+
+    public void processMessage(SqsMessage message) {
+        NotificationEvent event = deserialize(message.getBody());
+
+        // Idempotency check — at-least-once delivery, but exactly-once SendGrid call
+        String idempotencyKey = "notif:sent:" + event.getEventId() + ":email";
+        if (redisClient.exists(idempotencyKey)) {
+            return;   // already delivered — SQS duplicate, skip
+        }
+
+        sendGridClient.send(buildEmail(event));
+        redisClient.setex(idempotencyKey, IDEMPOTENCY_TTL, "1");
+    }
+}
+```
+
+---
+
+### 🔁 Concurrency — The Critical Point
+
+At 35K notifs/sec the fan-out service is multi-threaded. Two threads can fan-out the same event simultaneously (SQS redelivery, retry). The idempotency key in the worker (Redis `SETNX`) prevents double-delivery:
+
+```
+Thread A: deliver event_id=X → SQS → worker: SETNX "notif:sent:X:email" → SET (new) → call SendGrid
+Thread B: deliver event_id=X → SQS → worker: SETNX "notif:sent:X:email" → EXISTS → skip
+```
+
+`NotificationFanoutService.fanout()` itself does NOT need synchronization — each `deliver()` call is a stateless SQS enqueue. State lives in Redis + the outbox table, not in shared Java heap.
+
+---
+
+### 🔬 LLD Interview Probes — D3 Specific
+
+**Q: "Your fanout() method catches exceptions per channel. What happens if the SQS enqueue itself fails?"**
+> The outbox is the safety net. The outbox processor is polling the `notification_outbox` table for `status = PENDING` rows. Even if SQS enqueue fails in `fanout()`, the outbox row stays PENDING. The processor retries the next poll cycle (every 100ms). The `DeliveryHandler.deliver()` failure is transient — the outbox guarantees eventual delivery.
+
+**Q: "How do you add a new Slack channel tomorrow?"**
+> One new class: `SlackDeliveryHandler implements DeliveryHandler`. Override `getChannel()` to return `DeliveryChannel.SLACK` (add the enum value). Override `deliver()` to enqueue to a new `slack-queue`. Register it with `NotificationFanoutService` via constructor injection. Zero changes to `fanout()`, zero changes to existing handlers. This is the Open-Closed Principle — the fan-out service is closed to modification, open to extension.
+
+**Q: "Why not call SendGrid directly in EmailDeliveryHandler.deliver()?"**
+> At 35K notifs/sec with 10 fanout threads, if SendGrid is slow (2s timeout), 10 concurrent slow calls exhaust the thread pool in 200ms. Every subsequent fanout() call blocks waiting for a thread. One provider's latency spike takes down the entire notification system. SQS enqueue is <5ms and always fast — it decouples our latency from the provider's latency.
+
+**Q: "What if UserPreferenceService is slow — user preferences lookup takes 500ms?"**
+> That's why preferences are cached in Redis with a 5-minute TTL. The cache miss path (cold start or TTL expiry) hits Postgres and populates Redis — one slow call per user every 5 minutes. At 35K notifs/sec, 99.9% of lookups are Redis hits (<1ms). The 0.1% cache misses are ~35 Postgres queries/sec — well within single-instance Postgres capacity.
+
+**Q: "Walk me through exactly-once delivery — same event, two SQS deliveries. What happens?"**
+> SQS guarantees at-least-once delivery, so a retry or network hiccup can redeliver. The worker checks `SETNX "notif:sent:{event_id}:{channel}"` before calling the provider. First delivery: SETNX returns true → proceed → call SendGrid → set key with 24h TTL. Second delivery: SETNX returns false (key exists) → skip. The 24h TTL covers the SQS visibility timeout window (max 12h) with margin. Result: at-least-once at the SQS layer, exactly-once at the SendGrid call layer.
+
+**Q: "DocuSign sends a bulk envelope to 50,000 signers. All 50,000 notification events arrive in 2 seconds. What breaks?"**
+> Nothing in the current design — this is exactly what Kafka partitioning + per-channel SQS auto-scaling handles. 50,000 events → 50 Kafka partitions absorb the burst → fan-out consumers process in parallel → 50,000 SQS enqueues in <10 seconds → SQS email-queue auto-scales consumer fleet. The only limit is SendGrid's throughput cap (21K emails/sec at peak). If 50K emails in 2 seconds exceeds that, SQS provides natural buffering — emails are delivered within minutes, not rejected.
+
+---
+
 ## 🔄 Changelog
 
 | Date | Change |
@@ -1159,4 +1422,5 @@ Notifications are critical to DocuSign's product. When a document is ready for s
 | June 24, 2026 | **D3-notification-service.md created.** Full 15-section solution framework for Type A System Design. Covers: outbox pattern for reliable event publishing, per-channel fan-out (email/SMS/push), exponential backoff retry logic, idempotency for exactly-once delivery, rate limiting, and DocuSign-specific depth (multi-signer coordination, audit trails, quiet hours). Scale: 1B notifs/day, 35K notifs/sec peak. Prerequisites: `07-cdc-outbox.md`, `04-idempotency.md`. |
 | Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **APNs vs FCM distinction** — FCM wraps APNs for iOS (adds latency), or use native APNs direct (lower latency, but two auth flows); store `device_platform` per device and route directly; (2) **Stale device token handling** — APNs returns HTTP 410 `BadDeviceToken`, FCM returns `registration_not_found`; correct response: immediately delete from device token table, no retry; failure to handle this causes APNs rate-limiting of your entire service; (3) **Outbox polling at scale** — 3,500 rows/batch at 100ms is fine today; at 10× scale, switch from polling to CDC via Debezium (reads Postgres WAL, publishes to Kafka, zero SELECT overhead, sub-ms latency); `SELECT FOR UPDATE SKIP LOCKED` prevents multi-processor row contention for the intermediate scale. |
 | Jul 5, 2026 | **Section 6 restructured: single final-state diagram → 3-stage progressive HLD.** Stage 1 (Direct Sync HTTP): upstream calls Notification Service synchronously; Service calls SendGrid + Twilio in sequence — BREAKING POINTs: provider down = caller blocks + request fails; sequential calls saturate thread pool at 35K/sec; no retry = lost notifications. Stage 2 (Kafka + Per-Channel SQS + Retry): Kafka for ordered event ingestion, Fan-out Service routes to email-queue/sms-queue/push-queue, delivery workers with exponential backoff retry — BREAKING POINTs: dual-write gap (crash between DB write and Kafka publish = silent loss); no idempotency (consumer restart = duplicate emails). Stage 3 (Outbox + Redis + DLQ — production): outbox pattern makes DB write + Kafka publish atomic; Redis handles rate limiting (INCR+TTL) + preferences cache (5-min TTL) + idempotency keys (event_id+user_id+channel, 24h TTL); DLQ captures permanent failures. Four inline decision tables added: (1) event transport — sync HTTP ❌ / single queue ⚠️ / Kafka ✅; (2) fan-out queue strategy — single queue ❌ / in-memory ❌ / per-channel SQS ✅; (3) retry pattern — none ❌ / fixed-interval ⚠️ / exp backoff+jitter ✅; (4) idempotency storage — none ❌ / Postgres table ⚠️ / Redis TTL ✅. All Section 6 verdicts verified against Section 7 deep dive choices — no contradictions. |
+| Jul 9, 2026 | **Section 11 additions.** (1) SLA-based queue isolation from Docusign Engineering Blog mid-2025: Live Queue (P95 <15 min), Bulk Queue (flexible SLA), Workflow Queue (per-workflow SLA); explains head-of-line blocking and two-tier priority model; cross-references existing per-channel queues. (2) CAP theorem position for notifications explicitly stated: AP (staleness not legally material; duplicate recoverable; contrast with signed records which are CP). |
 | Jul 5, 2026 | **Section 10 business impact + Section 14 DocuSign dimensions pass.** Section 10: added **Business impact:** to all 3 trade-offs — 40% latency overhead causing signer abandonment before notification delivery completes (throughput cost), email delay triggering duplicate "Sign Now" click creating duplicate envelope event (at-least-once delivery), bulk-send 50K envelopes backing up notification queue for hours and missing marketing campaign deadline (queue depth). Section 14: rewrote all 7 dimension cells — ZoneId DST ambiguity in quiet-hours scheduler causing midnight notification surge (Usability), `delivery_log` audit trail as legal proof of notification for non-repudiation disputes (Observability), bulk-send Kafka partition design from Section 4 (35K notifs/sec, 20 partitions) enabling Scalability RCA. |

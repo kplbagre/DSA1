@@ -33,15 +33,15 @@ Two modes — Kapil picks per session:
 | 2 | Problem | Parking Lot | `Problems/parking-lot/` | ✅ Done | ⭐ Critical — asked everywhere |
 | — | Problem | Tic-Tac-Toe | `Problems/tictactoe/` | ✅ Done (bonus) | Medium |
 | 3 | Pattern | Observer | `DesignPatterns/02-observer.md` | ✅ Done | ⭐ Critical — notification, event systems |
-| 4 | Problem | **BookMyShow / Movie Ticket** | `Problems/bookmyshow/` | 🔜 **NEXT** | ⭐ Critical — Flipkart SDE2 asked this |
+| 4 | Problem | **BookMyShow / Movie Ticket** | `Problems/bookmyshow/` | 📖 Canonical — not self-attempted | ⭐ Critical — Flipkart SDE2 asked this |
 | 5 | Pattern | Command | `DesignPatterns/03-command.md` | ✅ Done | High |
 | 6 | Problem | Elevator System | `Problems/elevator/` | [ ] Not started | High |
 | 7 | Pattern | Builder | `DesignPatterns/04-builder.md` | ✅ Done | Medium |
 | 8 | Problem | Splitwise | `Problems/splitwise/` | [ ] Not started | High — Uber HLD asked |
 | 9 | Pattern | State | `DesignPatterns/05-state.md` | ✅ Done | Medium |
 | 10 | Problem | Vending Machine | `Problems/vending-machine/` | [ ] Not started | Medium |
-| 11 | Problem | LRU Cache | `Problems/lru-cache/` | [ ] Not started | High — technical LLD |
-| 12 | Problem | Rate Limiter (LLD) | `Problems/rate-limiter/` | [ ] Not started | ⭐ Critical — technical LLD |
+| 11 | Problem | LRU Cache | `Problems/lru-cache/` | 📖 Canonical — not self-attempted | High — technical LLD |
+| 12 | Problem | Rate Limiter (LLD) | `Problems/rate-limiter/` | 📖 Canonical — not self-attempted | ⭐ Critical — technical LLD |
 
 ---
 
@@ -105,3 +105,4 @@ These are not in the interleaved study order — they're prerequisite reading. A
 | June 2026 | TODO created. Interleaved approach decided. Practice folder deferred. |
 | June 2026 | Updated: marked 01-factory-strategy, parking-lot, observer, state as ✅ Done. Tictactoe added as bonus done. BookMyShow marked as 🔜 NEXT. Practice workflow section added — two modes: "You write first" vs "I write first" (preferred). BookMyShow resources-ready checklist added. resources.md added as a standard reference. |
 | June 2026 | **Command (03) and Builder (04) marked Done.** 6 foundation files created from hellointerview gap analysis: oop-concepts, design-principles, concurrency-deep-dive, singleton. Foundation Files section added to TODO. |
+| Jul 9, 2026 | **3 canonical notes created** (single-MD format — all classes inline): BookMyShow, Rate Limiter, LRU Cache. Status is 📖 Canonical (not self-attempted). All Java in one MD file per problem — separate .java files removed. |

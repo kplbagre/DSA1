@@ -4,6 +4,22 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **WebSocket / real-time communication** | `Production-Grade/System-Design-Patterns/26-websocket-real-time-communication.md` | The entire real-time delivery model — persistent connections, connection-server affinity, how the routing layer tracks which server holds each user's socket |
+| **Message queues (Kafka / RabbitMQ)** | `Core-Architecture/Service-Communication/19-message-queues-kafka-rabbitmq.md` | Fan-out to multi-device delivery; decouples senders from the push layer; guarantees durability when a socket is temporarily down |
+| **Feed and fan-out pattern** | `Patterns/DeepDive/03-feed-and-fanout.md` | Group chats and multi-device delivery are a fan-out problem — know push-on-write vs pull-on-read trade-offs |
+| **Real-time updates pattern** | `Patterns/DeepDive/07-real-time-updates.md` | Presence, typing indicators, read receipts — these are sub-second state updates that bypass the normal request-response model |
+| **Caching fundamentals** (Redis) | `Foundations/Performance-and-Scale/03-caching.md` | Online/presence status lives in Redis (not the DB) — TTL-based presence is a standard interviewer follow-up |
+| **Outbox / CDC pattern** | `Foundations/Data-Fundamentals/07-cdc-outbox.md` | Reliable Kafka publish after a message insert — prevents the "message written but Kafka publish crashed" data loss scenario |
+| **Idempotency** | `Foundations/Concurrency-and-Consistency/04-idempotency.md` | Duplicate delivery on retry — the client-side idempotency key pattern is the correct answer here |
+
+---
+
 ## 🎯 What Is This System?
 
 **In plain English:** A real-time messaging system lets users exchange messages instantly, see delivery and read receipts, and know who's online. Messages must survive network drops, arrive in order, and sync across all a user's devices.

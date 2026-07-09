@@ -4,6 +4,21 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **CDN / edge caching** | `Production-Grade/Performance-Optimization/28-cdn-edge-caching.md` | The entire delivery architecture — CDN pre-warming, origin shielding, and cache hit ratio are the core scalability answers; without this you cannot answer "how do 1M viewers watch the same video simultaneously" |
+| **Blob / document storage** | `Foundations/Data-Fundamentals/14-document-blob-storage.md` | S3-style object storage, pre-signed URLs, multipart uploads for large files — the upload path and sealed storage pattern |
+| **Handling large blobs** | `Patterns/DeepDive/08-handling-large-blobs.md` | Chunked upload, resumable upload, range-request streaming — the complete large-file pattern for upload and playback |
+| **Long-running tasks** | `Patterns/DeepDive/06-long-running-tasks.md` | Transcoding is async and takes minutes — know the job queue + worker + status polling pattern and why it must not block the upload API |
+| **Job scheduling at scale** | `Production-Grade/System-Design-Patterns/47-job-scheduling-at-scale.md` | Transcoding job queue design, worker scaling, priority queues for live vs VOD content |
+| **Scaling reads** | `Patterns/DeepDive/01-scaling-reads.md` | Video serving is almost 100% reads — know the CDN + origin read replica + cache strategy to handle global read amplification |
+
+---
+
 ## 🎯 What Is This System?
 
 **In plain English:** A video distribution system accepts large video uploads, transcodes them into multiple quality levels, and delivers them through a global CDN so any viewer — anywhere in the world — can start watching within seconds at the best quality their connection supports.

@@ -4,6 +4,21 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **Rate limiting algorithms** (token bucket, sliding window, leaky bucket) | `Foundations/Performance-and-Scale/02-rate-limiting.md` | The core algorithm question — you must be able to draw token bucket vs sliding window log vs fixed window counter and know the memory/accuracy trade-offs of each |
+| **Rate limiting (advanced)** — distributed coordination, adaptive limiting | `Foundations/Performance-and-Scale/02-rate-limiting_advanced.md` | How to coordinate counters across 50 API nodes without a central bottleneck; adaptive rate limiting based on downstream health |
+| **Caching fundamentals** (Redis atomic operations) | `Foundations/Performance-and-Scale/03-caching.md` | The Redis `INCR` + `EXPIRE` pattern for sliding window counters; Redis pipelining for low-latency increments |
+| **Consistent hashing** | `Foundations/Performance-and-Scale/05-consistent-hashing.md` | When Redis itself is sharded, you need to know which shard holds a given account's counter — and how to recover when a shard goes down |
+| **Sharded counters** | `Foundations/Performance-and-Scale/09-sharded-counters.md` | Hot accounts (Goldman Sachs making 10K req/s) create hot Redis keys — sharded counter pattern distributes the write load |
+| **DB types and selection** | `Core-Architecture/Database-Core/06-databases-types-and-selection.md` | Why Redis (not SQL, not Cassandra) is the right store for rate limit counters — latency, atomicity, TTL support |
+
+---
+
 ## 🎯 What Is This System?
 
 **In plain English:** A rate limiter counts how many requests a client makes in a sliding time window and returns HTTP 429 (Too Many Requests) once they exceed their quota — protecting your backend services from abuse, DDoS attacks, runaway automation, and accidental infinite retry loops.
@@ -794,6 +809,30 @@ quota:api_key_12345 → { tier: "standard", limit: 1000, burst: 100 }
 
 ---
 
+### New Tier 2 Probe (added Jul 9, 2026 — confirmed from 2025 candidate reports)
+
+**Q: "You chose API-key-based identification. At DocuSign — an enterprise SaaS with multi-tenant contracts — an API key identifies which integration, not which human or organization. How do you identify the actual client in a multi-tenant context?"**
+> This is the DocuSign-specific push interviewers make. API key alone fails because two Goldman Sachs integrations sharing one DocuSign account could have different API keys but both draw from the same enterprise quota. IP-based is worse — it fails completely behind corporate NAT.
+>
+> **The identity chain at DocuSign:**
+>
+> 1. **JWT (JSON Web Token)** — every DocuSign API call carries a JWT in `Authorization: Bearer`. The JWT payload contains `account_id` (the enterprise tenant) and `user_id` (the specific human). Extract `account_id` to identify the tenant, not the API key.
+>
+> 2. **KYC data** (Know Your Customer — the identity verification process enterprises complete during DocuSign contract signing; a KYC-verified account is tied to a legal entity, a contract tier, and agreed usage limits) → the rate limit is per account, defined by the signed contract, not by which key or IP is calling. Goldman Sachs signed for 10,000 envelopes/month — that's the quota, regardless of how many integrations they run.
+>
+> **Rate limit key changes:**
+> ```
+> Old (wrong for DocuSign):   rate_limit:{api_key}:{window}
+> New (correct):              rate_limit:{account_id}:{window}
+> Sub-account (optional):     rate_limit:{account_id}:{user_id}:{window}
+> ```
+>
+> **Why this impresses the interviewer:** Most candidates propose IP or API-key limiting. Pushing to JWT + account_id shows you understand that DocuSign's rate limits are a contractual SLA feature, not just a protection mechanism. The per-account limit maps directly to the enterprise contract signed at KYC time.
+>
+> **In an interview:** "At DocuSign I'd extract the `account_id` from the JWT — that's the tenant identifier. Look up the contract tier from a config cache (Business Pro = X envelopes/month, Enterprise = custom). Apply the limit at `rate_limit:{account_id}:{window}`. API keys can be rotated, users can change, but the account is the billing unit and rate limit boundary."
+
+---
+
 ### New Cross-Concept Probe (Tier 3 — added Jul 4, 2026)
 
 **Q: "DocuSign serves customers in the US and EU. A European customer's requests go to the EU region, but your rate limit counter is in Redis. How do you prevent the same api_key from spending its quota twice — once in US Redis and once in EU Redis?"**
@@ -854,11 +893,306 @@ The TL;DR fixes the core idea in your head. Under stress, you'll default to this
 
 ---
 
+---
+
+## 🔌 LLD Drill-Down — Class Structure for the Rate Limiter
+
+> **Trigger:** Interviewer says "Walk me through the class design" or "Show me how you'd structure the rate limiter code" — expected follow-up when the HLD discussion covers the rate limiting layer.
+>
+> **What they're testing:** Strategy pattern for algorithm swappability, and the exact concurrency issue at the token count level (read-modify-write race). The distributed Redis angle is the key differentiator from a generic LLD answer.
+
+---
+
+### 🧠 Mental Model Before You Draw
+
+The HLD you designed uses Redis-backed distributed rate limiting. The LLD has two concerns:
+1. **The algorithm layer** — TokenBucket vs SlidingWindow (Strategy pattern)
+2. **The storage layer** — in-memory (single server) vs Redis (distributed)
+
+The interview will probe: "What's different about the class design when it's distributed?" The answer: the token decrement is no longer a Java field update — it's a Redis Lua script call. The interface stays the same; the implementation changes.
+
+**Key insight to say out loud:** "The `RateLimiter` interface is identical whether in-memory or Redis-backed. The caller — the API Gateway filter — never knows which implementation runs. I can swap in-memory for Redis by injecting a different implementation."
+
+---
+
+### 🏗️ Class Structure
+
+```
+┌──────────────────────────────────────────────────────────┐
+│               RateLimiterFilter (API Gateway)            │
+│  - service: RateLimiterService                           │
+│  + filter(request): allow / 429 Too Many Requests       │
+└──────────────────────────────────────────────────────────┘
+         │ calls
+         ▼
+┌──────────────────────────────────────────────────────────┐
+│               RateLimiterService                         │
+│  - limiters: ConcurrentHashMap<clientId, RateLimiter>   │
+│  - factory: RateLimiterFactory                           │
+│  - configRepo: RateLimitConfigRepository                 │
+│  + allowRequest(clientId): RateLimitResult               │
+└──────────────────────────────────────────────────────────┘
+         │ uses
+         ▼
+┌──────────────────┐      ┌─────────────────────────────────────┐
+│ RateLimiterFactory│─────▶│  <<interface>>                      │
+│ + create(config) │      │  RateLimiter                        │
+└──────────────────┘      │  + allowRequest(): RateLimitResult  │
+                          └──────────────────┬──────────────────┘
+                                             │ implements
+                           ┌─────────────────┴──────────────────┐
+                           │                                    │
+              TokenBucketRateLimiter         RedisTokenBucketRateLimiter
+              (in-memory, single server)     (Redis Lua, distributed)
+
+RateLimiterType  (enum): TOKEN_BUCKET, SLIDING_WINDOW
+RateLimiterTier  (enum): FREE, STANDARD, ENTERPRISE
+
+RateLimiterConfig
+  - tier:                 RateLimiterTier
+  - requestsPerMinute:    int    (100 / 1000 / 10000)
+  - burstCapacity:        int
+  - storageType:          StorageType  (IN_MEMORY | REDIS)
+
+RateLimitResult
+  - allowed:          boolean
+  - remainingQuota:   int
+  - retryAfterSeconds: int   (0 if allowed)
+```
+
+---
+
+### 🔌 Key Interfaces
+
+```java
+/**
+ * Contract for all rate-limiting algorithms.
+ * The API Gateway filter calls allowRequest() — never knows if it's
+ * in-memory or Redis-backed. Strategy pattern.
+ */
+public interface RateLimiter {
+
+    RateLimitResult allowRequest();
+}
+```
+
+```java
+public class RateLimitResult {
+
+    private final boolean allowed;
+    private final int remainingQuota;
+    private final int retryAfterSeconds;
+
+    public static RateLimitResult allow(int remaining) {
+        return new RateLimitResult(true, remaining, 0);
+    }
+
+    public static RateLimitResult reject(int retryAfterSeconds) {
+        return new RateLimitResult(false, 0, retryAfterSeconds);
+    }
+
+    // getters omitted for brevity
+}
+```
+
+---
+
+### 🖊️ Critical Classes — Write These in the Interview
+
+**In-memory TokenBucket (single server / fallback):**
+
+```java
+// thread-safe: synchronized on allowRequest
+// Use this for: single-server deployment or Redis-unavailable fallback
+public class TokenBucketRateLimiter implements RateLimiter {
+
+    private final int capacity;
+    private final int refillRatePerSecond;
+    private int tokens;
+    private long lastRefillTimestamp;
+
+    public TokenBucketRateLimiter(int capacity, int refillRatePerSecond) {
+        this.capacity = capacity;
+        this.refillRatePerSecond = refillRatePerSecond;
+        this.tokens = capacity;
+        this.lastRefillTimestamp = System.currentTimeMillis();
+    }
+
+    @Override
+    public synchronized RateLimitResult allowRequest() {
+        refill();
+        if (tokens > 0) {
+            tokens--;
+            return RateLimitResult.allow(tokens);
+        }
+        // Retry after: time until next refill (1 token = 1/refillRate seconds)
+        int retryAfter = 1000 / refillRatePerSecond / 1000;
+        return RateLimitResult.reject(retryAfter);
+    }
+
+    private void refill() {
+        long now = System.currentTimeMillis();
+        long elapsedSeconds = (now - lastRefillTimestamp) / 1000;
+        int tokensToAdd = (int) (elapsedSeconds * refillRatePerSecond);
+        if (tokensToAdd > 0) {
+            tokens = Math.min(capacity, tokens + tokensToAdd);
+            lastRefillTimestamp = now;
+        }
+    }
+}
+```
+
+**Redis-backed TokenBucket (distributed — the HLD answer):**
+
+```java
+/**
+ * Distributed rate limiter backed by Redis Lua script.
+ * The Lua script makes the check+decrement atomic in Redis's single-threaded model.
+ * No Java synchronization needed — Redis serializes all operations.
+ *
+ * Redis key: rate_limit:{clientId}:{window_minute}
+ * TTL: 2 minutes (cleanup after window expires)
+ */
+public class RedisTokenBucketRateLimiter implements RateLimiter {
+
+    private static final String LUA_SCRIPT =
+        "local current = redis.call('GET', KEYS[1]) " +
+        "if current == false then " +
+        "  redis.call('SET', KEYS[1], ARGV[1]) " +
+        "  redis.call('EXPIRE', KEYS[1], ARGV[2]) " +
+        "  return ARGV[1] " +
+        "end " +
+        "if tonumber(current) > 0 then " +
+        "  return redis.call('DECR', KEYS[1]) " +
+        "else " +
+        "  return -1 " +   // quota exhausted
+        "end";
+
+    private final RedisClient redisClient;
+    private final String clientId;
+    private final int capacity;
+    private final int windowSeconds;
+
+    @Override
+    public RateLimitResult allowRequest() {
+        String key = "rate_limit:" + clientId + ":" + getCurrentWindowMinute();
+        // Lua script executes atomically — no race condition possible
+        long remaining = redisClient.eval(LUA_SCRIPT, key, capacity, windowSeconds);
+        if (remaining >= 0) {
+            return RateLimitResult.allow((int) remaining);
+        }
+        return RateLimitResult.reject(windowSeconds - getCurrentSecondInWindow());
+    }
+
+    private String getCurrentWindowMinute() {
+        return String.valueOf(System.currentTimeMillis() / (windowSeconds * 1000L));
+    }
+
+    private int getCurrentSecondInWindow() {
+        return (int) ((System.currentTimeMillis() / 1000) % windowSeconds);
+    }
+}
+```
+
+**RateLimiterService — orchestrator with per-tier config and Redis fallback:**
+
+```java
+public class RateLimiterService {
+
+    private final ConcurrentHashMap<String, RateLimiter> limiters = new ConcurrentHashMap<>();
+    private final RateLimiterFactory factory;
+    private final RateLimitConfigRepository configRepo;
+
+    public RateLimitResult allowRequest(String clientId) {
+        RateLimiter limiter = limiters.computeIfAbsent(
+            clientId,
+            id -> factory.create(configRepo.getConfigFor(id))   // tier-specific config
+        );
+        try {
+            return limiter.allowRequest();
+        } catch (RedisException e) {
+            // Redis down → fail open with in-memory fallback
+            // ~5-10% temporary overages acceptable vs 100% reject
+            return fallbackLimiter(clientId).allowRequest();
+        }
+    }
+
+    private RateLimiter fallbackLimiter(String clientId) {
+        // Local in-memory limiter — approximate fairness during Redis outage
+        return localFallbacks.computeIfAbsent(
+            clientId,
+            id -> new TokenBucketRateLimiter(DEFAULT_CAPACITY, DEFAULT_REFILL_RATE)
+        );
+    }
+}
+```
+
+**RateLimiterFactory:**
+
+```java
+public class RateLimiterFactory {
+
+    private final RedisClient redisClient;
+
+    public RateLimiter create(RateLimiterConfig config) {
+        switch (config.getStorageType()) {
+            case REDIS:
+                return new RedisTokenBucketRateLimiter(
+                    redisClient, config.getClientId(),
+                    config.getRequestsPerMinute(), 60
+                );
+            case IN_MEMORY:
+                return new TokenBucketRateLimiter(
+                    config.getBurstCapacity(),
+                    config.getRequestsPerMinute() / 60
+                );
+            default:
+                throw new IllegalArgumentException("Unknown storage type: " + config.getStorageType());
+        }
+    }
+}
+```
+
+---
+
+### 🔁 Concurrency — The Two Levels
+
+**Level 1 — In-memory (single server):**
+`TokenBucketRateLimiter.tokens` is shared mutable state. Two threads calling `allowRequest()` simultaneously both read `tokens = 1`, both pass, both decrement — rate limit violated. Fix: `synchronized` on `allowRequest()`.
+
+**Level 2 — Distributed (Redis):**
+The Java `synchronized` keyword is per-JVM. Two app servers each run their own `TokenBucketRateLimiter` — they have independent token counters, so 10 requests could come from 5 servers and all 10 pass (2 each). Fix: move state to Redis. Redis is single-threaded — the Lua `DECR` command is atomic by Redis's own execution model. No Java locking needed. The Lua script replaces `synchronized`.
+
+**Interview answer to "why Lua and not two separate Redis commands?"**
+> "Two separate commands — `GET` then `DECR` — have a race window between them. Thread A reads 1, Thread B reads 1, Thread A decrements to 0, Thread B decrements to -1. Both passed. Lua executes atomically: no other Redis command runs between the `GET` and `DECR` inside the script. This is why the Lua script is the correct solution."
+
+---
+
+### 🔬 LLD Interview Probes — C1 Specific
+
+**Q: "Your HLD uses Redis. Show me the class design for the Redis-backed token bucket."**
+> Covered above — `RedisTokenBucketRateLimiter`, Lua script atomic check+decrement, key format `rate_limit:{clientId}:{window_minute}`, 2-minute TTL. The `RateLimiter` interface hides whether it's in-memory or Redis. The factory decides based on config.
+
+**Q: "Two app servers both serve the same API key. How does the class design handle this?"**
+> The in-memory `TokenBucketRateLimiter` does NOT handle it — each server has its own counter; combined they allow 2× the limit. The `RedisTokenBucketRateLimiter` handles it — both servers hit the same Redis key. The Lua script atomicity means server A's DECR and server B's DECR are serialized. Shared state = Redis, not Java heap.
+
+**Q: "Redis goes down. What does your class do?"**
+> `RateLimiterService.allowRequest()` catches `RedisException` and falls back to `localFallbacks` — a per-server in-memory `TokenBucketRateLimiter`. During Redis downtime, each server enforces its own limit. If there are 5 servers, effective limit is 5× — ~5-10% temporary overages. This is fail-open: acceptable for API quota enforcement, unacceptable for security throttling.
+
+**Q: "DocuSign has free (100 req/min), standard (1K req/min), enterprise (10K req/min) tiers. Where does tier config live?"**
+> `RateLimitConfigRepository` — a DB table (or config service) mapping `account_id` → `RateLimiterConfig`. The factory looks up the tier-specific config on first request, creates the right limiter, caches it in `ConcurrentHashMap`. Changing a customer's tier = update the DB row + remove their entry from `limiters` map (next request creates a new limiter with the new config).
+
+**Q: "Your RateLimitResult has remainingQuota and retryAfterSeconds. Why those two fields specifically?"**
+> They map to the HTTP response headers the client needs: `X-RateLimit-Remaining` (how many requests left) and `Retry-After` (when to retry — RFC 6585 compliant). Without `remainingQuota`, the client can't implement exponential backoff intelligently. Without `retryAfterSeconds`, the client has to guess when the window resets — some will retry immediately, creating thundering-herd on the reset boundary.
+
+---
+
 ## 🔄 Changelog
 
 | Date | Change |
 |---|---|
 | June 23, 2026 | **File created.** Type A — System Design. Based on: Exponent interview report (confirmed question, KYC + JWT token identification probed), `02-rate-limiting.md` + `02-rate-limiting_advanced.md` concept notes, ByteByteGo rate limiting chapter. Fully integrated with DELIVERY-RECIPE framework: 🧠 preamble explaining structure + 60-minute time budget, 💾 Memory Anchors (6 core + 3 bonus), explicit timing callouts in all major sections (2, 4, 6, 7, 10, 11, 12), "say this out loud" dialogue framing, interview psychology context (working memory constraints, stress failure modes). Deep dives cover riskiest components: token bucket vs sliding window algorithm choice, Redis Lua atomic operations for strong consistency, graceful degradation on Redis failure. Section 5 variation table covers 6 axes (per-second vs per-minute, IP vs key-based, single-server vs distributed, strong vs eventual consistency, whitelisting, tiered quotas). Pre-write checklist enforced: Section 0 Identity Card filled, Section 10 trade-offs include failure modes, Section 12 has all 3 probe tiers (surface, deep, cross-concept). Common Mistakes section (5 entries) emphasizes concurrency, NAT/proxy issues, storage cleanup, failure modes, use-case differentiation. Result: Interview delivery-ready, zero refinement needed. |
 | Jul 4, 2026 | **Diagram rewrite + 4 new Q&As.** Replaced flat `[Box]──→[Box]` ASCII diagram with proper box-drawing character diagram: full request flow (Client → Gateway → Rate Limiter → Redis → ALLOW/REJECT), Redis cluster sharding visualization with shard contents, and side-by-side Lua atomicity illustration (wrong two-op race vs correct Lua atomic). Key invariant callout added. New Q&As in Section 12: (1) **Fail-open vs fail-closed decision framework** — product decision based on what the limiter protects (quota fairness → fail-open; security throttling → fail-closed); DocuSign API quota case analyzed; (2) **Connection pooling as highest-impact latency optimization** — eliminates TCP handshake (~2ms saved), priority-ordered list of 4 optimizations with specific latency impact; (3) **Geographic rate limiting — preventing quota double-spending across US/EU Redis clusters** — four options analyzed (single global Redis, async sync, home-region assignment, bounded overages), home-region + GeoDNS stickiness recommended as correct approach for DocuSign's data-residency requirements. |
+| Jul 9, 2026 | **New Tier 2 probe added to Section 12.** JWT + KYC multi-tenant identity probe: how DocuSign actually identifies rate-limit clients — JWT `account_id` (tenant) not API key or IP; KYC-verified account = billing unit = rate limit boundary; rate key changes from `{api_key}:{window}` to `{account_id}:{window}`; maps to enterprise contract tiers at KYC time. This is the confirmed probe from 2025 candidate reports (IP-only answer → rejection). |
 | Jul 5, 2026 | **Section 10 business impact + Section 14 DocuSign dimensions pass.** Section 10 Trade-off 3 (fail-open vs fail-closed): added **Business impact:** — during ~52 minutes of Redis downtime per year, fail-closed rejects 100% of API requests, blocking active signing ceremonies mid-flow and triggering contractual SLA financial penalties and VP-level escalations. Section 14: rewrote all 7 dimension cells — Goldman Sachs financial API contractual SLA violation if limit is exceeded (Security), 35K req/sec at 5× normal capacity with Redis Cluster + geosharded counters (Scalability), bot detection alert on 10× quota spike with trace_id per-request attribution (Observability). |
 | Jul 4, 2026 | **Section 6 restructured to progressive 3-stage HLD.** Replaced single final diagram with staged build: Stage 1 (single server, in-memory counter) → Stage 2 (shared Redis single node) → Stage 3 (Redis Cluster, production). Added 3 inline decision tables at point of introduction: WHERE to enforce (in-process vs API Gateway vs sidecar), WHAT to store counters in (in-memory vs PostgreSQL vs Redis vs Cassandra), WHICH algorithm (Fixed Window vs Sliding Window Log vs Sliding Window Counter vs Token Bucket). Each table has cross-reference to `SystemDesignConcepts/`. Fixed algorithm table contradiction: Token Bucket corrected to ✅ (burst requirement is explicit); Sliding Window Counter moved to ⚠️. Standardized Redis key format to `rate_limit:{api_key}:{window_minute}` across all sections. Redis Cluster repositioned in Stage 3 diagram to show explicit bidirectional arrow from Rate Limiter Service. |

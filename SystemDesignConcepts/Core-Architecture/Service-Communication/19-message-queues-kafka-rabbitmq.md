@@ -37,6 +37,9 @@ You receive an order. You need to: send confirmation email, update inventory, ch
 | **Consumer Group** | Kafka concept: group of consumers that collectively process a topic; each partition assigned to one consumer in the group | 3 consumers in group → 9 partitions → 3 partitions each; scales horizontally |
 | **At-Least-Once Delivery** | broker guarantees message delivered at least once; consumer may receive duplicates; consumer must be idempotent | message acked after processing; if consumer crashes before ack → redelivered |
 | **Dead Letter Queue (DLQ)** | separate queue for messages that failed processing after N retries; enables manual inspection | payment message fails 3 times → moved to `payment.dlq` for ops team |
+| **Pub/Sub (Publish-Subscribe)** | message routing pattern: one publisher emits an event; every registered subscriber receives a full, independent copy — unlike a point-to-point queue where consumers compete and each message goes to exactly ONE worker | `OrderCreated` event → email-queue, inventory-queue, billing-queue each receive a copy simultaneously; each service processes independently at its own pace |
+| **Fanout Exchange** | RabbitMQ routing mechanism: routes one incoming message to ALL queues bound to the exchange; routing key is ignored entirely | `order-events-fanout` bound to `email-queue` + `inventory-queue` → both receive every published order event; adding a 3rd subscriber requires zero publisher changes |
+| **SNS + SQS** | AWS cloud-native pub/sub stack: SNS (Simple Notification Service — AWS's managed pub/sub broker) fans out one event to multiple SQS (Simple Queue Service — AWS's managed durable point-to-point queue) queues; each service owns one SQS queue and polls independently | Publisher → SNS `order-events` topic → SQS `email-queue`, SQS `inventory-queue`, SQS `billing-queue`; billing can be down and drain its own queue when it restarts |
 
 ---
 
@@ -326,6 +329,159 @@ public class KafkaConfig {
 
 ---
 
+**Pattern 3: Pub/Sub — One Event, ALL Subscribers**
+
+**What is the Pub/Sub pattern, and why does it fit here?**
+
+Pub/Sub (Publish-Subscribe — a message routing topology where one publisher emits an event and every registered subscriber receives a full, independent copy) is the named pattern that ties together the previous two. Interviews frequently test this vocabulary: "explain pub/sub vs a message queue." The core distinction is routing: a point-to-point queue distributes work (consumers compete — each message goes to exactly one worker), while pub/sub broadcasts events (ALL subscribers get EVERY message independently).
+
+**Visual — Point-to-Point vs Pub/Sub:**
+
+```
+POINT-TO-POINT (Queue — worker competition):
+
+Producer ──▶ ┌──────────────────────────────────┐
+              │  Queue: "image-resize-jobs"       │
+              └───────────────┬──────────────────┘
+                              │ workers compete — first to grab wins
+              ┌───────────────┼──────────────────────┐
+              ▼               ▼                       ▼
+        Worker A         Worker B               Worker C
+       takes job #1     takes job #2            (waits)
+
+Each message → ONE consumer. Work is divided across workers.
+Use: task distribution (image resizing, email send jobs)
+
+
+PUB/SUB (Exchange/Topic — broadcast):
+
+Publisher ──▶ ┌──────────────────────────────────────┐
+               │  FanoutExchange / SNS Topic           │
+               │  "order-events"                       │
+               └──────┬──────────────┬──────────┬─────┘
+                      ▼              ▼           ▼
+               email-queue    inventory-    billing-
+                              queue         queue
+                      │              │           │
+                      ▼              ▼           ▼
+               Email Service   Inventory    Billing Svc
+               (full copy)     (full copy)  (full copy)
+
+Each event → ALL subscriber queues simultaneously. Work is replicated.
+Use: event fan-out (all services react to the same event independently)
+
+KEY INVARIANT:
+   Point-to-point: one message → one consumer (load distribution)
+   Pub/Sub: one message → ALL subscribers (event broadcast)
+   Adding a new subscriber requires zero changes to the publisher
+```
+
+**Why pub/sub wins for multi-service event reactions:**
+
+When an order is placed, three services must react: email confirmation, inventory decrement, billing charge. In a point-to-point model, the first worker to grab the message takes it — the other two services receive nothing. Pub/Sub delivers a full copy to each subscriber's dedicated queue. If billing is down for two hours, its queue accumulates messages; when it restarts, it drains independently without affecting email or inventory.
+
+**RabbitMQ FanoutExchange — pub/sub implementation in code:**
+
+**Steps in plain English:**
+1. **Declare a `FanoutExchange`** — broker routes incoming messages to ALL bound queues; routing key is ignored.
+2. **Each service binds its own dedicated queue** to the fanout exchange at startup.
+3. **Publisher sends one message** to the exchange with an empty routing key.
+4. **Broker fans out** — delivers a copy to every bound queue simultaneously.
+
+```java
+// Configuration — FanoutExchange + per-service dedicated queues
+@Configuration
+public class FanoutConfig {
+    // Step 1 — fanout exchange routes to ALL bound queues; routing key ignored
+    @Bean
+    public FanoutExchange orderFanout() {
+        return new FanoutExchange("order-events-fanout", true, false);
+    }
+
+    // Step 2 — each service gets its own durable queue
+    @Bean
+    public Queue emailQueue() {
+        return new Queue("email-queue", true);
+    }
+
+    @Bean
+    public Queue inventoryQueue() {
+        return new Queue("inventory-queue", true);
+    }
+
+    @Bean
+    public Binding emailBinding(Queue emailQueue, FanoutExchange orderFanout) {
+        return BindingBuilder.bind(emailQueue).to(orderFanout);
+    }
+
+    @Bean
+    public Binding inventoryBinding(Queue inventoryQueue, FanoutExchange orderFanout) {
+        return BindingBuilder.bind(inventoryQueue).to(orderFanout);
+    }
+}
+
+// Step 3 — publisher sends once; broker fans out automatically
+@Service
+public class OrderEventPublisher {
+    @Autowired
+    private RabbitTemplate rabbitTemplate;
+
+    public void publishOrderCreated(Order order) {
+        // Empty routing key — FanoutExchange ignores it entirely
+        rabbitTemplate.convertAndSend("order-events-fanout", "", order);
+    }
+}
+
+// Step 4a — Email consumer: reads its own queue; does not compete with Inventory
+@Component
+public class EmailConsumer {
+    @RabbitListener(queues = "email-queue")
+    public void sendConfirmation(Order order) {
+        System.out.println("Sending email for order: " + order.getId());
+    }
+}
+
+// Step 4b — Inventory consumer: reads its own queue independently
+@Component
+public class InventoryConsumer {
+    @RabbitListener(queues = "inventory-queue")
+    public void decrementStock(Order order) {
+        System.out.println("Decrementing stock for order: " + order.getId());
+    }
+}
+```
+
+**AWS SNS + SQS — cloud-native pub/sub:**
+
+**What is AWS SNS, and why does it fit here?** SNS (Simple Notification Service — AWS's managed pub/sub broker) fans out one event to all subscribed endpoints. Paired with SQS (Simple Queue Service — AWS's managed durable queue), each service subscribes one SQS queue to the SNS topic and polls independently. SNS does the fan-out; SQS provides per-service buffering and durability.
+
+| Layer | Component | Role |
+|---|---|---|
+| **Pub/Sub broker** | AWS SNS Topic | one publish → delivers a copy to every subscribed SQS queue |
+| **Per-service inbox** | AWS SQS Queue (one per service) | each service polls its own queue; scales independently |
+| **Consumer** | Lambda / ECS / EC2 | reads from SQS; processes at own pace; messages retained until ACKed |
+
+Pattern: `Publisher → SNS Topic → [SQS email-queue, SQS inventory-queue, SQS billing-queue]`. Billing can be down for two hours; when it restarts, it drains its own SQS queue. Email and inventory were never affected.
+
+**Redis Pub/Sub — fire-and-forget variant:**
+
+**What is Redis Pub/Sub, and why does it differ here?** Redis supports in-memory pub/sub: `PUBLISH channel message` delivers to all active `SUBSCRIBE` listeners — but only those connected right now. If no subscriber is listening at publish time, **the message is lost permanently** — no queue depth, no replay, no durability. Use for ephemeral real-time events (live chat, live scores) where occasional loss is acceptable. For reliable business events (orders, billing), use Kafka or SNS+SQS.
+
+**Pub/Sub routing models — quick reference:**
+
+| Model | Filter mechanism | Implementation |
+|---|---|---|
+| **Fanout** (broadcast all) | no filter — every bound queue gets every message | RabbitMQ FanoutExchange, AWS SNS default |
+| **Topic-based** | filter by topic name or routing key pattern | Kafka topic name, RabbitMQ TopicExchange (`orders.*`) |
+| **Content-based** | filter by message attribute value | AWS SNS filter policy (`{"eventType": ["OrderCreated"]}`) |
+
+**When to use pub/sub over a point-to-point queue:**
+- **Use pub/sub** when multiple independent services all need the same event (OrderCreated → email, inventory, billing, analytics — all four need it)
+- **Use point-to-point queue** when you need parallel work distribution (10 image resizer workers sharing a single job queue)
+- **Use Kafka** when you also need replay, audit trail, or ordering guarantees within a partition
+
+---
+
 **What are Partitions, Replication, and Offset, and why do they fit here?**
 
 - **Partition:** Kafka splits a topic into partitions for parallelism. Each partition is an immutable log. Consumers from the same group are assigned non-overlapping partitions. Messages with the same key always go to the same partition (ordering guarantee). In an interview: *"Partitioning allows multiple consumers to process the same topic in parallel without interfering."*
@@ -394,6 +550,12 @@ public class KafkaConfig {
 
 > Messages with the same key always go to the same partition (FIFO per partition). If you repartition (change partition count from 3 to 5), keys rehash; many messages move to different partitions. Old consumers assigned to old partitions now own new partitions. This is rebalancing — all consumers pause briefly. Avoid repartitioning in production; design partitioning upfront. For ordering, use a partition key (e.g., user_id or order_id). ⭐ **Tier 2 — data modeling**
 
+### Q: "What is the difference between a message queue (point-to-point) and pub/sub?"
+
+> **Point-to-point queue:** one producer → one consumer per message. Multiple workers subscribe to the same queue and compete; the first to grab the message takes it. Use for task distribution (image resizing, parallel email jobs — 10 workers each get a different job).
+> **Pub/Sub:** one publisher → ALL subscribers receive every message independently. Each subscriber gets its own full copy. Use when multiple services need to react to the same event (OrderCreated → email, inventory, billing — all three need it; sharing one queue would starve two of them).
+> **Implementation map:** RabbitMQ supports both — direct queue (point-to-point) and FanoutExchange (pub/sub). AWS: SNS is pub/sub; SQS is point-to-point. Kafka topics implement durable pub/sub — each consumer group is an independent subscriber that gets every event. Redis Pub/Sub is fire-and-forget (no durability, no queue). ⭐ **Tier 1 — vocabulary**
+
 ---
 
 ## 🧾 TL;DR
@@ -426,3 +588,4 @@ public class KafkaConfig {
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 19. Covered RabbitMQ (task queue) and Kafka (event stream) with code examples, partition/replication/offset explanations. |
+| July 9, 2026 | Added Pattern 3: Pub/Sub — FanoutExchange code, point-to-point vs pub/sub ASCII diagram, AWS SNS+SQS comparison, Redis Pub/Sub fire-and-forget caveat, routing models table. Added Pub/Sub, FanoutExchange, SNS+SQS terminology rows. Added Q&A: "queue vs pub/sub." |

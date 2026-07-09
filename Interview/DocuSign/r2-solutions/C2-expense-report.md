@@ -4,6 +4,21 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **Data modeling** | `Foundations/Data-Fundamentals/12-data-modeling.md` | The flexible approval-rule schema (role + category → spend limit) is a data modeling problem — know how to represent variable rule structures without hardcoding |
+| **State machines / workflows** | `Production-Grade/System-Design-Patterns/49-state-machines-workflows.md` | The claim lifecycle (Draft → Submitted → Manager Approved → Finance Approved → Paid) is a state machine — transitions must be validated and logged |
+| **Multi-step processes** | `Patterns/DeepDive/05-multi-step-processes.md` | Multi-step approval chains with partial failure recovery — what happens if finance-step fails after manager already approved |
+| **Optimistic / pessimistic locking** | `Foundations/Concurrency-and-Consistency/01-optimistic-pessimistic-locking.md` | Two managers approving the same expense concurrently — optimistic locking with version column is the right answer |
+| **Blob / document storage** | `Foundations/Data-Fundamentals/14-document-blob-storage.md` | Receipt image upload — pre-signed S3 URLs, direct upload from client, how to link the stored file to the expense record |
+| **Idempotency** | `Foundations/Concurrency-and-Consistency/04-idempotency.md` | Manager double-clicking Approve — the idempotency key on the approval action prevents duplicate state transitions |
+
+---
+
 ## 🎯 What Is This System?
 
 **In plain English:** An expense reporting system lets employees submit reimbursement claims (hotel, meals, travel, software) by entering details and uploading receipts. Claims flow through a multi-step approval workflow — manager, then finance — with validation rules where different employee roles have different spending limits per expense category.

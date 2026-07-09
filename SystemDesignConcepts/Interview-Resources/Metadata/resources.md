@@ -452,6 +452,24 @@ From research — topics ranked by how often they appear in actual SDE2/SDE3 int
 
 ---
 
+### Pub/Sub Pattern (added to `19-message-queues-kafka-rabbitmq.md`)
+
+The existing Kafka/RabbitMQ resources below cover pub/sub routing as part of the broader message broker story. No separate resources needed — the pub/sub section added to note 19 is self-contained. For deeper reading, the existing note 19 Further Reading resources (Arpit Bhayani Kafka Internals, ByteByteGo Kafka Explained) cover the fan-out semantics.
+
+---
+
+### Webhooks (for `53-webhooks.md`)
+
+| Resource | What it covers | Link |
+|---|---|---|
+| **Stripe Webhooks — Best Practices** ⭐ | HMAC-SHA256 signing, idempotency key pattern, replay prevention with timestamp headers, retry with exponential backoff, event ordering caveats, endpoint registration — the industry-canonical webhook reference | https://stripe.com/docs/webhooks/best-practices |
+| **DocuSign Connect Developer Guide** ⭐ | DocuSign's webhook system (Connect): envelope lifecycle events (Sent, Delivered, Signed, Declined), signature verification with HMAC, retry behavior, event deduplication — directly relevant to DocuSign interview context | https://developers.docusign.com/platform/webhooks |
+| **GitHub Webhooks Documentation** | Comprehensive real-world webhook implementation: event catalog, delivery semantics, HMAC-SHA256 signing with `X-Hub-Signature-256`, redeliver API, ping event — useful for understanding the provider-side contract | https://docs.github.com/en/webhooks |
+
+**Key concepts this needs to cover:** Webhook vs polling trade-off (push vs pull, event-driven vs polling interval), HMAC-SHA256 signature verification (provider signs body with shared secret → consumer recomputes and constant-time compares), idempotency key on receiver side (event_id as deduplication key — `ON CONFLICT DO NOTHING`), replay attack prevention (timestamp header + 5-minute window rejection), return 200 immediately then process async (never do slow work before ACK — causes provider timeout + retry), endpoint registration and secret rotation (per-subscriber secrets, rotation without downtime), exponential backoff on the provider retry side (5s → 25s → 125s), dead letter queue for permanently failed deliveries, fan-out webhooks (one internal event → deliver to N subscribers).
+
+---
+
 ## 🔄 Changelog
 
 | Date | Change |
@@ -459,3 +477,4 @@ From research — topics ranked by how often they appear in actual SDE2/SDE3 int
 | June 2026 | File created. Research from 5 web searches cross-referenced. |
 | June 25, 2026 | Added resources for concepts 24 (API Gateway), 25 (Monitoring & Observability), 26 (WebSocket). Resources include foundational videos (ByteByteGo), interview-aligned guides (hellointerview.com), and specification docs (OpenTelemetry, MDN). |
 | Jul 1, 2026 | Added resources for concepts 50 (Database Indexing) and 51 (Geospatial Indexing). Gap-closure notes — resources include Arpit Bhayani DB internals, Use The Index Luke reference, Uber Engineering H3 blog, Redis GEO docs, and hellointerview Proximity Service. |
+| Jul 9, 2026 | Added resources for Pub/Sub Pattern (note: points to existing note 19 resources) and Webhooks (note 53). Webhook resources: Stripe Best Practices, DocuSign Connect Developer Guide, GitHub Webhooks docs. |

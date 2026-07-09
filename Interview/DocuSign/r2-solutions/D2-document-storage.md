@@ -6,6 +6,21 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **Blob / document storage** (S3, pre-signed URLs, lifecycle policies) | `Foundations/Data-Fundamentals/14-document-blob-storage.md` | The entire storage architecture — pre-signed URL upload pattern, bucket organization, lifecycle rules for 7-year retention, versioning |
+| **Handling large blobs** | `Patterns/DeepDive/08-handling-large-blobs.md` | Multipart upload for large contracts, chunked transfer, resumable uploads, range-request retrieval — expect a follow-up on how to handle a 500MB PDF |
+| **Caching fundamentals** | `Foundations/Performance-and-Scale/03-caching.md` | Document metadata (owner, permissions, version list) lives in Redis — know cache-aside pattern and what happens on cache miss for compliance-sensitive data |
+| **Database indexing** | `Foundations/Data-Fundamentals/50-database-indexing.md` | Versioned metadata queries (`WHERE doc_id = ? ORDER BY version DESC`) need composite indexes — know index design for versioning patterns |
+| **Scaling reads** | `Patterns/DeepDive/01-scaling-reads.md` | Document retrieval is read-heavy — read replicas for metadata, CDN for the binary blobs themselves |
+| **DB types and selection** | `Core-Architecture/Database-Core/06-databases-types-and-selection.md` | Object store (S3) for binaries, relational DB for metadata + versioning, Redis for permission caching — know why not one DB for all three |
+
+---
+
 ## 🎯 What Is This System?
 
 **In plain English:** A document storage service accepts file uploads (PDFs, contracts, images, any binary), stores them durably with versioning and access control, and retrieves them on demand — with encryption at rest, compliance-friendly retention policies, and audit logging of every access.

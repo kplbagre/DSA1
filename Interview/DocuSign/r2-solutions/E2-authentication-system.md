@@ -6,6 +6,21 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **Auth / Authz fundamentals** (OAuth 2.0, OIDC, RBAC) | `Production-Grade/Auth-and-Security/27-auth-authz-fundamentals.md` | The entire identity layer — OAuth 2.0 flows (authorization code, client credentials), OIDC for federated identity, RBAC for permission scoping; you must be able to draw the full OAuth flow |
+| **JWT token storage and lifecycle** | `Production-Grade/Auth-and-Security/27-jwt-token-storage-reference.md` | Access token (15-min TTL) vs refresh token (7-day TTL), where to store each, rotation strategy on refresh, revocation approaches — this is the most common follow-up |
+| **PKI / Security fundamentals** | `Production-Grade/Auth-and-Security/13-security-pki.md` | JWT signature verification uses asymmetric keys (RS256/ES256) — know how the public key is published (JWKS endpoint) so services can verify tokens without calling the auth service |
+| **Caching fundamentals** | `Foundations/Performance-and-Scale/03-caching.md` | Token validation at scale — Redis session cache for revoked tokens, JWKS public key caching with TTL, permission cache per user |
+| **Idempotency** | `Foundations/Concurrency-and-Consistency/04-idempotency.md` | Refresh token rotation must be idempotent — two simultaneous refresh requests must not issue two different access tokens (token family + one-time-use rotation) |
+| **DB replication / failover** | `Core-Architecture/Resilience-and-Fault-Tolerance/29-db-replication-failover.md` | The user credentials store is a single point of failure — know the read replica + primary failover pattern for the auth DB |
+
+---
+
 ## 🎯 What Is This System?
 
 **In plain English:** An authentication & authorization system verifies who you are (authentication) and decides what you're allowed to do (authorization). It issues short-lived credentials (JWT tokens) after verifying identity, and validates those credentials on every API request — without hitting the database each time.
@@ -1101,6 +1116,318 @@ public String login(String email, String password, String existingSessionId) {
 ## Section 15 — 🧾 TL;DR Answer Summary
 
 > "Auth is a two-part system: (1) **Identity** (login): user proves they are who they claim via email/password + optional MFA. Auth Service issues JWT (access token: 15 min, refresh token: 7 days). JWT is signed with RSA private key; signature proves it came from Auth Service. (2) **Authorization** (per-request): API Gateway validates JWT signature (O(1), ~1-2ms) + checks blacklist for revocation (Redis, O(1)). Document Service then checks: is user admin? owner? or has explicit role permission (signer/viewer/approver)? All accesses logged to immutable audit trail (legal compliance). At 35K validations/sec, stateless JWT scales perfectly (no session store bottleneck). Trade-off: revocation has eventual consistency (user logs out, but old token might still validate for ~1-2 seconds until blacklist propagates)."
+
+---
+
+---
+
+## 🔌 LLD Drill-Down — Class Structure for the Auth Service
+
+> **Trigger:** Interviewer says "Walk me through the class design for the auth service" or "Show me how token generation and validation work at the code level" — expected follow-up after the JWT + Redis blacklist + MFA HLD discussion.
+>
+> **What they're testing:** Whether you understand (1) that `JwtTokenProvider` is Auth Service only — the private key never leaves it, (2) that `JwtTokenValidator` is what every other service runs — it only needs the public key, (3) that refresh token rotation has a concurrency race and Redis SET NX is the fix, and (4) that `AuthorizationService` is a separate class from `AuthService` — separation of concerns.
+
+---
+
+### 🧠 Mental Model Before You Draw
+
+Auth has two completely separate concerns — keep them in different classes or the interviewer will catch SRP violations:
+
+- **AuthService** — "who are you?" — login, MFA verification, logout, token refresh
+- **AuthorizationService** — "what can you do?" — RBAC role check + per-document ACL
+
+The token lifecycle splits across two classes:
+- **JwtTokenProvider** — generates tokens (private key, Auth Service only)
+- **JwtTokenValidator** — validates tokens (public key, every service runs this)
+
+**Key insight to say out loud:** "JwtTokenValidator lives in a shared library. Every downstream service (Document Service, Notification Service) imports it and validates tokens locally. No auth service call on every request — that would be a bottleneck at 35K validations/sec."
+
+---
+
+### 🏗️ Class Structure
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    AuthController                            │
+│  POST /auth/login        → AuthService.login()              │
+│  POST /auth/verify-mfa   → AuthService.verifyMfa()          │
+│  POST /auth/refresh      → AuthService.refresh()            │
+│  POST /auth/logout       → AuthService.logout()             │
+│  GET  /auth/keys         → JwtKeyPublisher.getPublicKeys()  │
+└──────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌──────────────────────────────────────────────────────────────┐
+│                     AuthService                              │
+│  - userRepo:         UserRepository                          │
+│  - tokenProvider:    JwtTokenProvider                        │
+│  - blacklistService: TokenBlacklistService                   │
+│  - refreshService:   RefreshTokenService                     │
+│  - mfaService:       MfaService                              │
+│  + login(email, password): LoginResult                       │
+│  + verifyMfa(requestId, code): TokenPair                     │
+│  + refresh(refreshToken): TokenPair                          │
+│  + logout(jti, refreshToken): void                           │
+└──────────────────────────────────────────────────────────────┘
+        │
+  ┌─────┼──────────────────────────────┐
+  ▼     ▼                              ▼
+┌─────────────────┐   ┌──────────────────────┐   ┌─────────────────┐
+│ JwtTokenProvider│   │TokenBlacklistService  │   │ MfaService       │
+│ (private key)   │   │(Redis blacklist)      │   │ + sendCode(uid)  │
+│ + generateAccess│   │+ revoke(jti, ttl)     │   │ + verifyCode(uid,│
+│   Token(...)    │   │+ isRevoked(jti): bool │   │   code): bool    │
+│ + generateRefresh│   └──────────────────────┘   └─────────────────┘
+│   Token(userId) │
+└─────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│             JwtTokenValidator   (shared library)             │
+│  (public key — runs inside every downstream service)        │
+│  + validateToken(bearerToken): JWTClaimsSet                 │
+│    1. verify RS256 signature   2. check expiry              │
+│    3. Redis blacklist check    4. validate issuer/audience   │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│                  AuthorizationService                        │
+│  (separate class — SRP: auth ≠ authz)                       │
+│  + canAccess(userId, resourceId, action): boolean            │
+│    1. admin role check (JWT claim)                           │
+│    2. owner check                                            │
+│    3. resource_permissions DB lookup                         │
+│    4. log to access_audit_log                                │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 🖊️ Critical Classes — Write These in the Interview
+
+**AuthService — the login orchestrator:**
+
+```java
+public class AuthService {
+
+    private final UserRepository userRepo;
+    private final JwtTokenProvider tokenProvider;
+    private final TokenBlacklistService blacklistService;
+    private final RefreshTokenService refreshService;
+    private final MfaService mfaService;
+    private final RedisTemplate<String, String> redis;
+
+    /**
+     * Step 1 of login: verify password.
+     * If MFA enabled → send OTP, return mfa_required=true.
+     * If MFA disabled → issue tokens immediately.
+     *
+     * bcrypt is CPU-bound (~200ms) — no DB lock held during hashing.
+     */
+    public LoginResult login(String email, String password) {
+        User user = userRepo.findByEmail(email)
+            .orElseThrow(() -> new UnauthorizedException("Invalid credentials"));
+
+        // bcrypt.matches() is slow by design (~200ms) — brute-force resistance
+        if (!BCrypt.checkpw(password, user.getPasswordHash())) {
+            throw new UnauthorizedException("Invalid credentials");
+        }
+
+        if (user.isMfaEnabled()) {
+            // Send OTP and store a request_id in Redis (5-min TTL)
+            String requestId = UUID.randomUUID().toString();
+            redis.opsForValue().set("mfa_session:" + requestId, user.getId().toString(),
+                Duration.ofMinutes(5));
+            mfaService.sendCode(user.getId());
+            return LoginResult.mfaRequired(requestId);
+        }
+
+        // No MFA — issue tokens directly
+        TokenPair tokens = issueTokens(user);
+        return LoginResult.authenticated(tokens);
+    }
+
+    /**
+     * Step 2 of login (MFA path): verify OTP code.
+     * requestId was returned from login() and stored in Redis.
+     * After successful verification: requestId is consumed (one-time use).
+     */
+    public TokenPair verifyMfa(String requestId, String code) {
+        String userId = redis.opsForValue().get("mfa_session:" + requestId);
+        if (userId == null) {
+            throw new UnauthorizedException("MFA session expired or invalid");
+        }
+
+        User user = userRepo.findById(UUID.fromString(userId))
+            .orElseThrow(() -> new UnauthorizedException("User not found"));
+
+        if (!mfaService.verifyCode(user.getId(), code)) {
+            throw new UnauthorizedException("Invalid MFA code");
+        }
+
+        // Consume the requestId — one-time use
+        redis.delete("mfa_session:" + requestId);
+
+        return issueTokens(user);
+    }
+
+    /**
+     * Logout: blacklist the current access token's jti + invalidate the refresh token.
+     * Access token remains technically valid until TTL but won't refresh.
+     * The JwtTokenValidator checks Redis blacklist on every request (O(1)).
+     */
+    public void logout(String jti, long remainingTtlSeconds, String refreshToken) {
+        // Blacklist the access token's jti (TTL = remaining lifetime of the token)
+        blacklistService.revoke(jti, Duration.ofSeconds(remainingTtlSeconds));
+
+        // Invalidate the refresh token — no new access tokens can be issued
+        refreshService.invalidate(refreshToken);
+    }
+
+    private TokenPair issueTokens(User user) {
+        List<String> roles = userRepo.getUserRoles(user.getId());
+        String accessToken  = tokenProvider.generateAccessToken(
+            user.getId().toString(), roles, user.getTenantId().toString()
+        );
+        String refreshToken = tokenProvider.generateRefreshToken(user.getId().toString());
+        return new TokenPair(accessToken, refreshToken);
+    }
+}
+```
+
+**RefreshTokenService — rotation with concurrency safety:**
+
+```java
+/**
+ * Refresh token rotation: old RT in → new AT + new RT out.
+ * Old RT is immediately invalidated after use.
+ *
+ * Concurrency race: two simultaneous refresh requests with the same RT.
+ * Fix: use Redis SET NX (set if not exists) to atomically "consume" the old RT.
+ * Only one thread wins the SET NX; the other gets null → 401 → potential theft detection.
+ */
+public class RefreshTokenService {
+
+    private final RedisTemplate<String, String> redis;
+    private final JwtTokenProvider tokenProvider;
+    private final TokenFamilyRepository familyRepo;
+
+    /**
+     * Rotate the refresh token.
+     * Returns a new TokenPair (new access token + new refresh token).
+     * The old refresh token is consumed atomically via Redis SET NX.
+     */
+    public TokenPair rotate(String oldRefreshToken) {
+        // The "consumed" key is set atomically — only one concurrent request wins
+        String consumedKey = "rt_consumed:" + hash(oldRefreshToken);
+
+        // SET NX: returns true if key was set (first caller), false if already set
+        Boolean firstCaller = redis.opsForValue()
+            .setIfAbsent(consumedKey, "1", Duration.ofDays(7));
+
+        if (!Boolean.TRUE.equals(firstCaller)) {
+            // RT already consumed by another concurrent request
+            // This is a potential theft signal — revoke the entire token family
+            String userId = extractUserIdFromRefreshToken(oldRefreshToken);
+            familyRepo.revokeAllTokensForUser(userId);
+            throw new SecurityException("Refresh token reuse detected — all sessions revoked. Please re-login.");
+        }
+
+        // Only one caller reaches here — safe to issue new tokens
+        String userId = extractUserIdFromRefreshToken(oldRefreshToken);
+        User user = userRepo.findById(UUID.fromString(userId));
+        List<String> roles = userRepo.getUserRoles(user.getId());
+
+        String newAccessToken  = tokenProvider.generateAccessToken(
+            userId, roles, user.getTenantId().toString()
+        );
+        String newRefreshToken = tokenProvider.generateRefreshToken(userId);
+
+        return new TokenPair(newAccessToken, newRefreshToken);
+    }
+
+    public void invalidate(String refreshToken) {
+        String consumedKey = "rt_consumed:" + hash(refreshToken);
+        redis.opsForValue().set(consumedKey, "1", Duration.ofDays(7));
+    }
+
+    private String hash(String token) {
+        // SHA-256 hash — never store the raw token as a Redis key
+        return DigestUtils.sha256Hex(token);
+    }
+}
+```
+
+**TokenBlacklistService — the logout mechanism:**
+
+```java
+/**
+ * Redis blacklist for revoked JWT IDs (jti).
+ * On logout: SET blacklist:{jti} 1 EX {remaining_ttl_seconds}
+ * On validation: EXISTS blacklist:{jti} → if 1, token is revoked → 401
+ * TTL auto-expires entries when the JWT would have expired anyway → no cleanup job needed.
+ */
+public class TokenBlacklistService {
+
+    private final RedisTemplate<String, String> redis;
+
+    public void revoke(String jti, Duration ttl) {
+        redis.opsForValue().set("blacklist:" + jti, "1", ttl);
+    }
+
+    public boolean isRevoked(String jti) {
+        return Boolean.TRUE.equals(redis.hasKey("blacklist:" + jti));
+    }
+}
+```
+
+---
+
+### 🔁 Concurrency — The Core Point
+
+```
+Two simultaneous refresh requests for the same refresh token
+(e.g., user has two browser tabs that both detect token expiry simultaneously):
+
+Thread A                                Thread B
+  SET NX rt_consumed:{hash(RT)}           SET NX rt_consumed:{hash(RT)}
+    → Redis: returns TRUE (first)           → Redis: returns FALSE (already set)
+  Issue new AT + new RT                   Detects reuse → revoke family
+  Old RT is now consumed                  Forces re-login for ALL sessions
+
+If this were a LEGITIMATE race (two tabs, not theft):
+  Thread A succeeds, Thread B fails.
+  Thread B's user sees a 401 on tab 2.
+  User re-logs in on tab 2 — slightly annoying, but SAFE.
+
+If this were THEFT (attacker stole the old RT and races the legitimate user):
+  Whoever wins the SET NX gets a valid session.
+  Whoever loses → triggers family revocation → BOTH sessions die.
+  Attacker is evicted. Legitimate user re-logs in.
+
+KEY INVARIANT:
+   Redis SET NX makes RT consumption atomic.
+   The first caller wins; the second caller triggers theft detection.
+   There is no window where both callers get valid tokens from the same RT.
+```
+
+---
+
+### 🔬 LLD Interview Probes — E2 Specific
+
+**Q: "JwtTokenValidator lives in a shared library. What happens when the Auth Service rotates its signing key?"**
+> Auth Service publishes the new key at `GET /auth/keys` alongside the old key — both present simultaneously. Each JWT's header contains a `kid` (key ID) field that says which key signed it. `JwtTokenValidator` looks up the kid in its locally cached JWKS (fetched from `/auth/keys` on startup, refreshed every 24h). Tokens signed with the old key still validate using the old public key. New tokens use the new key. After the old key's TTL window passes (no more tokens signed with it can still be valid), Auth Service removes the old key from `/auth/keys`. Zero-downtime rotation. **The alternative — rotating without JWKS — would make all downstream services fail to validate old tokens simultaneously. That's a total auth outage.**
+
+**Q: "Two browser tabs both detect access token expiry and send refresh requests simultaneously. What happens?"**
+> Thread A and Thread B both send `POST /auth/refresh` with the same refresh token. Inside `RefreshTokenService.rotate()`, both attempt `SET NX rt_consumed:{hash(RT)}`. Redis executes these serially (single-threaded). Thread A's SET NX returns `true` — it wins, issues new tokens. Thread B's SET NX returns `false` — it loses. Because this is a known race (not necessarily theft), I'd distinguish: if the userId in the used RT is the same as the userId in the incoming request, I return a 401 with a specific error `"RT_ALREADY_ROTATED"` — the client handles this by using the new RT it received on a prior successful refresh (tab-to-tab coordination). If I can't distinguish theft from race, I revoke the family — slightly aggressive but safe.
+
+**Q: "Redis is down. How does logout work?"**
+> Fail-closed: if `TokenBlacklistService.revoke()` throws a Redis exception, the logout API returns 503. The user's session is not revoked. This is the security-first choice — availability is sacrificed to avoid false "you're logged out" confirmations that don't actually terminate the session. Mitigation: Redis Sentinel or Redis Cluster ensures Redis is almost never fully down (HA with automatic failover). For the validation path — if Redis is down during `isRevoked()` check — we also fail-closed: deny the request with 503. An alternative is fail-open (allow the request), which is the availability-first choice. For DocuSign, with legally binding documents at stake, fail-closed is correct.
+
+**Q: "How does AuthorizationService handle the case where a user has both a system-wide 'editor' role AND a per-document 'viewer' role on doc-123? Which wins?"**
+> The system-wide role is more permissive — it should win. The check order matters: (1) admin role check first (allows everything), (2) system-wide role check via JWT claims, (3) per-document resource_permissions check only if system role doesn't grant access. The resource_permissions table is for granting additional access to people who don't have the system-wide role — not for restricting people who do. If you need to restrict a system-wide editor from a specific document (e.g., Chinese wall in a legal firm), that's an explicit deny permission model — a much more complex design (ABAC territory) that I'd flag as out of scope unless the interviewer pushes it.
+
+**Q: "A user exercises GDPR right to erasure. How do you handle their auth data?"**
+> Right to erasure for auth data means: delete the `users` row (email, password_hash, mfa config), delete all `user_roles` rows, delete all `resource_permissions` rows. But there's a conflict: `access_audit_log` is immutable (legal compliance, 7-year retention). Resolution: pseudonymize the user_id in the audit log — replace with a hash of the original user_id — so the log still has a consistent audit trail (you can tell all accesses were from the same entity) but cannot be linked back to the real person. The `users` row is deleted; the hashed ID is not resolvable. This satisfies both GDPR (no identifiable data) and SOC 2 / legal (audit trail preserved). Also: revoke all outstanding tokens by revoking the user's active refresh tokens — this forces all devices to re-authenticate, which fails because the user no longer exists.
 
 ---
 

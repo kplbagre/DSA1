@@ -4,6 +4,22 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **Caching fundamentals** (Redis, TTL, cache-aside) | `Foundations/Performance-and-Scale/03-caching.md` | The redirect lookup is 99% reads — caching is the entire scalability story |
+| **CDN / edge caching** | `Production-Grade/Performance-Optimization/28-cdn-edge-caching.md` | Redirects must complete in <10ms globally; CDN edge nodes serve hot links without hitting origin |
+| **Consistent hashing** | `Foundations/Performance-and-Scale/05-consistent-hashing.md` | When Redis is sharded, you need to know which shard holds a given short code |
+| **DB types and selection** | `Core-Architecture/Database-Core/06-databases-types-and-selection.md` | Why key-value (Redis) for hot redirects, relational for URL metadata, not one DB for both |
+| **DB sharding strategy** | `Core-Architecture/Database-Core/38-sharding-strategy.md` | As the URL table grows to 10B+ rows you need to shard — know the strategy before you're asked |
+| **Numbers to know** | `Foundations/Performance-and-Scale/52-numbers-to-know-scale-triggers.md` | QPS, storage estimates — the interviewer expects exact napkin math |
+| **Scaling reads** | `Patterns/DeepDive/01-scaling-reads.md` | Redirects are read-only; scaling the read path is the architectural challenge |
+
+---
+
 ## 🎯 What Is This System?
 
 **In plain English:** A URL shortener takes a long URL and maps it to a short alias — `bit.ly/abc123`. When someone clicks the alias, the service looks up the original URL and redirects them in milliseconds.

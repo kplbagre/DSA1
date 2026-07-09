@@ -55,12 +55,12 @@ Read in this order. These files give you the vocabulary every problem note assum
 |---|---|---|
 | Parking Lot | ✅ Done | Factory + Strategy + Concurrency |
 | Tic-Tac-Toe | ✅ Done (bonus) | |
-| **BookMyShow** | 🔜 NEXT | Observer + State + Builder |
+| **BookMyShow** | 📖 Canonical — read & reproduce | Observer + State + Factory |
 | Elevator System | [ ] | Command + Strategy |
 | Splitwise | [ ] | Strategy (split algorithms) |
 | Vending Machine | [ ] | State pattern canonical |
-| LRU Cache | [ ] | No pattern — pure DS (LinkedHashMap / DLL+Map) |
-| Rate Limiter | [ ] | Strategy (TokenBucket vs SlidingWindow) |
+| LRU Cache | 📖 Canonical — read & reproduce | No pattern — pure DS (DLL+Map) |
+| Rate Limiter | 📖 Canonical — read & reproduce | Strategy (TokenBucket vs SlidingWindow) |
 
 ---
 
@@ -92,3 +92,4 @@ Before calling any problem "done", answer these 4 questions:
 | Date | Change |
 |---|---|
 | June 2026 | Study plan created. Phase 0 foundation reading + Phase 1 interleaved schedule. |
+| Jul 9, 2026 | BookMyShow, Rate Limiter, LRU Cache marked 📖 Canonical. Canonical notes created (single-MD format). |

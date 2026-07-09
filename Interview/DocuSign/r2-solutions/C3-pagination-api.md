@@ -4,6 +4,20 @@
 
 ---
 
+## 📚 Prerequisites — Study These First
+
+Before reading the solution, make sure you can explain the bolded items below from memory.
+
+| Concept | File in `SystemDesignConcepts/` | Why you need it for this question |
+|---|---|---|
+| **Cursor-based pagination** | `Foundations/Data-Fundamentals/43-pagination-cursor-based.md` | The core topic — you must be able to explain why cursor pagination beats offset pagination (stable ordering, no skip cost, no page drift on inserts/deletes) and implement it from scratch |
+| **Database indexing** | `Foundations/Data-Fundamentals/50-database-indexing.md` | Cursor pagination is only fast if the cursor column has an index — know composite index design for multi-column sort keys |
+| **API design** | `Foundations/Data-Fundamentals/11-api-design.md` | REST contract for paginated endpoints: query params (`after`, `limit`), response envelope (`data`, `next_cursor`, `has_more`), idempotency on reads |
+| **Caching fundamentals** | `Foundations/Performance-and-Scale/03-caching.md` | First-page caching for stable sorted lists — know when cursor results are safe to cache and when they aren't |
+| **Scaling reads** | `Patterns/DeepDive/01-scaling-reads.md` | High-traffic list endpoints hit read replicas — know the cursor + replica routing strategy |
+
+---
+
 ## 🧠 How to Use This File
 
 **This file is an instantiation of DELIVERY-RECIPE** (`Interview/DocuSign/DELIVERY-RECIPE.md`). Every section below maps to one step of the 6-step interview delivery framework. The framework is backed by cognitive psychology — under stress, your working memory shrinks 40–50%, so you need ONE rhythm you can execute automatically.
