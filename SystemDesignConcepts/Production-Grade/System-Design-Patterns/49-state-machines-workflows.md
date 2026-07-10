@@ -23,7 +23,8 @@
 | CAS Enforcement (DB) | `UPDATE orders SET status='SHIPPED' WHERE id=? AND status='PROCESSING'` — the WHERE clause atomically guards against invalid transitions | 0 rows affected = concurrent event already changed state; throw ConcurrentTransitionException |
 | Invalid Transition | An attempted state change not in the FSM's transition map — rejected before any DB write | Trying to SHIP a CANCELLED order → IllegalStateTransitionException |
 | Compensating Transition | A state specifically modelling rollback intent (not a generic ERROR) that triggers reversal of prior steps | `FINANCE_REJECTED` state triggers budget release + submitter notification |
-| Orphaned State | An entity stuck in a non-terminal state because the worker processing it died — FSM state drives watchdog recovery | Order stuck in PROCESSING for 30 minutes → background job transitions to FAILED |
+| Watchdog | A scheduled background process (typically a cron job or `@Scheduled` poller) that periodically scans for entities stuck in a non-terminal state beyond their expected processing time and transitions them to a failure or retry state | `@Scheduled(fixedDelay = 60_000)` job queries `WHERE status = 'PROCESSING' AND updated_at < NOW() - INTERVAL '30 minutes'` and transitions each to FAILED |
+| Orphaned State | An entity stuck in a non-terminal state because the worker processing it died — FSM state drives watchdog recovery (see Watchdog row above) | Order stuck in PROCESSING for 30 minutes → watchdog background job transitions to FAILED |
 
 ---
 
@@ -246,7 +247,8 @@ public void transitionOrder(Long orderId, OrderStatus targetStatus) {
         );
     }
 
-    // Step 4 — publish domain event for downstream consumers (notifications, audit log, analytics)
+    // Step 4 — publish domain event (a named business fact that something happened — e.g.
+    // OrderStatusChanged — consumed by downstream services like notifications and analytics)
     // This fires AFTER the DB commit succeeds — the domain event reflects confirmed state
     eventPublisher.publish(new OrderStatusChangedEvent(orderId, currentStatus, targetStatus));
 }
@@ -311,7 +313,7 @@ In an interview: "The `WHERE status = 'PROCESSING'` clause in my UPDATE is a CAS
 
 - **PhonePe** (payment flow): Payment states: INITIATED → PROCESSING → DEDUCTED → SETTLED / FAILED / REFUND_INITIATED → REFUNDED. The DEDUCTED → SETTLED transition requires successful settlement confirmation from the bank. If confirmation doesn't arrive within 5 minutes, an async job reads the current FSM state (DEDUCTED) and transitions to FAILED, triggering reconciliation. Without FSM, the payment might stay in DEDUCTED forever — an impossible real-world state that confuses both the customer and the ledger.
 
-- **Uber** (ride lifecycle): States: REQUESTED → DRIVER_ASSIGNED → DRIVER_ARRIVING → TRIP_IN_PROGRESS → COMPLETED / CANCELLED. If DRIVER_ASSIGNED times out (driver doesn't respond in 30 seconds), a background job reads the current state and, because DRIVER_ASSIGNED → REQUESTED is a valid back-transition, transitions back to REQUESTED for re-dispatch. This timeout-driven auto-transition is a key FSM pattern for SLA enforcement — the FSM state is the trigger that the background job reads to decide whether the timeout action is appropriate.
+- **Uber** (ride lifecycle): States: REQUESTED → DRIVER_ASSIGNED → DRIVER_ARRIVING → TRIP_IN_PROGRESS → COMPLETED / CANCELLED. If DRIVER_ASSIGNED times out (driver doesn't respond in 30 seconds), a background job reads the current state and, because DRIVER_ASSIGNED → REQUESTED is a valid back-transition, transitions back to REQUESTED for re-dispatch. This timeout-driven auto-transition is a key FSM pattern for SLA (Service Level Agreement — an operational commitment to complete an action within a defined time window, e.g. "driver assigned within 30 seconds") enforcement — the FSM state is the trigger that the background job reads to decide whether the timeout action is appropriate.
 
 - **GitHub** (pull request workflow): Pull request states: OPEN → CHANGES_REQUESTED / APPROVED / MERGED / CLOSED. A MERGED PR cannot be re-opened (terminal state). A CLOSED PR can be re-opened (non-terminal, because closing without merging is a deliberate reversible action). The FSM models the developer collaboration contract — the distinction between MERGED (permanent, code is in main) and CLOSED (reversible, code was abandoned) is captured in the terminal vs. non-terminal distinction.
 

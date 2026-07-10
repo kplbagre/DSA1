@@ -470,6 +470,18 @@ The existing Kafka/RabbitMQ resources below cover pub/sub routing as part of the
 
 ---
 
+### Redis Internals (for `54-redis-internals.md`)
+
+| Resource | What it covers | Link |
+|---|---|---|
+| **Arpit Bhayani — Redis Internals** ⭐ | Single-threaded event loop mechanics, I/O multiplexing, why single-threading beats multi-threading for Redis's workload, persistence internals | YouTube: search "Arpit Bhayani Redis internals" |
+| **Redis.io — Persistence Documentation** ⭐ | Official RDB/AOF configuration guide — all `appendfsync` options, hybrid persistence (RDB + AOF), AOF rewrite to prevent log bloat | https://redis.io/docs/management/persistence |
+| **Redis.io — Transactions (MULTI/EXEC vs Lua)** | Official comparison of MULTI/EXEC and Lua scripts — when each is appropriate, WATCH optimistic locking pattern | https://redis.io/docs/manual/transactions |
+
+**Key concepts this needs to cover:** Single-threaded event loop (why DECR/INCR are atomic without application locks), five atomic weapons (DECR inventory, SET NX EX distributed lock, Lua conditional atomics, EXPIRE ephemeral state, ZADD sorted set sliding window + delayed queue), RDB vs AOF with all `appendfsync` modes, eviction policies (allkeys-lru vs volatile-lru — which protects coordination keys), problem → weapon mapping table for 8 prepared interview problems, crash recovery story (Redis goes down between DECR and DB write).
+
+---
+
 ## 🔄 Changelog
 
 | Date | Change |
@@ -478,3 +490,4 @@ The existing Kafka/RabbitMQ resources below cover pub/sub routing as part of the
 | June 25, 2026 | Added resources for concepts 24 (API Gateway), 25 (Monitoring & Observability), 26 (WebSocket). Resources include foundational videos (ByteByteGo), interview-aligned guides (hellointerview.com), and specification docs (OpenTelemetry, MDN). |
 | Jul 1, 2026 | Added resources for concepts 50 (Database Indexing) and 51 (Geospatial Indexing). Gap-closure notes — resources include Arpit Bhayani DB internals, Use The Index Luke reference, Uber Engineering H3 blog, Redis GEO docs, and hellointerview Proximity Service. |
 | Jul 9, 2026 | Added resources for Pub/Sub Pattern (note: points to existing note 19 resources) and Webhooks (note 53). Webhook resources: Stripe Best Practices, DocuSign Connect Developer Guide, GitHub Webhooks docs. |
+| Jul 9, 2026 | Added resources for Redis Internals (note 54). Resources: Arpit Bhayani Redis Internals video, Redis.io Persistence docs, Redis.io Transactions docs. |

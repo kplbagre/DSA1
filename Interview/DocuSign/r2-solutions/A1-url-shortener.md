@@ -186,11 +186,11 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 > **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
 
-| Entity | What it represents | Storage |
-|---|---|---|
-| **ShortURL** | The core record — maps a `short_code` to an `original_url`, with optional TTL and owner | PostgreSQL |
-| **User** | Creator of a short link (optional; anonymous shortening is also allowed) | PostgreSQL |
-| **ClickEvent** | One record per redirect — timestamp, IP, user agent, referrer (analytics trail) | Cassandra / analytics DB |
+| Entity | What it represents |
+|---|---|
+| **ShortURL** | The core record — maps a `short_code` to an `original_url`, with optional TTL and owner |
+| **User** | Creator of a short link (optional; anonymous shortening is also allowed) |
+| **ClickEvent** | One record per redirect — timestamp, IP, user agent, referrer (analytics trail); append-only |
 
 **Key relationships:**
 - A `User` can create many `ShortURLs` (one-to-many)
@@ -280,6 +280,17 @@ Validation check: three FRs, three endpoints. Clean.
 
 **Say this out loud (as you start drawing):**
 > "Let me draw a high-level architecture. This is how the system looks from 10,000 feet..."
+
+---
+
+### 💾 Data Store Selection (say this in 45 seconds — Section 4 numbers justify it)
+
+| Store | Used for | Why this, not alternatives | Trade-off |
+|---|---|---|---|
+| **PostgreSQL** | URL metadata (`short_code → original_url`) | 33 writes/sec peak — well within Postgres limits (~1K writes/sec); ACID prevents duplicate short code collisions; B-tree index on `short_code` = O(log N) lookup | Reads are 100× writes (3,300 RPS) — Postgres alone can't sustain P99 < 50ms at this read volume |
+| **Redis** | Hot redirect cache (cache-aside, 1-hour TTL) | Absorbs 95%+ of 3,300 reads/sec at 1–5ms; Postgres fallback handles cache misses | Volatile — Redis restart causes cache miss spike back to Postgres; TTL tuning needed to balance memory vs hit rate |
+
+> **Switch if:** Analytics required → add Cassandra for ClickEvents (append-only, partition by `short_code`). Read pattern is not hot-key skewed → drop Redis, add Postgres read replicas instead.
 
 ---
 

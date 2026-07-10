@@ -123,13 +123,13 @@ Then pivot to Section 2 (clarifying questions).
 
 > **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
 
-| Entity | What it represents | Storage |
-|---|---|---|
-| **Document** | Metadata record for a file — owner, name, type, size, S3 key, current version, soft-delete flag | PostgreSQL |
-| **DocumentVersion** | Immutable snapshot of each edit — S3 key, checksum, uploader, created_at; never updated | PostgreSQL |
-| **DocumentAccess** | Per-document ACL entry — which user has which permissions (read/write/delete) | PostgreSQL |
-| **LegalHold** | A compliance lock on a document — prevents deletion even if owner requests it | PostgreSQL |
-| **AuditLog** | Append-only record of every operation — upload, download, delete, permission change | PostgreSQL (append-only) |
+| Entity | What it represents |
+|---|---|
+| **Document** | Metadata record for a file — owner, name, type, size, S3 key, current version, soft-delete flag |
+| **DocumentVersion** | Immutable snapshot of each edit — S3 key, checksum, uploader, created_at; never updated |
+| **DocumentAccess** | Per-document ACL entry — which user has which permissions (read/write/delete) |
+| **LegalHold** | A compliance lock on a document — prevents deletion even if owner requests it |
+| **AuditLog** | Append-only record of every operation — upload, download, delete, permission change |
 
 **Key relationships:**
 - A `Document` has many `DocumentVersions`; the latest version is the "current" one (one-to-many)
@@ -226,6 +226,8 @@ Validation check: every FR maps to an endpoint. The "compliance → 7-year reten
 ---
 
 ## Section 6 — 🏗️ High-Level Architecture (Minutes 10–25)
+
+**Data Store Selection (10 seconds):** PostgreSQL (document metadata, ACLs, versioning, audit log — 0.12 writes/sec, 50 GB total), S3 (document binaries — 250 TB, unlimited scale), Redis (metadata cache at 3.5K reads/sec peak). Downloads flow S3 → client via pre-signed URL; the app server never touches the bytes.
 
 ### Stage 1 — App Server + Local/NFS Disk (Baseline)
 

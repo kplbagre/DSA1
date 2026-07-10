@@ -121,13 +121,13 @@ Then immediately pivot to Section 2 (clarifying questions).
 
 > **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
 
-| Entity | What it represents | Storage |
-|---|---|---|
-| **NotificationRequest** | An incoming request to send a notification — event type, recipient, payload, source service | Kafka / outbox (ephemeral) |
-| **NotificationHistory** | Permanent record of every sent notification — channel, status, timestamp, retry count | PostgreSQL |
-| **UserPreference** | User's opt-in/out settings per channel and do-not-disturb hours | PostgreSQL |
-| **Outbox** | DB-side event queue for guaranteed-delivery pattern — written in the same transaction as the triggering event | PostgreSQL (outbox pattern) |
-| **IdempotencyKey** | Deduplication guard — prevents sending the same notification twice on retry | Redis (short TTL) / PostgreSQL |
+| Entity | What it represents |
+|---|---|
+| **NotificationRequest** | An incoming request to send a notification — event type, recipient, payload, source service; ephemeral (consumed from Kafka, not persisted long-term) |
+| **NotificationHistory** | Permanent record of every sent notification — channel, status, timestamp, retry count; durable |
+| **UserPreference** | User's opt-in/out settings per channel and do-not-disturb hours |
+| **Outbox** | DB-side event queue for guaranteed-delivery pattern — written in the same transaction as the triggering event; transactional (outbox pattern) |
+| **IdempotencyKey** | Deduplication guard — prevents sending the same notification twice on retry; ephemeral (24h TTL, auto-evicted) |
 
 **Key relationships:**
 - An upstream event creates a `NotificationRequest` → fan-out to each channel produces one `NotificationHistory` row per channel
@@ -236,6 +236,16 @@ Value:
 ---
 
 ## Section 6 — 🏗️ High-Level Architecture (Minutes 10–25)
+
+### 💾 Data Store Selection (say this in 45 seconds — Section 4 numbers justify it)
+
+| Store | Used for | Why this, not alternatives | Trade-off |
+|---|---|---|---|
+| **PostgreSQL** | NotificationHistory, UserPreference, Outbox | 182 GB/year — fits comfortably in single instance; Outbox requires ACID (written in the same transaction as the triggering event — guarantees no event loss on crash); relational joins for preference lookup | At 35K notifs/sec, a single Postgres write path for history would strain; archive after 1 year to S3 cold storage |
+| **Redis** | IdempotencyKey (24h TTL), preference cache (5-min TTL), rate limit counter per user | Sub-ms lookup for dedup check on every delivery retry; preference cache absorbs repeated lookups at 35K notifs/sec; token bucket for 100 notifs/user/hour rate limit is O(1) with INCR+TTL | Volatile — if Redis restarts, idempotency keys are lost; at-least-once delivery guarantee + recheck against Postgres history is the fallback |
+| **Kafka** | NotificationRequest event transport (primary inbound path) | 35K events/sec — Kafka handles ~100K msgs/sec on a single broker; topic partitioned by `user_id` preserves per-user ordering; durable replay if consumer crashes | Adds ~10–50ms latency vs direct HTTP call; acceptable for async notification delivery; not suitable if P99 < 10ms required |
+
+> **Switch if:** Strict delivery ordering required per user → keep Kafka partitioned by `user_id` (already done). SMS volume hits 10K/sec from single Twilio account → shard by region or add a second Twilio account. Need exactly-once semantics → keep IdempotencyKey in Postgres (survives Redis restart), accept slightly higher latency on retry check.
 
 ### 🎨 Visual — Notification Service Architecture (3-Stage Evolution)
 

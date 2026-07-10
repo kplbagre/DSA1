@@ -1,6 +1,6 @@
 # SystemDesignConcepts — Master Index
 
-> **55 tracked concept notes · 4 advanced companions · all ✅ Done**
+> **60 tracked concept notes · 4 advanced companions · all ✅ Done**
 >
 > This file is the single source of truth for what exists. Use `Ctrl+F` / `Cmd+F` to find by keyword.
 > For "where do I start," see `START-HERE.md` (coming next).
@@ -66,6 +66,11 @@
 | 51 | [Geospatial Indexing (geohash, quad tree, H3, Redis GEO)](./Core-Architecture/Database-Core/51-geospatial-indexing.md) | Core · Database | — |
 | 52 | [Numbers to Know & Scale Triggers (2026 hardware baselines, back-of-envelope)](./Foundations/Performance-and-Scale/52-numbers-to-know-scale-triggers.md) | Foundations · Performance | — |
 | 53 | [Webhooks (HTTP push callbacks, HMAC signing, idempotency, replay prevention, DocuSign Connect)](./Core-Architecture/Service-Communication/53-webhooks.md) | Core · Communication | — |
+| 54 | [Redis Internals (single-threaded event loop, five atomic weapons: DECR/SET NX EX/Lua/EXPIRE/ZADD, RDB vs AOF persistence, eviction policies, problem→weapon mapping)](./Foundations/Performance-and-Scale/54-redis-internals.md) | Foundations · Performance | — |
+| 55 | [Scalability (vertical vs horizontal, 7 levers: LB · caching · read replicas · sharding · async · CDN · auto-scale, bottleneck→lever decision map)](./Foundations/Performance-and-Scale/55-scalability.md) | Foundations · Performance | — |
+| 56 | [Availability (nines table, serial dependency math, parallel redundancy formula, active-passive vs active-active, sync vs async replication, liveness/readiness probes)](./Core-Architecture/Resilience-and-Fault-Tolerance/56-availability.md) | Core · Resilience | — |
+| 57 | [Single Point of Failure — SPOF (6 SPOF categories, identification methodology, redundancy patterns, external dependency fallback, chaos engineering)](./Core-Architecture/Resilience-and-Fault-Tolerance/57-spof.md) | Core · Resilience | — |
+| 58 | [Stateful vs Stateless (sticky sessions · Redis session store · JWT comparison, pod failure impact, hybrid Netflix model, JWT revocation problem)](./Core-Architecture/Distributed-Systems/58-stateful-stateless.md) | Core · Distributed | — |
 
 ---
 
@@ -78,3 +83,5 @@
 | Jul 1, 2026 | 2 new gap-closure notes created: `50-database-indexing.md` (B-tree, composite indexes, covering indexes, EXPLAIN ANALYZE) and `51-geospatial-indexing.md` (geohash, quad tree, H3 hexagonal grid, Redis GEO). Total: 53 tracked notes. |
 | Jul 2, 2026 | 1 new Tier 1 note created: `52-numbers-to-know-scale-triggers.md` (2026 hardware baselines, back-of-envelope formula, scale trigger thresholds, anti-patterns). Total: 54 tracked notes. |
 | Jul 9, 2026 | 1 new concept file: `53-webhooks.md` (HMAC-SHA256 verification, idempotency key, replay prevention, async processing, DocuSign Connect context). Pub/Sub Pattern section added to `19-message-queues-kafka-rabbitmq.md`. Total: 55 tracked notes. |
+| Jul 9, 2026 | 1 new foundation file: `54-redis-internals.md` (single-threaded event loop, five atomic weapons: DECR / SET NX EX / Lua / EXPIRE / ZADD, RDB vs AOF with fsync modes, eviction policies, problem→weapon mapping for 8 prepared problems). Total: 56 tracked notes. |
+| Jul 10, 2026 | 4 new gap-closure notes created from AlgoMaster analysis: `55-scalability.md` (7 scaling levers, bottleneck→lever map), `56-availability.md` (nines table, serial/parallel math, active-passive/active-active, sync/async replication), `57-spof.md` (6 SPOF categories, identification methodology, external dependency fallback), `58-stateful-stateless.md` (sticky sessions vs Redis session vs JWT, pod failure impact, JWT revocation). Total: 60 tracked notes. |

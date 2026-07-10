@@ -180,6 +180,30 @@ After clarifying questions, state what you'll build. This is a verbal contract w
 
 ---
 
+### Section 3.5 — 🗂️ Core Entities (~2 minutes)
+
+Name the key data objects the system manages — entities and access patterns only. **No database names here.** DB choice belongs in Section 6 after scale numbers (Section 4) justify it. Naming PostgreSQL at minute 3 before you've calculated 33 WPS vs 3,300 RPS is reverse order — you haven't justified the choice yet.
+
+**Format:**
+
+```markdown
+| Entity | What it represents |
+|---|---|
+| **[EntityName]** | [What it is + nature word if relevant: ephemeral / append-only / immutable / client-held / transactional] |
+```
+
+**Rules:**
+- Two columns only: `Entity` and `What it represents` — **no `Storage` column**
+- Keep nature words in the description — they telegraph the access pattern without naming a technology:
+  - `ephemeral` → will be Redis or in-memory
+  - `append-only` → will be Cassandra or Postgres insert-only
+  - `immutable` → will be S3 or versioned Postgres rows
+  - `client-held` → not stored server-side at all
+  - `transactional (outbox pattern)` → written in same DB transaction as the triggering event
+- 3–6 entities typical; stop at the ones that drive design decisions
+
+---
+
 ### Section 4 — 🔢 Scale Estimation (Minutes 5–8)
 
 Quick envelope math. These numbers justify every architecture choice you make later. State them out loud — the interviewer is watching how you think about numbers.
@@ -617,6 +641,8 @@ All resources were pre-vetted in `SystemDesignConcepts/resources.md`. Key source
 
 | Date | Change |
 |---|---|
+| Jul 10, 2026 | **Section 3.5 Storage column removed from E1, CF1, E2.** Same rule as the 8-file pass — Storage column deleted, nature words folded into entity descriptions. E1: SearchIndex → "derived, rebuildable"; AutocompleteTrie → "cached with TTL"; SearchQuery → "append-only write-only analytics stream". CF1: Class → "Redis counter is derived from this"; Booking → "source of truth; Redis counter is derived"; Waitlist → "durable backup; Redis ZSET is the hot-path queue". E2: TokenBlacklist → "ephemeral (TTL = token's remaining lifetime, auto-evicted)"; AccessAuditLog → description already said append-only. No Section 6 changes for any of the three — each already had DB decision tables. Also fixed D1 S3 trade-off: "outbox pattern" replaced with "metadata-first" — outbox requires an event row in the same DB transaction + relay process; D1's S3 pattern is simply: commit Postgres record with S3 key first, then upload bytes. |
+| Jul 10, 2026 | **Section 3.5 Core Entities — no Storage column rule.** DB names removed from all 8 Core Entities tables (A1, A2, C1, C2, C3, D1, D2, D3). Storage column deleted; nature words (ephemeral / append-only / immutable / client-held / transactional) moved into entity descriptions. Data Store Selection block added to Section 6 of A1, D1, D3 (full justified table) and C2, C3, D2 (one-sentence intro). A2 and C1 already had DB decision tables in Section 6 — no change needed there. Section 3.5 format definition added to this standards file. Rationale: naming PostgreSQL at minute 3 before scale math is reverse order — DB choice must be earned by Section 4 numbers. |
 | Jul 5, 2026 | **3 new quality gates added to Pre-Write Checklist.** (1) Section 6 quantified breaking points: every stage transition requires a specific threshold (req/sec, GB, connections) and observable symptom — "breaks under load" is no longer acceptable. (2) Section 10 business impact: every failure mode requires two layers — technical breakdown + user/business consequence (what DocuSign customer sees, what metric takes a hit). (3) Section 14 DocuSign-specific dimensions: every checklist cell must pass a 3-point test (specific number from Section 4, specific DocuSign product scenario, RCA-ready prose). Template sentence pattern added. Pre-Write Checklist split into Structure and Quality Gates sections. |
 | Jul 5, 2026 | **Section -1 "What Is This System?" added as a mandatory pre-section.** Added to all 14 existing solution files (A1, A2, A3, B1, C1, C2, CF1, D1, D2, D3, E1, E2) and codified in the Pre-Write Checklist. Purpose: ground the reader in what system they're solving before working memory fills up with trade-offs. Format: plain-English description + real-world examples table + one-line user journey + one-line "why it's hard." |
 | June 2026 | File created. Defines 15-section solution note format, two interview types (System Design vs Product Architecture), requirements variation table as key differentiator, 60-minute time budget, DocuSign 7-dimension checklist. Based on research: RESHADED framework, hellointerview.com delivery framework, DocuSign PDF interview guide. |

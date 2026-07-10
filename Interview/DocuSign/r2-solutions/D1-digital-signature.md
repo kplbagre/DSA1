@@ -147,13 +147,13 @@ Then pivot immediately to Section 2 (clarifying questions). Do NOT start drawing
 
 > **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
 
-| Entity | What it represents | Storage |
-|---|---|---|
-| **Document** | The file requiring signatures — metadata (title, owner, tenant), status, S3 reference | PostgreSQL |
-| **SigningSession** | One complete signing workflow for a document — tracks all signers, order, overall status | PostgreSQL |
-| **Signer** | A participant in a signing session — their role, signing status, timestamp when they signed | PostgreSQL |
-| **UserCertificate** | User's RSA public key + certificate chain — used to verify their signature is genuine | PostgreSQL |
-| **AuditEvent** | Cryptographically tamper-proof record of every action — signed, viewed, rejected, webhook sent | PostgreSQL (append-only) |
+| Entity | What it represents |
+|---|---|
+| **Document** | The file requiring signatures — metadata (title, owner, tenant), status, S3 reference |
+| **SigningSession** | One complete signing workflow for a document — tracks all signers, order, overall status |
+| **Signer** | A participant in a signing session — their role, signing status, timestamp when they signed |
+| **UserCertificate** | User's RSA public key + certificate chain — used to verify their signature is genuine |
+| **AuditEvent** | Cryptographically tamper-proof record of every action — signed, viewed, rejected, webhook sent; append-only |
 
 **Key relationships:**
 - A `Document` has one active `SigningSession` (one-to-one; could have future re-sign sessions)
@@ -247,6 +247,18 @@ Validation check: each FR maps to an endpoint. The "webhook notification on sign
 ---
 
 ## Section 6 — 🏗️ High-Level Architecture (Minutes 10–25)
+
+### 💾 Data Store Selection (say this in 45 seconds — Section 4 numbers justify it)
+
+| Store | Used for | Why this, not alternatives | Trade-off |
+|---|---|---|---|
+| **PostgreSQL** | Document metadata, SigningSession, Signer, UserCertificate, AuditEvent | 35 sig/sec — well within Postgres limits; ACID mandatory (signing state is a court-admissible record); 5.5 TB over 10 years manageable on a sharded cluster | Strong consistency required — no eventual consistency for legal records; shard by `customer_id` needed at year 5 |
+| **Redis** | CRL cache (certificate revocation list — the blacklist of invalidated signing certificates; 1-hour TTL), idempotency keys (24h TTL) | CRL lookup happens on every signature verification (35/sec); caching avoids DB hit on the critical signing path | Volatile — if Redis restarts, CRL cache is cold for one lookup cycle; fallback is a Postgres hit, not a wrong answer |
+| **S3** | Document binary content (immutable — bytes never change after upload) | Document bytes are immutable post-sign; S3 is purpose-built for immutable blobs at any scale; served via pre-signed URL (app server never touches bytes) | No atomic transaction spanning S3 + Postgres — metadata-first: commit Postgres record (with the S3 key as a field) before uploading bytes; if S3 upload fails, retry; document stays UPLOAD_PENDING until bytes are confirmed in S3 |
+
+> **Switch if:** Scale hits 10M users → shard Postgres by `customer_id`; 7-year audit archive → S3 Glacier (cold storage — retrieval takes 3–12 hours, but $0.004/GB vs $0.023/GB for standard S3); BYOK compliance → replace S3 SSE with KMS.
+
+---
 
 ### Stage 1 — Monolith + Direct DB (Baseline)
 

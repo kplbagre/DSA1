@@ -197,14 +197,14 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 > **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
 
-| Entity | What it represents | Storage |
-|---|---|---|
-| **Employee** | The person submitting expenses — department, role, manager relationship | PostgreSQL |
-| **ExpenseReport** | A grouped submission of multiple expenses for one period/trip — the main workflow unit | PostgreSQL |
-| **LineItem** | One individual expense within a report — amount, category, receipt attachment | PostgreSQL |
-| **Approval** | Decision record — who approved/rejected, when, and with what comment | PostgreSQL |
-| **ExpensePolicy** | Business rule — spending limits per category per employee tier | PostgreSQL |
-| **AuditLog** | Immutable record of every state change for compliance — never updated, only appended | PostgreSQL (append-only) |
+| Entity | What it represents |
+|---|---|
+| **Employee** | The person submitting expenses — department, role, manager relationship |
+| **ExpenseReport** | A grouped submission of multiple expenses for one period/trip — the main workflow unit |
+| **LineItem** | One individual expense within a report — amount, category, receipt attachment |
+| **Approval** | Decision record — who approved/rejected, when, and with what comment |
+| **ExpensePolicy** | Business rule — spending limits per category per employee tier |
+| **AuditLog** | Immutable record of every state change for compliance — never updated, only appended |
 
 **Key relationships:**
 - An `Employee` submits many `ExpenseReports` (one-to-many)
@@ -312,6 +312,8 @@ The move is: **FR → operation → resource (from your entities table) → HTTP
 **What to do:** Draw the boxes (ASCII or whiteboard). Walk through the data flow *as if telling a story*. The interviewer is checking: "Does this person understand flow?"
 
 **Note:** Type B questions often skip the HLD diagram and jump straight to API + schema. Adapt this section accordingly.
+
+**Data Store Selection (10 seconds):** PostgreSQL only — 0.02 req/sec, relational joins across 6 entities, ACID required for approval state machine, 3.65 GB/year fits in a single instance with no sharding or caching needed.
 
 **Say this out loud (as you transition to API/schema):**
 > "For a data model design question, the architecture is straightforward: web API → PostgreSQL. Let me focus on the API contract and the schema design..."

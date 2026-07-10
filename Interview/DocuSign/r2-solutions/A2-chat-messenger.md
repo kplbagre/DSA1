@@ -198,13 +198,13 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 > **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
 
-| Entity | What it represents | Storage |
-|---|---|---|
-| **User** | Person using the app — profile, device tokens for push, connection state | PostgreSQL |
-| **Conversation** | A 1:1 or group thread — holds metadata (name, participant list, last message preview) | PostgreSQL |
-| **Message** | Individual text/media message within a conversation — the core data object | Cassandra (time-series) |
-| **Participant** | Join record connecting a User to a Conversation, with their last-read cursor | PostgreSQL |
-| **Presence** | User's current online/offline/last_seen status — ephemeral, not source-of-truth | Redis |
+| Entity | What it represents |
+|---|---|
+| **User** | Person using the app — profile, device tokens for push, connection state |
+| **Conversation** | A 1:1 or group thread — holds metadata (name, participant list, last message preview) |
+| **Message** | Individual text/media message within a conversation — the core data object; append-only, time-series, never updated |
+| **Participant** | Join record connecting a User to a Conversation, with their last-read cursor |
+| **Presence** | User's current online/offline/last_seen status — ephemeral, not source-of-truth |
 
 **Key relationships:**
 - A `Conversation` has many `Participants` (many-to-many between User and Conversation via Participant)

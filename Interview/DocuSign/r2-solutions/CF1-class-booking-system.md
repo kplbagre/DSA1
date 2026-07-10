@@ -164,13 +164,13 @@ Then go to Section 2. Do NOT start drawing.
 
 > **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
 
-| Entity | What it represents | Storage |
-|---|---|---|
-| **User** | Member with an account — profile, push notification token | PostgreSQL |
-| **Studio** | A Cure.fit fitness center/location — name, address, timezone | PostgreSQL |
-| **Class** | A scheduled workout session — type, instructor, start time, capacity, status | PostgreSQL |
-| **Booking** | One confirmed seat reservation — links a User to a Class | PostgreSQL |
-| **Waitlist** | Ordered queue of users wanting a seat when one is cancelled | PostgreSQL |
+| Entity | What it represents |
+|---|---|
+| **User** | Member with an account — profile, push notification token |
+| **Studio** | A Cure.fit fitness center/location — name, address, timezone; reference data, rarely updated |
+| **Class** | A scheduled workout session — type, instructor, start time, capacity, status; `capacity` is the critical contended field — the Redis atomic counter is a derived hot-path copy of this value |
+| **Booking** | One confirmed seat reservation — links a User to a Class; source of truth for confirmed seats; the Redis seat counter is derived from this |
+| **Waitlist** | Ordered queue of users wanting a seat when one is cancelled; durable backup — the Redis ZSET is the hot-path ordered queue used for atomic promotion |
 
 **Key relationships:**
 - A `Studio` offers many `Classes` per day (one-to-many)

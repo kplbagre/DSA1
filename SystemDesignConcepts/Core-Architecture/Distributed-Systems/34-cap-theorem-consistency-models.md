@@ -25,6 +25,8 @@
 | Eventual Consistency | A guarantee that all replicas will converge to the same value *eventually*, once the partition heals — no guarantee of when | DynamoDB with async replication: EU may be 200ms behind US but will catch up |
 | Strong Consistency | Every read reflects the latest committed write — requires synchronous replication or quorum | `SELECT` on PostgreSQL primary after `COMMIT` always returns the written value |
 | PACELC | Extension of CAP: "When Partition → choose A or C; Else (normal ops) → choose Latency or Consistency" | Cassandra is PA/EL (available during partition, low latency normally); sync Postgres is PC/EC |
+| Causal Consistency | Stronger than eventual, weaker than strong. Guarantees: if operation B depends on operation A (B is a reply to A), any node that sees B must also have seen A. Causally independent operations can appear in any order. | You see a reply to a comment → you must also see the original comment. Two unrelated posts can appear in different orders for different users. |
+| Eventual Consistency Spectrum | Consistency is not binary — it's a spectrum: **Strong → Sequential → Causal → FIFO/PRAM → Eventual**. Most AP databases offer eventual; MongoDB sessions offer causal; Postgres synchronous replication offers strong. | Choose the weakest consistency you can tolerate — weaker = lower latency and higher availability |
 
 ---
 
@@ -261,6 +263,38 @@ KEY: EL = optimise for Latency during normal ops
 **Why PACELC matters for interviews:**
 
 CAP's binary choice (CP or AP) is partition-only — it says nothing about what you pay during the 99.9% of time when no partition is occurring. PACELC captures the real day-to-day trade-off. When a candidate says "we use Cassandra because it's AP," the PACELC follow-up is: "and you're accepting read staleness (EL) even during healthy network operation." When a candidate says "we use synchronous Postgres," the follow-up is: "and you're paying cross-datacenter round-trip latency on every write (EC) even when there's no failure." That's the full picture — not just the disaster scenario.
+
+---
+
+### 🔧 How to achieve EL (low latency in normal operation)
+
+EL means you serve reads and writes fast during healthy network — you accept that some reads may be slightly stale.
+
+| Mechanism | How it gives you EL |
+|---|---|
+| **Read from nearest/local replica** | Don't route reads to primary. Each region reads from a local replica. Stale by up to replication lag (~10ms–100ms). Cassandra, DynamoDB do this. |
+| **Async replication** | Primary writes locally, returns success to client immediately. Replicates to followers in the background. Zero replica wait time on the write path. |
+| **Redis / Memcached cache** | Serve reads from in-memory cache — no DB round-trip. Sub-millisecond latency. Stale until TTL expires or cache is invalidated. |
+| **Last-Write-Wins (LWW)** | On conflict, the write with the latest timestamp wins. No coordination needed between replicas — no waiting for consensus. Risk: concurrent writes where the "losing" write is silently dropped. |
+| **Gossip protocol** | Nodes spread updates peer-to-peer, no central coordinator. Updates propagate eventually. Used by Cassandra for cluster membership and data replication metadata. |
+
+**EL systems in the wild:** Cassandra, DynamoDB, Riak, Couchbase, Redis (default), Netflix content metadata, Twitter timeline, Instagram feed.
+
+---
+
+### 🔧 How to achieve EC (consistency in normal operation)
+
+EC means you pay latency on every read/write during healthy network — but callers always see up-to-date data.
+
+| Mechanism | How it gives you EC |
+|---|---|
+| **Synchronous replication** | Primary writes data AND waits for a majority of replicas to ACK before returning success. Adds one replica round-trip (~5ms same-region, ~50ms cross-region) to every write. |
+| **Quorum reads + writes (W + R > N)** | In a cluster of N replicas: write to W nodes, read from R nodes. If W + R > N, at least one node overlaps — reads always see the latest write. E.g. N=3, W=2, R=2: any read sees at least one node with the fresh write. |
+| **Single-leader writes** | All writes route to one primary. No concurrent conflicting writes. Total write order is guaranteed. Reads from the leader always fresh. Scale reads by routing them to leader too (more load on leader). |
+| **Read-your-writes session routing** | After a user writes, route that user's subsequent reads to the same primary (or a replica that has caught up). Other users may still read stale data. Most commerce systems need this — a user who updates their cart must immediately see the update. |
+| **Distributed transactions (2PC)** | Two-phase commit ensures all participants commit or all abort. Atomic across multiple nodes/services. Very high latency cost (coordinator + all participant round-trips). Use only when cross-service atomicity is non-negotiable (e.g., payment + inventory decrement must both succeed or both fail). |
+
+**EC systems in the wild:** ZooKeeper, Spanner, synchronous Postgres (with `synchronous_commit = on`), CockroachDB, Etcd — and DocuSign's own billing/ledger systems (the correctness cost is worth it).
 
 ---
 

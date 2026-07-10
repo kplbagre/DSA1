@@ -121,12 +121,12 @@ Then pivot to Section 2.
 
 > **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
 
-| Entity | What it represents | Storage |
-|---|---|---|
-| **Document** (metadata) | Title, snippet, author, type, tenant, created_at — what gets indexed; NOT the file bytes | PostgreSQL (source of truth) |
-| **SearchIndex** | Inverted index of all terms across all documents — derived from Document metadata | Elasticsearch (derived, rebuildable) |
-| **AutocompleteTrie** | Prefix → top-N completions scored by popularity — e.g., `trie:contr → ["contract", "contractor"]` | Redis sorted sets (cached, TTL-based) |
-| **SearchQuery** (analytics) | Log of queries, clicked results, zero-result searches — used for ranking feedback and relevance tuning | Analytics DB / S3 (write-only) |
+| Entity | What it represents |
+|---|---|
+| **Document** (metadata) | Title, snippet, author, type, tenant, created_at — what gets indexed; NOT the file bytes; relational source of truth — the search index is derived from this and is rebuildable |
+| **SearchIndex** | Inverted index of all terms across all documents — derived from Document metadata; rebuildable at any time by re-indexing all rows from the source DB |
+| **AutocompleteTrie** | Prefix → top-N completions scored by popularity — e.g., `trie:contr → ["contract", "contractor"]`; cached with TTL, rebuilt from the search index on expiry |
+| **SearchQuery** (analytics) | Log of queries, clicked results, zero-result searches — used for ranking feedback and relevance tuning; append-only write-only analytics stream |
 
 **Key relationships:**
 - `Document` in PostgreSQL is the source of truth; `SearchIndex` in Elasticsearch is a derived copy (eventual consistency ~1-2s lag is acceptable)

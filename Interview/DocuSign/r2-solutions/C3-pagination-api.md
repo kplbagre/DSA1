@@ -177,10 +177,10 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 > **Note:** Pagination is a generic pattern — the "entities" here are the paginated resource and the cursor mechanism, not a complex domain model.
 
-| Entity | What it represents | Storage |
-|---|---|---|
-| **Item** | The generic resource being paginated — could be documents, orders, users, invoices | PostgreSQL (any table with an index) |
-| **PaginationCursor** | An encoded pointer to the last-seen position — client sends it back on next request | Client-held (not stored server-side) |
+| Entity | What it represents |
+|---|---|
+| **Item** | The generic resource being paginated — could be documents, orders, users, invoices |
+| **PaginationCursor** | An encoded pointer to the last-seen position — client sends it back on next request; client-held, not stored server-side |
 
 **Key insight to say out loud:**
 - The cursor is **not a server-side session** — it is a stateless pointer that encodes `(last_seen_id, last_seen_created_at)` and is held by the client; the server reconstructs page position from it on every request with no server memory
@@ -280,6 +280,8 @@ The `limit` server cap at 50 (even if client requests 100) protects the database
 **What to do:** Draw the boxes (ASCII or whiteboard). Walk through the data flow *as if telling a story*.
 
 **Note:** Type B questions often focus on API + schema. The HLD diagram is often skipped; focus on the pagination flow.
+
+**Data Store Selection (10 seconds):** PostgreSQL only — cursor pagination requires a stable B-tree index on `(created_at DESC, id DESC)`; 278 req/sec fits in a single instance; keyset queries are O(log N) seeks, no caching layer needed.
 
 **Say this out loud (as you transition to API/schema):**
 > "For pagination API design, the architecture is straightforward: web API → database with indexed lookup. Let me focus on the cursor design and the SQL strategy..."

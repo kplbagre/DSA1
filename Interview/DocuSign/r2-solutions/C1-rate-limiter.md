@@ -189,12 +189,12 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 > **Note:** A rate limiter is mostly middleware, not a data-heavy domain — the key "entities" are the config rules and ephemeral counters, not persisted business objects.
 
-| Entity | What it represents | Storage |
-|---|---|---|
-| **APIClient** | The caller being rate limited — identified by API key, IP, or user ID | PostgreSQL (config) |
-| **RateLimitPolicy** | The rule applied to a tier — e.g., "standard = 1,000 req/min, premium = 10,000 req/min" | PostgreSQL / Redis config |
-| **RateLimitCounter** | Ephemeral rolling count of requests for a given key in the current window | Redis (TTL-based, never persisted) |
-| **ViolationLog** | Optional: record of rate limit breaches for abuse detection and billing disputes | PostgreSQL / append-only log |
+| Entity | What it represents |
+|---|---|
+| **APIClient** | The caller being rate limited — identified by API key, IP, or user ID |
+| **RateLimitPolicy** | The rule applied to a tier — e.g., "standard = 1,000 req/min, premium = 10,000 req/min" |
+| **RateLimitCounter** | Ephemeral rolling count of requests for a given key in the current window; never persisted to disk |
+| **ViolationLog** | Optional: record of rate limit breaches for abuse detection and billing disputes; append-only |
 
 **Key relationships:**
 - An `APIClient` has one `RateLimitPolicy` (tier assignment)

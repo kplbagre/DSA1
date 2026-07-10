@@ -148,14 +148,14 @@ Then pivot to Section 2.
 
 > **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
 
-| Entity | What it represents | Storage |
-|---|---|---|
-| **User** | Account holder — email, bcrypt password hash, tenant, MFA config | PostgreSQL |
-| **Role** | Named permission bundle — e.g., `admin`, `editor`, `viewer`, `signer`; defines allowed actions | PostgreSQL |
-| **UserRole** | Join record assigning a Role to a User (many-to-many) | PostgreSQL |
-| **ResourcePermission** | Per-document ACL entry — which user has which permission on which specific document | PostgreSQL |
-| **TokenBlacklist** | Set of revoked JWT IDs (`jti`) — checked on every request to detect logged-out tokens | Redis (TTL matches token expiry) |
-| **AccessAuditLog** | Append-only record of every login, failed attempt, token issue, and access denial | PostgreSQL (append-only) |
+| Entity | What it represents |
+|---|---|
+| **User** | Account holder — email, bcrypt password hash, tenant, MFA config |
+| **Role** | Named permission bundle — e.g., `admin`, `editor`, `viewer`, `signer`; defines allowed actions |
+| **UserRole** | Join record assigning a Role to a User (many-to-many) |
+| **ResourcePermission** | Per-document ACL entry — which user has which permission on which specific document |
+| **TokenBlacklist** | Set of revoked JWT IDs (`jti`) — checked on every request to detect logged-out tokens; ephemeral (TTL = token's remaining lifetime, auto-evicted when the blocked token would have expired anyway — no cleanup job needed) |
+| **AccessAuditLog** | Append-only record of every login, failed attempt, token issue, and access denial |
 
 **Key relationships:**
 - A `User` has many `UserRoles` — roles apply system-wide (e.g., "this user is an editor")
