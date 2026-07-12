@@ -40,12 +40,17 @@ LLD/
 ├── notes-standards.md               ← format rules for both note types
 ├── interview-execution-guide.md     ← 60-minute interview execution playbook
 │
+├── Interview/                       ← company-specific battle files
+│   └── ebay-mts1-lld.md            ← eBay MTS1 OOP-in-DSA strategy note
+│
 ├── DesignPatterns/
+│   ├── 00-solid-principles.md
 │   ├── 01-factory-strategy.md
 │   ├── 02-observer.md
 │   ├── 03-command.md
 │   ├── 04-builder.md
-│   └── 05-state.md
+│   ├── 05-state.md
+│   └── 06-singleton.md
 │
 └── Problems/
     ├── parking-lot/
@@ -120,3 +125,4 @@ Run before finalizing any LLD note, in addition to the universal checklist:
 | June 2026 | **resources.md created.** Two primaries locked in: ashishps1/awesome-low-level-design (⭐) and hellointerview.com LLD. Per-pattern and per-problem resource table added. Mandatory Pre-Work section added to AGENTS.md to enforce reading resources.md before writing any note. |
 | June 2026 | **interview-execution-guide.md updated.** Three additions from multi-source review: (1) Explicit "Core Entities" step (minute 5-10) — identify nouns, name IS-A/HAS-A relationships. (2) SOLID principle naming required alongside pattern naming — added principle drop-in phrases section. (3) Pre-coding use-case walkthrough in design phase — validate the flow before committing to code. |
 | June 2026 | **6 new foundation files created** from hellointerview curriculum gap analysis: `DesignPatterns/03-command.md`, `DesignPatterns/04-builder.md`, `DesignPatterns/06-singleton.md`, `concurrency-deep-dive.md`, `design-principles.md`, `oop-concepts.md`. Mandatory Pre-Work updated to reference oop-concepts, design-principles, and concurrency-deep-dive. |
+| Jul 11, 2026 | **Interview/ folder created.** Company-specific battle files go here. First file: `Interview/ebay-mts1-lld.md` — eBay MTS1 OOP-in-DSA strategy note. Folder structure diagram updated. |

@@ -68,6 +68,14 @@ For BookMyShow specifically: the critical concurrency scenario is **two users bo
 
 ---
 
+## Interview/ — Company Battle Files
+
+| File | Topic | Status |
+|---|---|---|
+| `Interview/ebay-mts1-lld.md` | eBay MTS1 — OOP-in-DSA strategy, 3 OOP-heavy problems, Spring Boot Toronto variant | ✅ Done |
+
+---
+
 ## Phase 2 — Additional Problems (after Phase 1 is done)
 
 From interview frequency research (June 2026):
@@ -80,6 +88,10 @@ From interview frequency research (June 2026):
 | Stock Exchange / Order Book | Groww SDE3 |
 | Cab Booking / Ride Sharing | Uber, Ola |
 | Library Management | Multiple |
+
+**Phase 2 pattern gap — Composite:**
+
+The `ls -r` problem in `Interview/ebay-mts1-lld.md` uses the Composite pattern (treating files and directories uniformly). No `DesignPatterns/07-composite.md` exists yet. Add it in Phase 2 alongside File System (mkdir, ls, cd).
 
 ---
 
@@ -106,3 +118,4 @@ These are not in the interleaved study order — they're prerequisite reading. A
 | June 2026 | Updated: marked 01-factory-strategy, parking-lot, observer, state as ✅ Done. Tictactoe added as bonus done. BookMyShow marked as 🔜 NEXT. Practice workflow section added — two modes: "You write first" vs "I write first" (preferred). BookMyShow resources-ready checklist added. resources.md added as a standard reference. |
 | June 2026 | **Command (03) and Builder (04) marked Done.** 6 foundation files created from hellointerview gap analysis: oop-concepts, design-principles, concurrency-deep-dive, singleton. Foundation Files section added to TODO. |
 | Jul 9, 2026 | **3 canonical notes created** (single-MD format — all classes inline): BookMyShow, Rate Limiter, LRU Cache. Status is 📖 Canonical (not self-attempted). All Java in one MD file per problem — separate .java files removed. |
+| Jul 11, 2026 | **Interview/ folder + ebay-mts1-lld.md created.** Company-specific battle file section added to TODO. Composite pattern gap noted for Phase 2. |
