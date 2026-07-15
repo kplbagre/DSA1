@@ -366,7 +366,7 @@ The SAME thing, drawn two ways:
 <a id="building-the-graph"></a>
 ## 🔨 Building the Graph — Input Format Patterns
 
-> **The interview trap no one warns you about:** you can know BFS cold and still stall because you don't know how to BUILD the graph from the raw input the problem hands you. There are 6 common input formats interviewers use. Know all of them.
+> **The interview trap no one warns you about:** you can know BFS cold and still stall because you don't know how to BUILD the graph from the raw input the problem hands you. There are 7 common input formats interviewers use. Know all of them.
 
 ### 🧠 The Two-Phase mental model (burn this into your head)
 
@@ -587,6 +587,151 @@ for (int i = 0; i < chars.length; i++) {
 
 ---
 
+### Format 7 — Derived/Inferred adjacency (build graph from shared properties)
+
+**What the problem gives you:**
+```
+userToAttrs = {
+  "u1" → ["ip1", "phone1", "email1"],
+  "u2" → ["ip2"],
+  "u3" → ["ip1", "phone1"],
+  "u4" → ["ip2", "email1"]
+}
+// "edge" = two entities share at least one attribute
+// no explicit edge list — you must DERIVE it
+```
+
+**Real interview examples:**
+- LC 721 Accounts Merge — two accounts are the same person if they share an email
+- LC 839 Similar String Groups — two strings are connected if one swap makes them equal
+- LC 269 Alien Dictionary — derive character ordering from adjacent word comparisons
+- LC 1584 Min Cost to Connect All Points — derive edge weights from Manhattan distance between coordinate pairs
+- System Design variant: user-device graph where users sharing a device IP are suspected of fraud
+
+**The key insight:** Never do O(N²) pairwise comparison. There are 4 sub-patterns depending on how the edge rule is expressed.
+
+---
+
+#### Format 7a — Invert-the-Map (most common in interviews)
+
+**When:** edges are defined by shared membership in a set (same email, same IP, same attribute).
+
+**How:** build an inverted index `attribute → [entities]`, then for each attribute connect all sharing entities.
+
+**Steps in plain English:**
+
+1. **Invert** the input map: for each (entity, attribute) pair, add entity to `attrToEntities[attribute]`.
+2. **Connect** sharing entities: for each attribute's list, connect every pair (i, j) as undirected edges.
+3. **Deduplicate** edges with `Set<String>` neighbors — two entities sharing multiple attributes still have only one edge.
+
+```java
+public Map<String, Set<String>> buildAdjacencyList(Map<String, List<String>> entityToAttrs) {
+    // Step 1 — invert: attribute → all entities that have it
+    Map<String, List<String>> attrToEntities = new HashMap<>();
+    for (Map.Entry<String, List<String>> entry : entityToAttrs.entrySet()) {
+        String entity = entry.getKey();
+        for (String attr : entry.getValue()) {
+            attrToEntities.computeIfAbsent(attr, k -> new ArrayList<>()).add(entity);
+        }
+    }
+
+    // Step 2 — for each attribute, connect every pair of sharing entities
+    // Step 3 — Set<String> deduplicates: u1-u3 share ip1 AND phone1 → only one edge
+    Map<String, Set<String>> adj = new HashMap<>();
+    for (List<String> entities : attrToEntities.values()) {
+        for (int i = 0; i < entities.size(); i++) {
+            for (int j = i + 1; j < entities.size(); j++) {
+                String u = entities.get(i);
+                String v = entities.get(j);
+                adj.computeIfAbsent(u, k -> new HashSet<>()).add(v);
+                adj.computeIfAbsent(v, k -> new HashSet<>()).add(u);
+            }
+        }
+    }
+    return adj;
+}
+```
+
+> **Time:** O(E × A + edges added) — E = entities, A = max attributes per entity. Never O(E²).
+> **Space:** O(E × A) for the inverted index + adjacency list.
+
+**Weighted variant:** if edge weight = number of shared attributes, change `Set<String>` → `Map<String, Integer>` and use `.merge(v, 1, Integer::sum)` instead of `.add(v)`. Then filter by threshold at traversal time (not at build time — keeps the graph reusable for different thresholds).
+
+---
+
+#### Format 7b — Condition-Based Edge Construction
+
+**When:** a function `isConnected(A, B)` defines whether an edge exists (not a shared-membership set).
+
+**How:** evaluate the condition for all pairs, add edge if true. Still O(N²) but often unavoidable when no shared-property structure exists.
+
+```java
+// LC 839 Similar String Groups — two strings connected if one swap (or 0 swaps) makes them equal
+for (int i = 0; i < strs.size(); i++) {
+    for (int j = i + 1; j < strs.size(); j++) {
+        if (isSimilar(strs.get(i), strs.get(j))) {
+            adj.computeIfAbsent(i, k -> new HashSet<>()).add(j);
+            adj.computeIfAbsent(j, k -> new HashSet<>()).add(i);
+        }
+    }
+}
+```
+
+> If `isConnected` can be evaluated lazily (only for reachable nodes), prefer DFS + on-the-fly edge discovery over pre-building the full adjacency list.
+
+---
+
+#### Format 7c — Sequence Ordering → Directed Edges
+
+**When:** comparing adjacent sequences reveals an ordering rule between elements (e.g., alien dictionary).
+
+**How:** for each adjacent pair in the input, scan left-to-right until the first differing character — that character-pair is a directed edge.
+
+```java
+// LC 269 Alien Dictionary — derive character ordering from sorted word list
+for (int i = 0; i < words.length - 1; i++) {
+    String w1 = words[i];
+    String w2 = words[i + 1];
+    int len = Math.min(w1.length(), w2.length());
+    // ⚠️ Prefix-invalid case: "abc" before "ab" in a sorted list is impossible
+    // w1 is longer AND w2 is a prefix of w1 → invalid ordering → return ""
+    if (w1.length() > w2.length() && w1.startsWith(w2)) {
+        return "";
+    }
+    for (int j = 0; j < len; j++) {
+        if (w1.charAt(j) != w2.charAt(j)) {
+            // w1[j] comes before w2[j] in alien order → directed edge
+            adj.computeIfAbsent(w1.charAt(j), k -> new HashSet<>()).add(w2.charAt(j));
+            break;  // only the FIRST differing character matters
+        }
+    }
+}
+// After building: run topological sort on the char graph → Kahn's BFS detects cycles too
+```
+
+---
+
+#### Format 7d — Spatial/Coordinate → Weighted Edges
+
+**When:** nodes are points in space; edge weight = distance formula (Manhattan, Euclidean).
+
+**How:** all-pairs distance → edge list → run Minimum Spanning Tree (Prim's or Kruskal's).
+
+```java
+// LC 1584 Min Cost to Connect All Points — Manhattan distance as edge weight
+List<int[]> edges = new ArrayList<>();      // {weight, u, v}
+for (int i = 0; i < n; i++) {
+    for (int j = i + 1; j < n; j++) {
+        int dist = Math.abs(points[i][0] - points[j][0])
+                 + Math.abs(points[i][1] - points[j][1]);
+        edges.add(new int[]{dist, i, j});
+    }
+}
+// Sort by weight → Kruskal's MST (or use Prim's with a priority queue — no need to store all edges)
+```
+
+---
+
 ### Quick-reference: format → build pattern
 
 | What the problem gives you | Build pattern | Indexing trap? |
@@ -597,6 +742,7 @@ for (int i = 0; i < chars.length; i++) {
 | `int[][]` with weight as 3rd element | `List<List<int[]>>`; store `{v, w}` pairs | — |
 | `isConnected[][]` adjacency matrix | Don't rebuild — iterate row in DFS/BFS directly | — |
 | No edges (Word Ladder style) | Generate neighbors inside BFS loop; 26-char substitution | — |
+| Entities sharing attributes / derived edges | **Invert the map** → attr→entities → connect sharing pairs (7a); or condition-based / sequence / spatial variants (7b–7d) | — |
 
 ---
 
