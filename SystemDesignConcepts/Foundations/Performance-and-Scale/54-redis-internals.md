@@ -6,9 +6,11 @@
 
 **Full form:** Redis = Remote Dictionary Server
 
-**Simple analogy:** Redis is like a whiteboard in the office — anyone can read or write in milliseconds (everything is in RAM), it gets wiped on a power cut (volatile by default), but you can photograph the board every 60 seconds (RDB snapshot — a periodic point-in-time copy) or log every single marker stroke so you can replay them from the beginning (AOF journal — a running append-only log of every write). The critical detail most people miss: only **one hand** can write on the whiteboard at a time — and that serialization is what makes every Redis command atomic.
+**Simple analogy:** Redis is like a whiteboard in the office — anyone can read or write in milliseconds (everything is in RAM), it gets wiped on a power cut (volatile by default), but you can photograph the board periodically (RDB snapshot — a point-in-time copy) or log every single marker stroke so you can replay them from the beginning (AOF journal — a running append-only log of every write). The critical detail most people miss: only **one hand** can write on the whiteboard at a time — and that serialization is what makes every Redis command atomic.
 
-**Core principle:** An in-memory key-value store with rich built-in data structures (strings, hashes, lists, sets, sorted sets) and a **single-threaded event loop** that processes one command at a time — giving every command atomicity for free, without application-level locks.
+**Core principle:** An in-memory key-value store with rich built-in data structures (strings, hashes, lists, sets, sorted sets, and **Streams** — an append-only log with consumer groups for queue/event workloads) and a **single-threaded event loop** that processes one command at a time — giving every command atomicity for free, without application-level locks.
+
+> **"Isn't Redis multi-threaded now?" (common probe):** Redis 6 added **threaded I/O** — multiple threads read/parse requests off sockets and write responses back in parallel. But **command execution stays single-threaded**: commands are still run one-at-a-time on the main thread, so atomicity is preserved. So the answer is "yes for network I/O, no for command execution." Redis 7 also adds `Functions` (server-side logic) but execution is still serialized.
 
 **Why it matters in system design:** Sub-millisecond reads + guaranteed atomic operations make Redis the right tool for distributed coordination (locks, counters, rate limiters, leaderboards) that would require complex locking at the DB layer otherwise. It appears in 8+ prepared problems in this knowledge base.
 
@@ -39,7 +41,7 @@ Redis is the gas station with one attendant. Your 10 service pods are cars. The 
 
 The attendant also keeps a **logbook** — after every transaction, they write the entry down before moving to the next car: "Car 7, 10 litres, tank now at 40." If the station burns down tonight, a new attendant tomorrow can open the logbook, replay every entry, and know exactly how much fuel is left. That logbook is **AOF persistence** — Redis appends every write command to a file so it can replay them on restart.
 
-At the end of each shift, a manager also takes a **photograph of the fuel gauges** — a snapshot of all current levels at that exact moment. Not as detailed as the logbook (it doesn't show individual transactions), but fast to read when you open the next morning. That photograph is **RDB persistence** — a point-in-time snapshot of the whole dataset, taken periodically (default: every 60 seconds).
+At the end of each shift, a manager also takes a **photograph of the fuel gauges** — a snapshot of all current levels at that exact moment. Not as detailed as the logbook (it doesn't show individual transactions), but fast to read when you open the next morning. That photograph is **RDB persistence** — a point-in-time snapshot of the whole dataset. Snapshots are triggered by **change-based `save` rules**, not a flat interval. Redis's default rules are `save 3600 1` / `save 300 100` / `save 60 10000` (snapshot after 3600s if ≥1 key changed, after 300s if ≥100 changed, after 60s if ≥10000 changed). So "every 60s" only applies under very high write volume — there is no unconditional 60-second snapshot.
 
 **The key insight is:** Redis atomicity does not come from locks — it comes from eliminating concurrency entirely at the command-execution layer.
 
@@ -328,7 +330,7 @@ AOF (a write-ahead log that records every write command before acknowledging it)
 
 | | RDB | AOF |
 |---|---|---|
-| **Data loss on crash** | Up to last snapshot (default: 60s) | Up to 1 second (`everysec` mode) |
+| **Data loss on crash** | Up to last snapshot (depends on `save` rules — minutes, not a fixed 60s) | Up to 1 second (`everysec` mode) |
 | **Restart speed** | Fast — load binary snapshot | Slow — replay every command |
 | **File size** | Small — compressed binary | Large — grows with every write |
 | **Best for** | Cache data (loss acceptable) | Counters, locks, idempotency keys |
@@ -432,7 +434,7 @@ When Redis reaches `maxmemory`, it must evict keys or return an error. The evict
 > The key is gone — the next request for that user sees no key and treats it as a fresh window. The user effectively gets a free reset of their rate limit. Mitigation: use `volatile-lru` eviction so rate limiter keys (which have TTL) are eviction candidates, but size `maxmemory` so the Redis instance is never so full that eviction of active rate limit keys becomes likely. An alternative: move the rate limiter to a dedicated Redis instance with `noeviction` and alarm on memory usage before it fills.
 
 ### Q: "Your system has 5 Redis Cluster nodes. Does `DECR inventory:<itemId>` still work the same way?"
-> Yes — the key `inventory:<itemId>` hashes to exactly one slot, and that slot is owned by exactly one primary shard. All `DECR` calls for that key land on the same single-threaded event loop on that shard. Redis Cluster doesn't break per-key atomicity. What it prevents: multi-key operations (like a Lua script that reads from two keys on different shards) — those fail unless you use hash tags to force co-location (`{itemId}:inventory` and `{itemId}:lock` on the same shard).
+> Yes — Redis Cluster has **16,384 hash slots**; a key is routed by `CRC16(key) mod 16384`, and each slot is owned by exactly one primary shard. So `inventory:<itemId>` maps to one slot on one shard, and all `DECR` calls for that key land on the same single-threaded event loop there. Redis Cluster doesn't break per-key atomicity. What it prevents: multi-key operations (like a Lua script that reads from two keys on different shards) — those fail unless you use hash tags to force co-location (`{itemId}:inventory` and `{itemId}:lock` on the same shard).
 
 ---
 
@@ -468,3 +470,4 @@ When Redis reaches `maxmemory`, it must evict keys or return an error. The evict
 | Date | Change |
 |---|---|
 | July 2026 | File created. Covers: single-threaded event loop (why atomicity is free), five atomic weapons (DECR, SET NX EX, Lua, EXPIRE, ZADD), RDB vs AOF persistence with fsync modes, eviction policies (allkeys-lru vs volatile-lru), problem → weapon mapping table for 8 prepared problems. Prompted by AOF gap in 42-inventory-management-booking.md Tier 2 Q&A. |
+| Jul 19, 2026 | **Factual fix + gaps.** (1) Corrected the RDB "default every 60 seconds" claim (analogy + persistence table) — RDB triggers on change-based `save` rules (`save 3600 1 / 300 100 / 60 10000`), not a flat 60s. (2) Added the Redis 6 threaded-I/O nuance ("isn't Redis multithreaded now?" — yes for network I/O, no for command execution). (3) Added Streams to the data-structure list and the concrete `CRC16 mod 16384` / 16,384-hash-slot detail to the cluster Q&A. |

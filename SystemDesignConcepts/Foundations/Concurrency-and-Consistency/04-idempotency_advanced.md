@@ -123,7 +123,13 @@ public class BookingSagaService {
         private LocalDateTime createdAt;
     }
 
-    @Transactional
+    // NOTE: deliberately NOT @Transactional. A saga exists precisely because the
+    // steps are separate services (hotel, flight, payment) that cannot share one
+    // ACID transaction — a local DB transaction cannot roll back an already-sent
+    // HTTP call to hotelService. That's why failure triggers explicit COMPENSATION
+    // (reverse operations), not a DB rollback. Each executeStep may use its own
+    // short local transaction to persist the SagaStep row, but the orchestrator
+    // method must not wrap the remote calls in a single transaction.
     public void bookingFlow(UUID bookingId, BookingRequest req) {
         String sagaId = "saga-" + bookingId;
 
@@ -316,10 +322,15 @@ public class DeterministicIdempotencyService {
     }
 
     /**
-     * Alternative: use Stripe-style approach — derive from user + action + timestamp round
+     * ⚠️ ANTI-PATTERN for payments — do NOT use time-bucketed keys.
+     * This is NOT how Stripe works (Stripe recommends a client-generated random
+     * UUID per intended operation). A key derived from user + action + minute is
+     * BROKEN two ways: (1) two genuinely distinct payments by the same user in the
+     * same minute collapse to one key → the second real payment is silently dropped;
+     * (2) a retry that crosses the minute boundary produces a different key → double
+     * charge. Time is not a safe idempotency dimension. Shown only to be refuted.
      */
-    public String generateStripeStyleKey(String userId, String action) {
-        // Round timestamp to minute (so retries within same minute get same key)
+    public String generateTimeBucketedKey_ANTIPATTERN(String userId, String action) {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime rounded = now.withSecond(0).withNano(0);
 
@@ -340,11 +351,12 @@ public class PaymentController {
             @RequestBody PaymentRequest req,
             @AuthenticationPrincipal User user) {
 
-        // Generate deterministic key from user + action + timestamp
-        String idempotencyKey = idempotencyService.generateStripeStyleKey(
-            user.getId().toString(),
-            "charge"
-        );
+        // CORRECT approach: use the client-supplied Idempotency-Key header (a random
+        // UUID the client generates once per intended payment and reuses across its
+        // OWN retries). Do NOT derive the key from a timestamp — see the ANTIPATTERN
+        // method above for why time-bucketing both drops real payments and misses
+        // cross-boundary retries.
+        String idempotencyKey = req.getIdempotencyKey(); // from client's Idempotency-Key header
 
         // Retry with same key = same payment (idempotent)
         PaymentResult result = paymentService.charge(
@@ -358,7 +370,7 @@ public class PaymentController {
 }
 ```
 
-**In an interview, if asked:** "Instead of relying on clients to send Idempotency-Key headers, I generate the key deterministically from the user ID, action, and timestamp rounded to the minute. Same inputs always produce the same key. If a client retries within the same minute with identical amounts, they get the same idempotency key, so the server treats it as a duplicate and returns the cached result. This is more robust than asking clients to implement retry logic correctly."
+**In an interview, if asked:** "For payments the idempotency key must be a **client-generated random UUID, created once per intended operation and reused only across that client's own retries** — this is exactly what Stripe recommends. I would NOT derive the key from a timestamp: time-bucketing collapses two genuinely-distinct payments in the same window into one (dropping a real charge) *and* generates a different key when a retry crosses the bucket boundary (causing a double charge). The client owns the key precisely so the server can distinguish 'the same operation retried' from 'a new operation that happens to look similar.'"
 
 ---
 
@@ -385,9 +397,9 @@ public class PaymentController {
 
 | | |
 |---|---|
-| **You gain** | Multi-step operations are atomic (all succeed or all compensate). Batch retries don't re-do work. Deterministic IDs prevent duplicate charges. Saga pattern handles complex workflows. |
-| **You lose** | Complexity — sagas require compensations for each step (more code, more testing). Batch idempotency requires state tracking per partition (DB writes). Deterministic ID generation must be stable (changing algorithm = new keys). |
-| **Failure mode** | Compensation fails (e.g., refund API is down) — transaction is stuck in limbo. Batch partition fails repeatedly — stuck indefinitely or skipped if tolerance is too high. Deterministic ID generation changes — retries treated as new requests. |
+| **You gain** | A saga gives **atomicity-by-compensation** (all steps succeed, or completed steps are compensated) — NOT true ACID atomicity. Batch idempotency lets a re-run skip already-done partitions (note: the batch itself is *not* all-or-nothing — it allows partial progress by design, some partitions succeed while others are retried). Client-supplied idempotency keys prevent duplicate charges. |
+| **You lose** | Complexity — sagas require compensations for each step (more code, more testing). **Compensations must themselves be idempotent and retryable** (a refund re-issued on retry must not double-refund). Batch idempotency requires per-partition state tracking (DB writes). |
+| **Failure mode** | Compensation fails (e.g., refund API is down) — the correct handling is a **retryable, idempotent compensation backed by a dead-letter queue + alert for manual intervention**, never a silent "stuck in limbo." Batch partition fails repeatedly → route to DLQ rather than skip. |
 
 ---
 
@@ -439,3 +451,4 @@ public class PaymentController {
 | Date | Change |
 |---|---|
 | June 23, 2026 | Companion file created. Covers: saga pattern (multi-step idempotency with compensations), batch idempotency (partition tracking + retry of failed partitions), deterministic request ID generation, real-world patterns from Stripe/Uber/Amazon. 3 Q&As (all advanced scenarios). Pairs with core `04-idempotency.md`. |
+| Jul 19, 2026 | **Factual corrections.** (1) The "Stripe-style" time-bucketed idempotency key was dangerously wrong for payments (collapses distinct payments in the same minute → drops a real charge; misses cross-minute retries → double charge) AND contradicted `04-idempotency.md`'s correct client-UUID guidance. Relabeled it an explicit ANTI-PATTERN, fixed the controller to use the client-supplied `Idempotency-Key`, and rewrote the interview line to Stripe's actual recommendation. (2) Removed `@Transactional` from the saga orchestrator (a saga exists *because* steps can't share one ACID transaction; a DB rollback can't undo a sent HTTP call). (3) Fixed the trade-off table that called the batch "atomic" while its code allows partial progress; added that compensations must themselves be idempotent + DLQ-backed. |

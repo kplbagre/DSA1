@@ -4,6 +4,34 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can do after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings explained |
+| [🌀 What Is Recursion?](#what-is-recursion) | Definition, base case, recursive case |
+| [📖 Terminology](#terminology) | Call stack, frame, base case, return value |
+| [🧠 Recursive Thought Process](#thought-process) | The 3 questions to ask every time |
+| [🔄 Parameter-Way vs Functional](#parameter-vs-functional) | When to pass accumulator vs return value |
+| [🔨 Designing the Signature](#function-signature) | Phase 1 before you write the body |
+| [🧪 Warm-Up Drills](#warmup-drills) | Factorial, Fibonacci, power — build the muscle |
+| [🥞 The Call Stack](#call-stack) | ASCII trace of what Java is doing frame by frame |
+| [🧬 Stack vs Heap](#stack-vs-heap) | How recursion shares state across frames |
+| [✊ Leap of Faith](#leap-of-faith) | The habit that makes recursion click |
+| [🧭 The 7 Recursion Patterns](#patterns) | All canonical templates with motivation |
+| [🎨 Style Habits](#style-habits) | Naming, guard clauses, return discipline |
+| [🐞 Common Bugs](#common-bugs) | Missing base case, wrong return, shared mutation |
+| [🔁 Iterative ↔ Recursive](#iterative-recursive) | Converting between the two forms |
+| [🔬 Worked Walkthroughs](#walkthroughs) | Problems traced step by step |
+| [🗺️ Practice Plan](#practice-plan) | Tiered progression — easy to hard |
+| [⚠️ Gotchas](#gotchas) | Silent bugs that compile but produce wrong output |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This (The Goal)
 
 Recursion is the **single most important mental model** in DSA after array indexing. Most interviewees I've watched fail tree, graph, or backtracking problems failed at one specific spot:
@@ -27,6 +55,7 @@ By the end you should be able to:
 
 ---
 
+<a id="difficulty-tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 Every problem in this doc is tagged so you know whether to attempt it **now** or **wait** until you've covered more material.
@@ -41,6 +70,7 @@ Every problem in this doc is tagged so you know whether to attempt it **now** or
 
 ---
 
+<a id="what-is-recursion"></a>
 ## 🌀 What Is Recursion?
 
 A function is **recursive** if it calls itself.
@@ -79,6 +109,7 @@ Each call **defers** its answer until a smaller call returns. The base case (`n 
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology (Memorize These)
 
 | Term | Definition | Example |
@@ -96,6 +127,7 @@ Each call **defers** its answer until a smaller call returns. The base case (`n 
 
 ---
 
+<a id="thought-process"></a>
 ## 🧠 The Recursive Thought Process — Three Questions
 
 When you see a problem and think *"this might be recursive,"* ask three questions in order. Get all three right and the code writes itself.
@@ -151,6 +183,7 @@ Memorize this skeleton. It is the spine of every recursive function you'll ever 
 
 ---
 
+<a id="parameter-vs-functional"></a>
 ## 🔄 Parameter-Way vs Functional-Way (Striver's Mental Model)
 
 > **Every recursion problem can be solved in one of two styles.** Understanding both — and knowing when to use each — is the single most freeing realization in early recursion practice.
@@ -281,6 +314,7 @@ void printNTo1(int n) {
 
 ---
 
+<a id="function-signature"></a>
 ## 🔨 Designing the Function Signature — Phase 1
 
 > **⬛ The most frequent Phase 1 failure in recursion:** starting to write the body before answering "what are my parameters?" The signature determines everything — mis-sign the parameters and the whole function fights you.
@@ -375,6 +409,7 @@ private int helper(int[] nums, int ind, int[] memo) {
 
 ---
 
+<a id="warmup-drills"></a>
 ## 🧪 Warm-Up Drills (Striver's Lectures 2–4 Equivalents)
 
 A handful of "look mom, no loops" problems to cement the parameter-way habit before you hit subsequences.
@@ -462,6 +497,7 @@ void reverseString(char[] s, int i) {
 
 ---
 
+<a id="call-stack"></a>
 ## 🥞 The Call Stack — Visualizing What Java Is Doing
 
 When you call a function, Java pushes a **stack frame**. The frame holds:
@@ -531,6 +567,7 @@ Step 8 — factorial(4) returns 24 to the original caller.
 
 ---
 
+<a id="stack-vs-heap"></a>
 ## 🧬 Stack vs Heap — How Recursion Shares State Across Frames
 
 > **Lesson learned the hard way (May 2026):** Recursion confuses people most when they don't realize a `List` passed into a recursive call is *the same heap object* across every frame. Every mutation is visible everywhere. Once this clicks, backtracking templates stop feeling like magic.
@@ -829,6 +866,7 @@ Without the snapshot, every entry in `ans` points to the same `path` list. By th
 
 ---
 
+<a id="leap-of-faith"></a>
 ## ✊ The Leap of Faith (Most Important Habit)
 
 The single biggest mental block for new recursors is **trying to trace the entire recursion in your head.** Don't.
@@ -855,6 +893,7 @@ The compiler doesn't care if your "faith" was justified — it just runs the cod
 
 ---
 
+<a id="patterns"></a>
 ## 🧭 The 7 Recursion Patterns
 
 Almost every interview recursion problem fits one of these seven shapes. Recognize the pattern → write the template → fill in the work.
@@ -2210,6 +2249,7 @@ If all three are no, you probably want plain Binary Recursion (Pattern 2). If ye
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 > Some habits apply to **every recursion you write.** Others only matter in specific patterns. **Master the universal ones first**, then internalize the context-specific ones as you encounter them.
@@ -2357,6 +2397,7 @@ Same trap as in trees doc — `static` persists across test cases on the LeetCod
 
 ---
 
+<a id="common-bugs"></a>
 ## 🐞 Common Bugs (Hall of Fame)
 
 ### Bug 1 — Missing or wrong base case → stack overflow
@@ -2708,6 +2749,7 @@ After helper does `path = new ArrayList<>();`:
 
 ---
 
+<a id="iterative-recursive"></a>
 ## 🔁 Iterative ↔ Recursive Conversion
 
 Most recursive functions can be rewritten iteratively. This isn't always better — sometimes recursion is clearer — but knowing both forms is interview-essential.
@@ -2803,6 +2845,7 @@ public List<Integer> preorder(TreeNode root) {
 
 ---
 
+<a id="walkthroughs"></a>
 ## 🔬 Worked Walkthroughs
 
 ---
@@ -3113,6 +3156,7 @@ public int kthGrammar(int n, int k) {
 
 ---
 
+<a id="practice-plan"></a>
 ## 🗺️ Practice Plan — A Progression That Works
 
 Don't try to solve all of these in one sitting. Spread over 1–2 weeks. Time-box each problem at 25 minutes.
@@ -3187,6 +3231,7 @@ Climb in order — each adds one new constraint or twist.
 
 ---
 
+<a id="gotchas"></a>
 ## ⚠️ Gotchas (Silent Bug Hall of Fame)
 
 **Treating `null` like an empty subtree but forgetting it in linear recursion.** In tree problems, `null` is a base case. In linked list recursion, `null` is too — but new students forget it.
@@ -3287,6 +3332,7 @@ return hasPath(node.left, target) || hasPath(node.right, target);
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 - **Recursion** = a function that calls itself on a smaller input

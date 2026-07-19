@@ -4,6 +4,28 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Why This Matters](#goal) | Why overflow silently corrupts answers |
+| [🔢 What Is Overflow?](#what-is-overflow) | Wrap-around arithmetic, two's complement |
+| [📏 Java Primitive Ranges](#primitive-ranges) | int, long, short — the numbers to memorize |
+| [🧱 Special Constants](#special-constants) | Integer.MAX_VALUE, MIN_VALUE, Long.* |
+| [🪤 Three Classic Traps](#overflow-traps) | mid=(lo+hi)/2, a*b, long accumulation |
+| [📦 Boxing Trap](#boxing-trap) | Integer == vs .equals(), cache -128..127 |
+| [🗺️ Where Overflow Bites](#where-overflow-bites) | Pattern-by-pattern DSA map |
+| [📖 Reading Constraints](#reading-constraints) | When does N×M need long? Quick rule |
+| [🛠️ Fix Patterns Cheat Sheet](#fix-patterns) | All fixes in one scannable table |
+| [🧩 Practice Problems](#practice-problems) | Problems where overflow is the test |
+| [🎨 Style Habits](#style-habits) | Cast-before-multiply, suffix L discipline |
+| [⚠️ Bonus Gotchas](#gotchas) | Less common but worth knowing |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why This Matters
 
 Almost every "wrong answer" you'll get on a hard LeetCode problem isn't a logic bug — it's a **silent overflow** or a **boxing surprise**. Symptoms:
@@ -26,6 +48,7 @@ This is **language hygiene**. It's interview gold because most candidates skip i
 
 ---
 
+<a id="what-is-overflow"></a>
 ## 🔢 What Is Integer Overflow?
 
 In Java, `int` is **32 bits**. It can represent integers in the range:
@@ -135,6 +158,7 @@ HOW LONG SAVES YOU:
 
 ---
 
+<a id="primitive-ranges"></a>
 ## 📏 Java Primitive Ranges (Memorize the Two That Matter)
 
 | Type | Bytes | Range (rough) | Use in DSA |
@@ -155,6 +179,7 @@ You really only need to remember:
 
 ---
 
+<a id="special-constants"></a>
 ## 🧱 The Special Constants
 
 These show up constantly in DSA. Memorize them.
@@ -191,6 +216,7 @@ dist[start] = 0;
 
 ---
 
+<a id="overflow-traps"></a>
 ## 🪤 The Three Classic Overflow Traps
 
 These three account for ~95% of overflow bugs in DSA. Memorize the wrong-vs-right code.
@@ -371,6 +397,7 @@ WHEN DOES THIS REALLY MATTER?
 
 ---
 
+<a id="boxing-trap"></a>
 ## 📦 The Boxing Trap (Auto-Unboxing & Integer Cache)
 
 Java has two number types that look the same but are deeply different:
@@ -468,6 +495,7 @@ if (Integer.compare(a, b) == 0) { ... }
 
 ---
 
+<a id="where-overflow-bites"></a>
 ## 🗺️ Where Overflow Bites in DSA — Pattern by Pattern
 
 | Pattern | Risk | Fix |
@@ -487,6 +515,7 @@ if (Integer.compare(a, b) == 0) { ... }
 
 ---
 
+<a id="reading-constraints"></a>
 ## 📖 Reading Problem Constraints — When Do You Need `long`?
 
 LeetCode-style problems always state input constraints. Read them carefully.
@@ -524,6 +553,7 @@ Does the problem have negative numbers? → All MIN/MAX traps apply
 
 ---
 
+<a id="fix-patterns"></a>
 ## 🛠️ The Fix Patterns Cheat Sheet
 
 ```java
@@ -611,6 +641,7 @@ public int reverse(int x) {
 
 ---
 
+<a id="practice-problems"></a>
 ## 🧩 Practice Problems (Where Overflow Is The Test)
 
 These problems specifically reward careful overflow handling. Try them after reading the rest of this doc.
@@ -652,6 +683,7 @@ These problems specifically reward careful overflow handling. Try them after rea
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 > Universal habits — apply across **every** DSA problem, not just trees or arrays.
@@ -733,6 +765,7 @@ Read constraints first. If `n × max|value|` could exceed `2 × 10⁹`, the runn
 
 ---
 
+<a id="gotchas"></a>
 ## ⚠️ Bonus Gotchas (Less Common But Worth Knowing)
 
 **Modulo of negatives differs from math.** In Java, `(-7) % 3 == -1`, not `2`. If you need math-style positive modulo, use `Math.floorMod`:
@@ -769,6 +802,7 @@ int truncated = (int) -1.5;              // -1
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 - **Java `int` is 32 bits, range ≈ ±2.1 × 10⁹.** Beyond that, arithmetic **wraps silently** — no error, no warning, just a wrong value.

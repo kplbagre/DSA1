@@ -90,7 +90,10 @@ COMPONENT DETAIL — SPOF Category Map:
   Data SPOFs:
   ├── Single DB, no replica          → Fix: Primary + read replica
   ├── Single Redis node              → Fix: Redis Sentinel or Redis Cluster
-  └── Single Kafka broker            → Fix: Kafka replication factor ≥ 2
+  └── Single Kafka broker            → Fix: RF=3 + min.insync.replicas=2 + acks=all
+                                        (RF≥2 alone is NOT enough — with the common
+                                         min.insync.replicas=1 a single broker loss can
+                                         still lose data or block acks=all writes)
 
   Service SPOFs:
   ├── One pod / process              → Fix: Horizontal scale (≥2 pods)
@@ -253,3 +256,4 @@ public class PaymentService {
 | Date | Change |
 |---|---|
 | Jul 10, 2026 | File created. Covers SPOF identification methodology, 6 SPOF category types, before/after topology diagrams, external dependency fallback code with circuit breaker integration, 6 real company examples (Amazon, Razorpay, WhatsApp, Zepto, PhonePe, Netflix), and 5 Q&As including 2 Tier 2 probe questions. |
+| Jul 19, 2026 | **Factual fix.** Kafka SPOF remedy strengthened from "replication factor ≥ 2" to "RF=3 + min.insync.replicas=2 + acks=all" — RF≥2 alone doesn't eliminate the SPOF (with the common min.insync.replicas=1, a single broker loss can still lose data or block acks=all writes). |

@@ -15,6 +15,30 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can do after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings explained |
+| [🌲 Definition](#definition) | HashSet vs TreeSet vs LinkedHashSet |
+| [📖 Terminology](#terminology) | Contains, add, remove, set operations |
+| [🧠 Mental Model](#mental-model) | Set = Map without values — O(1) membership test |
+| [🎨 Visual](#visual) | Choosing the right Set implementation |
+| [🎨 Style Habits](#style-habits) | contains-before-add, iteration order discipline |
+| [🔨 Setup — Phase 1](#setup) | Initialization patterns, toSet, addAll |
+| [🧭 Patterns](#patterns) | Dedup, membership, sliding-window with Set, TreeSet range |
+| [🔬 Worked Walkthroughs](#walkthroughs) | Problems traced step by step |
+| [⚠️ Gotchas](#gotchas) | Mutation during iteration, wrong .equals() on custom type |
+| [🗺️ Practice Plan](#practice-plan) | Tiered progression |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+| [🔗 Cross-References](#cross-refs) | Links to related files |
+| [🔄 Changelog](#changelog) | Doc history |
+
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This
 
 After reading this, you will:
@@ -27,6 +51,7 @@ After reading this, you will:
 
 ---
 
+<a id="difficulty-tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 | Tag | Meaning | Action |
@@ -37,6 +62,7 @@ After reading this, you will:
 
 ---
 
+<a id="definition"></a>
 ## 🌲 Definition — What Is a Set?
 
 **A Set is a collection of unique elements with no associated values.** It answers: *"Is element X in this collection?"* in O(1) or O(log n) depending on backing structure.
@@ -64,6 +90,7 @@ if (visited.contains("Alice")) {
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology Table
 
 | Term | Meaning | Interview context |
@@ -79,6 +106,7 @@ if (visited.contains("Alice")) {
 
 ---
 
+<a id="mental-model"></a>
 ## 🧠 Mental Model — Set is Map Without Values
 
 **HashSet:**
@@ -111,6 +139,7 @@ Conceptually:  Set<E> ← backed by → TreeMap<E, Object>
 
 ---
 
+<a id="visual"></a>
 ## 🎨 Visual — HashSet vs TreeSet vs LinkedHashSet
 
 ```
@@ -180,6 +209,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 ### 🌐 Universal Habits
@@ -344,6 +374,7 @@ TreeSet<Person> set = new TreeSet<>((a, b) -> {
 
 ---
 
+<a id="setup"></a>
 ## 🔨 Setup — Phase 1 Before the Set Loop
 
 > **The Phase 1 question for sets:** *Before I write the main loop, do I need a HashSet (O(1) membership), a TreeSet (sorted + range queries), or a TreeMap (sorted + associated value)?* Using a HashSet when you need `floor`/`ceiling` costs you a full O(n) scan. Using a TreeSet when you only need membership wastes O(log n) per insert for no reason. The decision takes 5 seconds and changes the entire algorithm.
@@ -420,6 +451,7 @@ Before writing the set loop, answer:
 
 ---
 
+<a id="patterns"></a>
 ## 🧭 Patterns — HashSet, TreeSet, LinkedHashSet
 
 ### Pattern 1 — Membership Check (HashSet O(1) vs TreeSet O(log n))
@@ -1152,6 +1184,7 @@ class MajorityChecker {
 
 ---
 
+<a id="walkthroughs"></a>
 ## 🔬 Worked Walkthroughs
 
 ### WW-1 — LC 217 Contains Duplicate
@@ -1500,6 +1533,7 @@ class TimeMap {
 | LC 732 My Calendar III | Count maximum k-booking at any time — `TreeMap<Integer, Integer>` as difference array; `floorEntry` for prefix sum | `map.merge(start, 1, Integer::sum); map.merge(end, -1, Integer::sum);` |
 | LC 699 Falling Squares | Track height ranges after each square falls — TreeMap of interval heights; `floorKey` for current height at a position | Coordinate compress; update range height in TreeMap |
 
+<a id="gotchas"></a>
 ## ⚠️ Gotchas — Silent Bug Hall of Fame
 
 ### Gotcha 1 — Comparing Sets with `==` instead of `.equals()`
@@ -1643,6 +1677,7 @@ set.add(new Student("Alice", 1));  // Works
 
 ---
 
+<a id="practice-plan"></a>
 ## 🗺️ Practice Plan (in tiers)
 
 ### Tier 1 — HashSet Membership Basics ⭐
@@ -1670,6 +1705,7 @@ set.add(new Student("Alice", 1));  // Works
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 **Mental Model:**
@@ -1704,6 +1740,7 @@ set.add(new Student("Alice", 1));  // Works
 
 ---
 
+<a id="cross-refs"></a>
 ## 🔗 Cross-References
 
 - **HashMap counterpart:** `DSA/DeepDive/hashmaps-fundamentals.md` — key-value patterns, frequency maps, prefix sum patterns
@@ -1712,6 +1749,7 @@ set.add(new Student("Alice", 1));  // Works
 
 ---
 
+<a id="changelog"></a>
 ## 🔄 Changelog
 
 | Date | Change |

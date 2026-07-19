@@ -187,7 +187,7 @@ public class APDataStore {
 
 - **Amazon DynamoDB (AP choice):** During the 2012 AWS US-EAST-1 outage, DynamoDB's multi-region design chose to keep accepting writes in each region rather than block. Regions temporarily diverged, but users never saw "service unavailable." Later synced when partition healed.
 
-- **Google Spanner (AP leaning):** Chose multi-master replication with Paxos consensus. When regions partition, Spanner sacrifices strong consistency temporarily to maintain availability. Designed for "high availability at the cost of strict CAP."
+- **Google Spanner (CP — the canonical strongly-consistent distributed DB):** Spanner provides **external (strong) consistency** globally using TrueTime (GPS + atomic-clock synchronized time) and per-shard Paxos groups (single leader per group, synchronous majority replication). During a partition, the **minority** side cannot reach a Paxos quorum, so it stops accepting writes — Spanner sacrifices **Availability**, not Consistency. In PACELC it is **PC/EC** (matches the PACELC table below), and Google's own SRE team describes it as effectively "CP with very high availability (~5 nines)" — the high availability comes from redundancy and fast failover, NOT from relaxing consistency during a partition.
 
 - **PayPal (CP choice):** Payment ledgers MUST be consistent. PayPal's ledger uses strong replication (synchronous writes across data centers). If replication fails, writes are rejected. Consistency guaranteed, but users might see transient "try again" errors.
 
@@ -372,3 +372,4 @@ EC means you pay latency on every read/write during healthy network — but call
 |---|---|
 | June 25, 2026 | Initial creation. Added CAP fundamentals, CP vs AP system examples, real-world company decisions (DynamoDB, Spanner, PayPal, Netflix, LinkedIn). Two Q&As on multi-region implications. |
 | Jul 1, 2026 | Added PACELC section (Abadi 2012) with 2×2 quadrant grid (PA/EL = Cassandra/DynamoDB, PC/EC = sync Postgres/ZooKeeper/Spanner, PA/EC = MongoDB); added two new Q&As: PACELC explanation and causal consistency with vector clock context. |
+| Jul 19, 2026 | **Factual correction.** Rewrote the Google Spanner Real-World bullet — it incorrectly called Spanner "AP leaning" that "sacrifices strong consistency to maintain availability," directly contradicting this file's own PACELC table (which correctly lists Spanner as PC/EC). Spanner is the canonical CP system: external/strong consistency via TrueTime + per-shard Paxos; during a partition the minority side loses availability, not consistency. |

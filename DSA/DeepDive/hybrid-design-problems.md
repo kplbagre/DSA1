@@ -4,6 +4,28 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can do after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings explained |
+| [🌲 What Is the Dual-Index Pattern?](#what-is-dual-index) | HashMap + ordered structure together |
+| [📖 Terminology](#terminology) | Primary index, secondary index, TTL, eviction |
+| [🧠 Mental Model](#mental-model) | Two maps, one truth — how dual-index works |
+| [🎨 Style Habits](#style-habits) | Sync discipline: always update both maps together |
+| [🧭 The Pattern — Step by Step](#pattern-steps) | Phase 1/2/3 — how to design the data structure |
+| [🔬 Worked Walkthrough](#walkthrough) | In-memory KV store with TTL — full implementation |
+| [⏱️ Complexity Table](#complexity) | Get/put/evict — time and space |
+| [⚠️ Gotchas](#gotchas) | Partial update, stale secondary index, eviction order |
+| [🗺️ Practice Plan](#practice-plan) | LRU Cache → LFU Cache → TTL KV → Leaderboard |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+| [🔄 Changelog](#changelog) | Doc history |
+
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This
 
 Some problems cannot be solved optimally with a single data structure. They have **two types of queries** that pull in opposite directions:
@@ -26,6 +48,7 @@ After reading this once you will:
 
 ---
 
+<a id="difficulty-tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 | Tag | Meaning | Action |
@@ -36,6 +59,7 @@ After reading this once you will:
 
 ---
 
+<a id="what-is-dual-index"></a>
 ## 🌲 What Is the Dual-Index Pattern?
 
 **The core idea:** When a problem requires O(1) lookup by key **and** O(log n) range queries by another dimension (time, value, frequency), no single data structure satisfies both requirements simultaneously.
@@ -50,6 +74,7 @@ When a book is added, both catalogs are updated. When a book is returned, both c
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology Table
 
 | Term | Plain-English meaning |
@@ -67,6 +92,7 @@ When a book is added, both catalogs are updated. When a book is returned, both c
 
 ---
 
+<a id="mental-model"></a>
 ## 🧠 Mental Model
 
 ### Why a single structure always fails
@@ -151,6 +177,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits
 
 ### 🌐 Universal (apply in every hybrid design problem)
@@ -175,6 +202,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="pattern-steps"></a>
 ## 🧭 The Pattern — Step by Step
 
 ### Design checklist when you see "two query types"
@@ -190,6 +218,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="walkthrough"></a>
 ## 🔬 Worked Walkthrough — In-Memory KV Store with TTL
 
 **Problem context:** Design an in-memory key-value store for document signing sessions. Each entry (a signing URL) has a TTL — after which it expires. Support:
@@ -504,6 +533,7 @@ t=5000: get("docA")
 
 ---
 
+<a id="complexity"></a>
 ## ⏱️ Complexity Table
 
 | Operation | Brute Force | Optimal |
@@ -519,6 +549,7 @@ k = number of distinct expiry buckets still alive (in practice much smaller than
 
 ---
 
+<a id="gotchas"></a>
 ## ⚠️ Gotchas — Silent Bug Hall of Fame
 
 ### Bug 1 — Forgetting to Remove Old Expiry on Update
@@ -627,6 +658,7 @@ private static class Entry {
 
 ---
 
+<a id="practice-plan"></a>
 ## 🗺️ Practice Plan
 
 ### Tier 1 — Directly apply this pattern
@@ -651,6 +683,7 @@ private static class Entry {
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 **The signal:** A problem has two query types — one needs O(1) key lookup, the other needs O(log n) sorted range access.
@@ -682,6 +715,7 @@ private static class Entry {
 
 ---
 
+<a id="changelog"></a>
 ## 🔄 Changelog
 
 | Date | Change |

@@ -192,6 +192,8 @@ Every DeepDive must have **at least 3-5 ASCII visuals** distributed as:
 
 ### B. DeepDive Format (from `notes-standards-deepdive.md`)
 
+- [ ] **`## 📋 Section Index` table present** immediately after the intro block (before the first H2 content section) — see "Section Index Convention" below
+- [ ] **`<a id="..."></a>` anchor tag present** immediately before every H2 heading, matching the anchor IDs in the Section Index table
 - [ ] 15 required sections present (Goal, Difficulty legend, Definition, Terminology, Mental Model, Style Habits, Patterns, Walkthroughs, Gotchas, Practice Plan, TL;DR)
 - [ ] Mental Model section explicitly labeled with big-idea blockquote
 - [ ] Style Habits split into Universal (≥4) vs Context-Specific (≥2)
@@ -346,6 +348,57 @@ Some files in this folder don't follow the standard DeepDive format — they ser
 
 ---
 
+## 📋 Section Index Convention
+
+Every DeepDive file **must** have a clickable section index immediately after the intro block. This is the navigation table readers use to jump directly to any section — essential for files that are 1000+ lines.
+
+### Required format
+
+```markdown
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can do after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings explained |
+| ... | ... |
+
+---
+
+<a id="goal"></a>
+## 🎯 Why You're Reading This (The Goal)
+```
+
+### Rules
+
+1. **The table goes after the intro block** (the blockquote + `---` separator at the top of the file), before the first H2 content section. It is itself a `## 📋 Section Index` H2.
+2. **Every H2 heading must have a matching `<a id="..."></a>` anchor** placed on the line immediately before it. No blank line between the anchor tag and the heading.
+3. **Anchor IDs are short, lowercase, hyphenated** — not derived from the full heading text. Use these standard IDs for common sections:
+   | Section heading contains | Use anchor ID |
+   | --- | --- |
+   | "Why You're Reading This" / "Why This Matters" | `goal` |
+   | "Difficulty Tagging" | `difficulty-tags` |
+   | "Terminology" | `terminology` |
+   | "Mental Model" | `mental-model` |
+   | "Style Habits" | `style-habits` |
+   | "Patterns" | `patterns` |
+   | "Worked Walkthroughs" | `walkthroughs` |
+   | "Gotchas" | `gotchas` |
+   | "Practice Plan" | `practice-plan` |
+   | "TL;DR" | `tldr` |
+   | "Cross-References" | `cross-refs` |
+   | "Changelog" | `changelog` |
+   | File-specific sections | Use a short descriptive slug (e.g., `bst`, `family-1`, `dfs-traversals`) |
+4. **Two sections with the same emoji** (e.g., two `🎨` sections) must get different anchor IDs. Use descriptive suffixes: `visual-pointer-patterns` vs `style-habits`.
+5. **The TOC table has two columns:** `Section` (the clickable emoji+label link) and `Topic` (one-line description of what the section covers). Keep Topic ≤ 10 words.
+6. **Graphs and Two-Pointers** files already have Section Indexes — do not re-add or modify them unless the content changes.
+
+### Why explicit anchors instead of GitHub's auto-anchors
+
+GitHub auto-generates anchors from heading text, but emoji headings produce unpredictable anchors (emoji stripped, leading hyphen from the space-after-emoji). Explicit `<a id>` tags are 100% portable across GitHub, IntelliJ preview, Obsidian, and any markdown viewer. The files already follow this pattern (see `graphs-fundamentals.md`).
+
+---
+
 ## 🧾 Template Snippet (copy for quick start)
 
 ```markdown
@@ -364,6 +417,24 @@ Some files in this folder don't follow the standard DeepDive format — they ser
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can do after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings explained |
+| [📖 Terminology](#terminology) | Key terms to memorize |
+| [🧠 Mental Model](#mental-model) | The core insight that unifies the topic |
+| [🎨 Style Habits](#style-habits) | Coding discipline specific to this topic |
+| [🧭 Patterns](#patterns) | All canonical templates |
+| [🔬 Worked Walkthroughs](#walkthroughs) | Problems traced step by step |
+| [⚠️ Gotchas](#gotchas) | Silent bugs that compile but produce wrong output |
+| [🗺️ Practice Plan](#practice-plan) | Tiered progression |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This
 
 [Goal statement]
@@ -371,6 +442,7 @@ Some files in this folder don't follow the standard DeepDive format — they ser
 ---
 
 [Continue with all 15 required sections from notes-standards-deepdive.md]
+[Remember: add <a id="..."></a> before every H2 heading, matching the anchor IDs in the table above]
 ```
 
 ---
@@ -382,3 +454,4 @@ Some files in this folder don't follow the standard DeepDive format — they ser
 | June 2026 | **Initial AGENTS.md for DeepDive folder created.** Codifies AI workflow: sourcing strategy, pattern-structure requirements (with problem motivation mandate), resource attribution, and validation checklist. Clarifies relationship to notes-standards-deepdive.md. |
 | June 2026 | **Added D.1 Pattern Application Gallery section.** Specifies format for gallery problems (problem statement + selective naive approach + insight + code structure), inclusion rules for when to explain naive approach (Complement Lookup, Prefix Sum patterns only), and emphasis on "most-asked problems" not arbitrary ones. |
 | July 2026 | **Added Special Files section + hybrid-design-problems.md to Decision Tree.** Registers `hybrid-design-problems.md` as a non-standard special file covering HashMap+X design problems (LRU, LFU, Hit Counter, Leaderboard, Rate Limiter). Extended Decision Tree with a "Hybrid Design" branch so future AI assistants route new design problems to the correct file instead of creating a separate DeepDive. |
+| July 2026 | **Added Section Index Convention.** All 12 content DeepDive files now have a `## 📋 Section Index` clickable navigation table and `<a id="..."></a>` anchor tags before every H2 heading. Documented the convention in AGENTS.md (anchor ID standard table, two-column TOC format, rationale for explicit anchors over GitHub auto-anchors). Updated Template Snippet and Validation Checklist. |

@@ -36,7 +36,7 @@ Modern hardware is dramatically more powerful than most study resources assume. 
 
 **The mental model:** Every piece of infrastructure you add is a complexity debt. It adds failure modes, ops burden, and eventual consistency headaches. You pay that debt only when the math shows a single well-tuned instance is genuinely insufficient.
 
-**One single Postgres instance (2026):** handles 50 TiB of data, 50k read TPS (transactions per second), 10-20k write TPS, and 5k concurrent connections. Most applications with tens of millions of users will never exceed this on writes.
+**One single Postgres instance (2026):** handles up to 128 TiB (Aurora hard ceiling) but runs comfortably under 10–20 TiB — beyond that, VACUUM, index bloat, and autovacuum duration become real operational problems even though storage still fits. Throughput: 50k read TPS for simple indexed reads, 10–20k write TPS. Most applications with tens of millions of users will never exceed the write threshold.
 
 ---
 
@@ -115,6 +115,16 @@ KEY INVARIANT:
 
 > **Interview use:** "Our dataset is ~500GB. A single Aurora instance handles 128 TiB — we're at 0.4% of its limit. No sharding needed. I'd add a read replica for high availability."
 
+> ⚡ **Sweet spot vs max — the number that actually matters in practice:**
+> The 128 TiB Aurora ceiling is a storage limit, not a performance guarantee. The comfortable operating zone is **under 10–20 TiB per instance**. Beyond that: autovacuum (the background process that reclaims dead row versions left by Postgres's MVCC — Multi-Version Concurrency Control — model) struggles to keep up with high write rates, causing table bloat where disk usage grows 2–5× beyond actual data size; index maintenance during heavy write periods causes p99 latency spikes; and WAL replication lag to read replicas grows from milliseconds to seconds. The write threshold of 10–20k WPS is similarly a "pain zone" not a hard cutoff — at sustained 15k WPS, you'll see fsync stalls and index write amplification eating into response time headroom.
+
+> ⚠️ **Postgres breaks down — reach for something else when:**
+> - **Writes sustained above 20k WPS** → Cassandra (append-only, no per-write fsync) or DynamoDB (managed auto-scaling)
+> - **Multi-region active-active writes** → Cassandra (no single primary; any node accepts writes) or DynamoDB Global Tables; Postgres's single-primary model means cross-region writes must route to one region and pay the 50–150ms round-trip
+> - **High-frequency time-series at sensor/IoT scale** (100k+ writes/sec from devices writing readings every second) → Cassandra partitioned by `device_id` + clustered by `timestamp`, or TimescaleDB (Postgres extension with write-optimized time-series chunks — same SQL, but better at append patterns)
+> - **Full-text search on large document corpora (> 50–100M documents)** → Elasticsearch; Postgres FTS (Full-Text Search — built-in Postgres feature using `tsvector`/`tsquery` for keyword matching) works well under that threshold but lacks relevance scoring, synonym support, and faceted filtering at scale
+> - **Graph traversal beyond 3–4 hops** (social graph, recommendation engine) → Neo4j; recursive CTEs in Postgres handle shallow traversal but degrade exponentially past 3–4 hops as the result set explodes
+
 ---
 
 ### 🔹 In-Memory Cache (Redis / ElastiCache)
@@ -140,6 +150,158 @@ KEY INVARIANT:
 > **Interview use:** "The dataset is 20GB. Well under the 50GB fork-safe limit for a single Redis instance — no cluster needed. I'd use an LRU (Least Recently Used — evict the item that was accessed least recently) eviction policy since we want hot items to stay warm."
 
 > ⚠️ **The two limits that trip people up:** Memory isn't "how much RAM can your machine have" — it's "how much can Redis hold while still being able to BGSAVE-fork safely" (answer: ~50 GB, or the dataset must fit in half the machine RAM). Throughput isn't about memory either — at ~100k ops/sec, one CPU core saturates. When you need to scale Redis, you're solving one of these two specific problems. Name which one in the interview.
+
+> ⚡ **Sweet spot vs max — and the Redis 6 threading caveat:**
+> The comfortable production sweet spot is **10–20 GB dataset, 50–80k ops/sec** — this leaves ample BGSAVE fork headroom on a 64GB machine and keeps the single command-execution thread at <50% CPU. Redis 6.0+ added I/O multithreading for network read/write (sending and receiving data from the socket in parallel), but **command execution remains single-threaded**. On a multi-core machine with I/O threads enabled, effective throughput can reach 300–500k ops/sec — but any single slow command (a blocking Lua script, a large `LRANGE` over millions of entries, or `KEYS *` on a large keyspace) freezes ALL operations for its entire duration because everything queues behind the one execution thread. `KEYS` is banned in production for this reason; use `SCAN` instead (iterates in batches without blocking).
+
+> ⚠️ **Redis breaks down — reach for something else when:**
+> - **Dataset > 500 GB** → Redis Cluster (shards the keyspace across multiple nodes using consistent hashing) handles this, but cross-slot atomic operations (`MULTI/EXEC` spanning keys on different hash slots) become impossible; redesign with hash tags or rethink the data model
+> - **Data cannot be lost (financial, audit trail)** → Redis is not a primary store; AOF-every-second persistence still risks losing up to 1 second of writes on a crash; use Postgres (ACID guaranteed) or Cassandra (tunable durability) as the source of truth and keep Redis as the hot cache in front
+> - **Complex secondary-index queries** → Redis has no native secondary indexes; sorted sets and hash combinations handle specific patterns, but Postgres or Elasticsearch are the correct tools for arbitrary field queries
+> - **Cross-slot atomic operations in Redis Cluster** → Redis Cluster cannot execute `MULTI/EXEC` across keys that land on different hash slots; if you need atomicity across multiple keys, force co-location using hash tags `{same_tag}:key1` and `{same_tag}:key2`, or redesign to keep the transaction within a single key
+
+---
+
+### 🔹 Wide-Column Store (Cassandra / ScyllaDB)
+
+**What it is:** Cassandra stores data as rows identified by a primary key (partition key + optional clustering columns), where each row can span many columns. Unlike Postgres's in-place update model, Cassandra is **append-only** — every write is a new timestamped entry in a MemTable (sorted in-memory buffer) which eventually flushes to an immutable SSTable file on disk. There is no in-place update or delete; a "delete" is a **tombstone** (a special marker with a timestamp indicating "this key is deleted as of time T"). Reads merge the MemTable with potentially several SSTable files using Bloom filters (a probabilistic data structure that quickly answers "is this key definitely not in this file?" to skip irrelevant files) to find the newest value. This makes Cassandra write-optimized and read-expensive relative to Postgres. Full internals: `../Database-Core/59-nosql-cassandra-mongo-dynamo.md`.
+
+**Why the limits exist:**
+- **Write throughput (10k–50k WPS per node):** Writes are sequential MemTable appends followed by sequential SSTable flushes — the fastest possible disk I/O pattern. No random writes, no per-row fsync. The ceiling is disk sequential write bandwidth plus **compaction overhead** (the background process that merges SSTable files; at high write rates, compaction consumes 30–50% of disk I/O).
+- **Read throughput (5k–20k reads/sec per node):** Reads must check MemTable + potentially several SSTable levels (even with Bloom filter pruning). Quorum reads (requiring 2 nodes to respond for RF=3) add 1–2ms for the second node response over the wire. Cache-hot reads (Cassandra's built-in row cache) are faster, but the cache is less effective when the working set is large.
+- **Node size sweet spot (1–3 TB):** Cassandra requires periodic **repair** (`nodetool repair`) — an anti-entropy process that compares Merkle trees (hash-based summaries of data) across replicas to detect and fix divergence. At 1 TB/node, repair takes 1–4 hours. At 5 TB/node, repair takes 10–20+ hours — during which you're operating at reduced durability if another node fails simultaneously.
+
+**3 signals that mean "Cassandra is the right DB":**
+1. Write rate above 20k WPS sustained with a well-defined partition key per entity
+2. Per-entity time-series: "store all events for `device_id=X` ordered by timestamp" — maps cleanly to partition key + clustering column
+3. Multi-region active-active writes without a single primary bottleneck — any Cassandra node in any region accepts writes
+
+| Metric | Per-Node Capacity | Sweet Spot | You'd Scale When... |
+|---|---|---|---|
+| **Write throughput** | 10k–50k WPS (append-only, write-optimized) | 10k–20k WPS | Sustained > 30k WPS → add nodes |
+| **Read throughput** | 5k–20k reads/sec (partition-key queries only) | 5k–10k reads/sec | Quorum reads > 10k/sec → add nodes or tune consistency to ONE |
+| **Node storage** | Up to 10 TB physically | **1–3 TB** (repair completes in hours, not days) | Node > 3 TB → rebalance proactively, add nodes |
+| **Latency (p50)** | 1–5ms single-partition reads | < 5ms | Cache hot partitions in Redis |
+| **Latency (p99)** | 5–15ms | < 10ms | Tune compaction strategy (TWCS for time-series, STCS for general) |
+| **Cluster minimum** | 3 nodes (RF=3 requires 3) | 6+ nodes | Always RF=3 minimum for durability |
+
+> **Interview use:** "100k IoT sensors × 1 write/sec = 100k WPS. Partition key = `sensor_id`, clustering key = `reading_time DESC`. A single Cassandra node handles 20k WPS; we need 5 nodes minimum. With RF=3, I'd run a 6-node cluster for headroom. See `59-nosql-cassandra-mongo-dynamo.md` for quorum math."
+
+> ⚡ **Sweet spot vs max:** 1–3 TB per node is the practical ceiling before repair becomes a durability liability. A 10 TB node is technically possible but if it fails, restoring 10 TB from replicas at 100–200 MB/s disk throughput takes 14–28 hours of single-copy exposure. Keep nodes small; scale the cluster wide.
+
+> ⚠️ **Cassandra breaks down — reach for something else when:**
+> - **Cross-partition range queries** ("all orders with status=PENDING this week across all customers") → requires scatter-gather across every partition in the cluster; Elasticsearch or BigQuery handle this natively
+> - **Multi-row ACID transactions** → not supported; Cassandra's lightweight transactions (LWT using Paxos) cover single-partition compare-and-set, not multi-partition atomicity; use Postgres or CockroachDB
+> - **High delete rate** → tombstone accumulation causes read latency spikes until compaction clears them; a workload that deletes 30–50% of writes will see tombstone-induced read degradation; redesign with TTL (automatic expiry, not tombstones) or switch to Postgres
+> - **Ad-hoc queries on non-partition fields** → Cassandra's secondary indexes are local per node and slow (every node must be queried); use Elasticsearch for arbitrary field filtering
+
+---
+
+### 🔹 Document Store (MongoDB)
+
+**What it is:** MongoDB stores data as BSON documents (Binary JSON — an efficient binary encoding of JSON with added types like Date and ObjectId) grouped in collections. There is no fixed schema — two documents in the same collection can have completely different fields. The WiredTiger storage engine uses **MVCC** (Multi-Version Concurrency Control — concurrent reads see a consistent snapshot of data as of transaction start, while writes create new versions; readers never block writers at the document level). Unlike Cassandra's append-only model, MongoDB supports true in-place updates and deletes. Full internals and comparison: `../Database-Core/59-nosql-cassandra-mongo-dynamo.md`.
+
+**Why the limits exist:**
+- **Write throughput (5k–20k WPS per primary):** All writes go to the single primary of a replica set (the authoritative node that accepts writes; secondaries replicate from it asynchronously). WiredTiger's document-level locking allows concurrent writes to different documents, but the single-primary architecture is the bottleneck. Write amplification from indexes compounds this: a document with 5 indexes generates 6 write operations per insert (1 document + 5 index entries). Index count is the dominant write throughput factor.
+- **Memory (WiredTiger cache ≈ 50% of RAM):** WiredTiger's internal cache defaults to `max(50% of RAM – 1GB, 256MB)`. If your **working set** (the documents and indexes that queries actually touch) fits in this cache, reads are 1–5ms (RAM access). Once the working set exceeds the cache, reads must go to disk — latency spikes 10–100× from 2ms to 20–200ms. This is the single most important sizing decision in MongoDB: can your working set fit in the WiredTiger cache?
+- **Document size (16MB hard limit):** MongoDB enforces a 16MB maximum per document at the API level. Large binary payloads (videos, full PDFs, large blobs) belong in S3 with a URL reference in the MongoDB document.
+
+**3 signals that mean "MongoDB is the right DB":**
+1. Schema is genuinely variable per record (product catalog with electronics vs clothing vs food — each needing different fields without ALTER TABLE)
+2. Queries filter on arbitrary combinations of fields ("blue cotton T-shirts, size M, price ₹500–₹2000, in stock") — MongoDB's aggregation pipeline handles compound filters natively
+3. Occasional multi-document ACID transactions are needed (MongoDB 4.0+), but the dominant pattern is single-document atomic reads/writes
+
+| Metric | Per-Node Capacity | Sweet Spot | You'd Scale When... |
+|---|---|---|---|
+| **Write throughput** | 5k–20k WPS (primary only; depends heavily on index count) | 5k–10k WPS | Approach 15k sustained WPS → evaluate sharding |
+| **Read throughput** | 10k–50k reads/sec (cache-hit dependent) | Working set ≤ WiredTiger cache | Cache miss rate > 30% → add RAM or shard |
+| **Document size** | **16MB hard limit** (API-enforced) | < 100KB per document | Larger blobs → S3 reference pattern |
+| **Dataset before sharding** | No fixed limit — shard when performance drops | Working set ≤ available RAM | Dataset > 2–5× available RAM → shard |
+| **Latency (p50)** | 1–10ms for indexed reads (cache hit) | < 5ms | Ensure working set fits in WiredTiger cache |
+| **`$lookup` (join) latency** | Degrades on large collections — no hash join optimizer | Avoid `$lookup` on > 10M-row collections | Pre-denormalize or use Postgres for join-heavy queries |
+
+> **Interview use:** "50M product catalog items across 200 categories — each with different fields. MongoDB's flexible schema means no schema migrations when we add a new category. The working set (hot products) is ~5GB — well within WiredTiger cache on a 32GB machine. I'd shard if the hot working set exceeds available RAM and query latency degrades."
+
+> ⚡ **Sweet spot vs max:** MongoDB's performance cliff is when reads miss the WiredTiger cache. The sweet spot is: working set ≤ 50% of available RAM. Once reads start hitting disk, latency becomes unpredictable (2ms → 50ms on cache miss). Keep per-shard working set comfortably below the WiredTiger cache size as the primary sizing constraint.
+
+> ⚠️ **MongoDB breaks down — reach for something else when:**
+> - **Write throughput > 20k WPS sustained** → single primary is the bottleneck; Cassandra's multi-master model (any node accepts writes) eliminates this ceiling
+> - **Frequent joins across collections** → MongoDB's `$lookup` is a nested-loop join with no hash join optimization — degrades badly on large collections; Postgres handles joins efficiently with proper indexes
+> - **Multi-region active-active writes** → MongoDB has one primary; cross-region writes must route to the primary region and pay the 50–150ms cross-region round-trip; use Cassandra or DynamoDB Global Tables
+> - **Full-text search with relevance ranking** → MongoDB text indexes do basic keyword matching but lack BM25 relevance scoring, synonym support, and faceted filtering at scale; use Elasticsearch
+> - **Analytics across the full dataset** → the aggregation pipeline is not an OLAP engine; it runs in-process and can't parallelize across a cluster the way BigQuery or Snowflake can; offload analytics to a warehouse
+
+---
+
+### 🔹 Managed Key-Value Store (DynamoDB)
+
+**What it is:** DynamoDB is AWS's fully managed NoSQL database. AWS handles all infrastructure, replication (across 3 AZs by default), failover, scaling, and patching — you never touch a server. You design your table around a **partition key** (determines which physical partition holds the item) and an optional **sort key** (within a partition, items are sorted by sort key, enabling range queries). The cost model is pay-per-read/write (Request Capacity Units — billed per item read or written, sized by the item's data volume), not pay-for-hardware. Full schema design and GSI patterns: `../Database-Core/59-nosql-cassandra-mongo-dynamo.md`.
+
+**Why the limits exist:**
+- **Per-partition limits (3000 RCU/sec, 1000 WCU/sec):** DynamoDB divides your table across physical partitions internally. Each physical partition is capped at 3000 RCU/sec (Read Capacity Units — one RCU reads up to 4KB strongly consistent, or 8KB eventually consistent) and 1000 WCU/sec (Write Capacity Units — one WCU writes up to 1KB). If all traffic hits the same partition key (hot partition), you hit these limits even if the rest of the table is idle. On-demand mode uses Adaptive Capacity to redistribute capacity across partitions, but it responds in minutes — a sudden hot-key spike can still cause `ThrottlingException` before capacity shifts.
+- **Item size (400KB hard limit):** Each DynamoDB item (a row) cannot exceed 400KB. This is enforced at the API level with a hard error. Large payloads belong in S3; the DynamoDB item holds the S3 URL.
+- **GSI eventual consistency:** A GSI (Global Secondary Index — an alternate index projecting a subset of attributes, allowing queries on non-primary-key fields) propagates writes asynchronously. After writing to the base table, the GSI update can lag 1–2 seconds. Queries on the GSI may return stale data during this window.
+
+**3 signals that mean "DynamoDB is the right DB":**
+1. Fully AWS-native stack with no ops capacity for database administration
+2. Traffic is highly variable or unpredictable — on-demand mode absorbs Prime Day-level spikes without pre-provisioning
+3. Access patterns are well-known and stable from day one — you can design partition + sort key schema upfront
+
+| Metric | Capacity | Sweet Spot | Hard Limits |
+|---|---|---|---|
+| **Item size** | 400KB maximum | < 10KB per item | **400KB is API-enforced — not a guideline** |
+| **Per-partition write** | 1000 WCU/sec per physical partition | Distribute writes across many distinct partition keys | Hot partition → `ThrottlingException` |
+| **Per-partition read** | 3000 RCU/sec per physical partition | Distribute reads or use DAX for hot keys | Hot partition throttles even in on-demand mode |
+| **Write latency** | 1–5ms p50 | < 5ms | p99 can hit 10–20ms without DAX |
+| **DAX read latency** | < 1ms (in-memory cache layer) | Sub-ms for hot items | DAX (DynamoDB Accelerator) is eventually consistent |
+| **GSI consistency** | Eventually consistent (1–2s lag) | **Never use GSI for financial reads** | Strong consistency only on base table reads |
+| **TransactWrite** | Up to 100 items per transaction | Use sparingly (2× WCU cost per item) | Cross-table transactions not supported |
+
+> **Interview use:** "We're on AWS and access patterns are defined: get user profile by `user_id` (partition key), list orders by user sorted by date (partition key = `user_id`, sort key = `order_date`). For 'all pending orders' reporting, we add a GSI on `status`. Financial reads always query the base table — never the GSI — because GSI is eventually consistent and we can't risk stale state in payment flows."
+
+> ⚡ **Sweet spot vs max:** DynamoDB is most cost-effective with small item sizes and uniform partition key distribution. GSI write amplification adds up: a table with 5 GSIs means 6 write operations per item. At 100k WPS with 5 GSIs, that's 600k effective write operations — cost multiplies 6×. Design GSIs deliberately; treat each one as a permanent per-write tax.
+
+> ⚠️ **DynamoDB breaks down — reach for something else when:**
+> - **Multi-cloud or on-premise required** → DynamoDB is AWS-only; Cassandra or MongoDB for cloud-agnostic deployments
+> - **Access patterns are unknown or frequently changing** → DynamoDB's key design requires knowing your queries upfront; schema changes require table rebuilds or GSI additions; MongoDB's flexible schema adapts to evolving patterns without structural changes
+> - **Complex aggregations or analytics** → no aggregation pipeline; use DynamoDB Streams → Lambda → S3 → Athena for analytics, or keep Postgres for complex reporting
+> - **Cost sensitivity at extreme write scale** → at 1M+ WPS, self-managed Cassandra is significantly cheaper per-write than DynamoDB's WCU pricing; multiple companies have migrated at this threshold
+> - **Transactions spanning many items (> 100)** → `TransactWrite` supports 100 items maximum; use Postgres or CockroachDB for complex distributed transactions
+
+---
+
+### 🔹 Search Engine (Elasticsearch / OpenSearch)
+
+**What it is:** Elasticsearch is a distributed search and analytics engine built on Apache Lucene (the underlying search library). Unlike databases that store rows and build indexes on top, Elasticsearch builds an **inverted index** (a data structure that maps from words/tokens to the list of documents containing them — the opposite direction of a row-based table) as its primary structure. This makes arbitrary text search and faceted filtering fast. The trade-off: writes are expensive (every write rebuilds the inverted index), consistency is weak (documents are near-real-time — not immediately visible after indexing; there's a 1-second default refresh cycle), and Elasticsearch is not a source of truth. Always sync TO Elasticsearch FROM a primary store (Postgres, MongoDB) via a CDC pipeline (Change Data Capture — a mechanism that streams every database write as an event to downstream consumers, like Debezium for Postgres or MongoDB Atlas triggers).
+
+**Why the limits exist:**
+- **JVM heap (≤ 32GB per node — a hard practical ceiling):** Elasticsearch runs on the JVM. Below 32GB of heap, the JVM uses compressed object pointers (4 bytes per reference). Above 32GB, pointers expand to 8 bytes — the same Lucene data structures consume ~50% more heap for identical data. The performance cliff at 32GB is sharp enough that Elastic's official documentation explicitly recommends never setting heap above 32GB. On a 128GB machine, use 26–30GB heap and leave the rest for the OS page cache — Lucene reads segment files through the OS file system cache, so available OS RAM is a second memory pool for search.
+- **Shard size (10–50GB sweet spot):** Each shard is a self-contained Lucene index. Smaller shards = faster queries per shard but more JVM overhead (one shard ≈ 500KB of heap overhead × thousands of shards = GB of wasted heap). Larger shards = slow rebalancing when nodes are added (moving a 500GB shard across the network takes hours). The 10–50GB sweet spot is from Elastic's production guidance.
+- **Shards per node (< 20 per GB of heap):** Elasticsearch's circuit breaker guideline — on a node with 30GB heap, keep shards below ~600 per node. Exceeding this causes GC pressure and OutOfMemoryError under query load.
+
+**3 signals that mean "Elasticsearch is the right tool":**
+1. Full-text search with relevance ranking is a core user-facing feature (product search, document search, log search)
+2. Faceted filtering on many fields simultaneously ("price ₹500–₹2000, brand = Nike, color = blue, in stock, 4+ stars")
+3. Log aggregation and operational analytics over time-stamped event data (the "E" in ELK — Elasticsearch, Logstash, Kibana — stack)
+
+| Metric | Per-Node Capacity | Sweet Spot | Hard Limits / Degradation |
+|---|---|---|---|
+| **JVM heap** | 32GB practical maximum | 26–30GB (leave RAM for OS page cache) | **Above 32GB → pointer inflation → same data uses ~50% more heap** |
+| **Shard size** | Up to ~500GB (functional but slow to rebalance) | **10–50GB per primary shard** | Shards > 50GB → node rebalancing takes hours |
+| **Shards per node** | Degrades above 500–1000 | < 20 per GB of heap (30GB heap → ≤ 600 shards) | Excess shards → GC pressure, OOM under load |
+| **Indexing throughput** | 5k–50k docs/sec (1KB docs; varies by mapping complexity) | 10k–30k docs/sec (stable, not bursty) | Above throughput ceiling → indexing queue backs up |
+| **Search latency** | Simple queries: 1–20ms; aggregations: 100ms–seconds | p99 < 50ms for user-facing search | Complex aggregations → pre-compute or increase replicas |
+| **Refresh interval** | 1 second (default near-real-time delay) | 1s for search workloads; 30–60s for pure indexing | Indexed document not searchable for up to 1 refresh cycle |
+
+> **Interview use:** "Product search is Elasticsearch's domain — not Postgres FTS. At 10M SKUs, Postgres text search works but relevance ranking is primitive (no BM25 scoring) and faceted filtering across 5 attributes simultaneously degrades. Elasticsearch's inverted index makes 'blue cotton T-shirts under ₹2000, in stock, sorted by rating' a single-pass multi-facet query. Postgres remains the source of truth; product updates sync to Elasticsearch via a CDC pipeline."
+
+> ⚡ **Sweet spot vs max — shard count is the hidden trap:** Teams design 100–500 shards thinking "more parallelism = faster queries." But each shard is a JVM object consuming ~500KB heap, and searching 500 shards means 500 Lucene queries merged in memory simultaneously. Start with `ceil(total_dataset_GB / 30)` primary shards — scale up shards only when shard size exceeds 50GB.
+
+> ⚠️ **Elasticsearch breaks down — reach for something else when:**
+> - **Source of truth for transactional data** → Elasticsearch is near-real-time (1s lag) and eventually consistent; it does not support ACID transactions; never use it as the primary store — always sync FROM a primary DB TO Elasticsearch
+> - **Write-heavy workloads without proportional search payoff** → if you index 100k events/sec but run only 10 searches/sec, Elasticsearch's indexing overhead is waste; use Cassandra for write-heavy event storage and query via materialized views
+> - **Simple key-value lookups** → "get document by ID" is faster in Postgres (B-tree index scan, 1ms) or Redis (hash lookup, <1ms); Elasticsearch's routing and merge overhead adds unnecessary latency for single-document fetches
+> - **Strong consistency required** → a written document is invisible to search for up to 1 second (one refresh cycle); for systems where "just written = immediately queryable," use Postgres FTS and accept the query-planning tradeoffs
 
 ---
 
@@ -398,7 +560,18 @@ Ask these 3 questions. If you can't answer all 3, don't add the component.
 
 ## 🧾 TL;DR
 
-> "Do the math. A single Postgres handles 10-20k WPS and 50 TiB. A single Redis handles 100k ops/sec and ~50 GB fork-safe (CPU saturates before memory — and fork blows up large datasets). A single Kafka broker handles 1M msgs/sec. Most systems never break these limits. Reach for sharding, Redis cluster, or Kafka only when the calculation shows the single-instance threshold is genuinely crossed — not because the problem 'feels big'."
+> **Don't conflate max with sweet spot — they are different numbers.** Aurora can store 128 TiB but VACUUM degrades past 10–20 TiB. Redis can reach 200k+ ops/sec on Redis 6 with I/O threads, but the safe production floor is 50–80k. A Cassandra node can physically hold 10 TB, but repair time makes 1–3 TB the practical ceiling.
+>
+> **The scale triggers, compressed:**
+> - **Postgres** → sweet spot 10–20 TiB, 10–20k WPS; push to Cassandra for sustained high-write time-series, Elasticsearch for full-text search, Kafka to buffer write bursts
+> - **Redis** → sweet spot 10–20 GB, 50–80k ops/sec; push to Redis Cluster for larger datasets; never use as primary store for durable data
+> - **Cassandra** → sweet spot 1–3 TB/node, 10–20k WPS/node; breaks on cross-partition queries, ACID transactions, and high-delete workloads
+> - **MongoDB** → sweet spot: working set ≤ WiredTiger cache; breaks on sustained high writes (single primary), complex joins, and multi-region active-active
+> - **DynamoDB** → zero ops; breaks on flexible access patterns, complex aggregations, and extreme write cost at 1M+ WPS scale
+> - **Elasticsearch** → JVM heap ≤ 32GB, shards 10–50GB; never source of truth; breaks on write-heavy workloads without search payoff and strong-consistency requirements
+> - **Kafka** → 1M msgs/sec/broker; use for write bursts, guaranteed delivery, and fan-out to multiple consumers
+>
+> Most systems with < 100M users and < 10k WPS never break a single-instance Postgres limit. Reach for a different DB only when the math shows you've crossed the threshold — not because the problem feels big.
 
 ---
 
@@ -415,6 +588,8 @@ Ask these 3 questions. If you can't answer all 3, don't add the component.
 | Cross-region traffic | `../../Core-Architecture/Distributed-Systems/40-multi-region-geo-failover.md` |
 | Consistency model decision | `../../Core-Architecture/Distributed-Systems/34-cap-theorem-consistency-models.md` |
 | File/blob storage | `../../Foundations/Data-Fundamentals/14-document-blob-storage.md` |
+| Cassandra vs MongoDB vs DynamoDB deep dive | `../../Core-Architecture/Database-Core/59-nosql-cassandra-mongo-dynamo.md` |
+| NoSQL selection decision framework | `../../Core-Architecture/Database-Core/06-databases-types-and-selection.md` |
 
 ---
 
@@ -424,3 +599,4 @@ Ask these 3 questions. If you can't answer all 3, don't add the component.
 |---|---|
 | Jul 2, 2026 | Created. 2026 hardware baselines for Postgres, Redis, Kafka, app servers, object storage, and network. Per-component scale triggers with cross-references. Back-of-envelope template. 3 anti-patterns with worked math. "Justify It" test. |
 | Jul 3, 2026 | All component sections expanded with explanatory blocks: "What it is / Why the limits exist / 3 signals / Interview use" added to all 6 components (Postgres, Redis, Kafka, App Servers, S3, Network). BGSAVE fork mechanism, single-threaded CPU wall, Kafka consumer lag, S3 prefix sharding, and thread-per-request vs async framework distinction all explained in plain English. |
+| Jul 19, 2026 | Major expansion. **Four new DB sections added**: Cassandra (wide-column), MongoDB (document), DynamoDB (managed key-value), Elasticsearch (search engine) — each with per-node capacity numbers, sweet spot vs max callouts, and "breaks down when" migration triggers. **Existing sections updated**: Postgres 50 TiB vs 128 TiB inconsistency resolved (sweet spot vs ceiling); Redis 6 I/O threading caveat added; VACUUM/tombstone/WiredTiger-cache/hot-partition degradation patterns documented for all DB types. Production-grade numbers only — all theoretical maximums disambiguated from real operating ranges. |

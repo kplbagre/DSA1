@@ -190,8 +190,15 @@ public class WebhookController {
             @RequestHeader("X-DocuSign-Timestamp") String timestampHeader,
             @RequestBody String rawBody) {
 
-        // Step 1 — verify HMAC; reject unauthenticated requests at the door
-        if (!isValidSignature(rawBody, receivedSignature)) {
+        // Step 1 — verify HMAC over timestamp + "." + body (NOT body alone).
+        // The signature MUST cover the timestamp, otherwise the replay-window
+        // check in Step 4 is defeatable: an attacker replaying a captured request
+        // could just rewrite X-DocuSign-Timestamp to "now" and still pass, because
+        // the timestamp wouldn't be part of the signed material. Signing
+        // timestamp + body (this is exactly what Stripe does) makes the timestamp
+        // tamper-proof, so the freshness check is meaningful.
+        String signedPayload = timestampHeader + "." + rawBody;
+        if (!isValidSignature(signedPayload, receivedSignature)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
@@ -440,6 +447,12 @@ public class WebhookRegistrationService {
 
 ---
 
+### Q: "You let customers register any webhook URL. What are the two security risks, and how do you handle them?" ⭐
+
+> **(1) SSRF (Server-Side Request Forgery):** a customer registers `http://169.254.169.254/...` (cloud metadata endpoint), `http://localhost:8080/admin`, or an internal `10.x`/`192.168.x` address, and your delivery workers happily POST to it — turning your fleet into a proxy to attack your own internal network. Mitigations: allow only HTTPS + public IPs; resolve the hostname and reject private/link-local/loopback ranges (RFC 1918, 169.254.0.0/16, ::1); re-validate on every send (DNS can be rebound after registration); egress through a locked-down proxy. **(2) Endpoint ownership / challenge-response verification:** before you start sending, confirm the subscriber actually controls the URL — send a verification `ping` with a token/challenge the subscriber must echo back (GitHub's `ping` event, Stripe's endpoint verification). Without this, anyone can register someone else's URL and use your platform to flood them (a reflected-DoS amplifier). ⭐ **Tier 2 — provider-side security**
+
+---
+
 ## 🧾 TL;DR
 
 > "A webhook is an HTTP POST the external system sends to your registered endpoint when an event fires — the reverse of polling. Three mandatory receiver properties: (1) HMAC-SHA256 signature verification in constant time (authenticity), (2) idempotency key on event_id with unique DB constraint (duplicate delivery), (3) return 200 immediately then process async (provider timeout prevention). DocuSign Connect delivers all envelope lifecycle events as webhooks. Build receivers that handle at-least-once delivery safely — same event, same outcome, every time."
@@ -471,3 +484,4 @@ public class WebhookRegistrationService {
 | Date | Change |
 |---|---|
 | July 9, 2026 | Created as Concept 53. Full coverage: HMAC-SHA256 verification (receiver side, constant-time comparison explained), idempotency key pattern with race condition handling, replay attack prevention with timestamp window, async processing pattern, sender side with exponential backoff and DLQ, endpoint registration and secret rotation. DocuSign Connect context throughout. 6 Q&As (4 Tier 2 including concurrent duplicate delivery, async timeout footgun, replay attack, and full sender system design). |
+| Jul 19, 2026 | **Security fix + gap.** (1) Fixed the replay-protection flaw — the HMAC was computed over the body only, leaving the timestamp unauthenticated, so the 5-minute freshness check was defeatable (attacker rewrites the timestamp header). Now signs `timestamp + "." + body` (Stripe's scheme). (2) Added a provider-side security Q&A covering SSRF on subscriber-registered URLs (block private/link-local/metadata IPs, re-validate DNS) and challenge-response endpoint-ownership verification. |

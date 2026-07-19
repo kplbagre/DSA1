@@ -255,7 +255,7 @@ A **fencing token** (coined by Martin Kleppmann) is a monotonically increasing n
 
 ### Strategy 2 — Redlock (Multi-Node Redis)
 
-**The problem with single-node:** If the Redis node holding your lock data crashes and restarts, all lock state is lost. A crashed owner's lock never expires in Redis — so the replica might serve a new owner while the crashed owner also wakes up and thinks it still holds the lock. Result: two holders, data corruption.
+**The problem with single-node:** the canonical failure is **master–replica async-replication failover**. Redis replication is asynchronous, so this sequence loses mutual exclusion: (1) Client A acquires the lock on the master; (2) the master crashes *before* replicating that key to its replica; (3) the replica is promoted to master — and it never received the lock key; (4) Client B acquires the "same" lock on the new master. Now A and B both believe they hold it → two holders, data corruption. (A single Redis node with no replica avoids this specific race but is itself a SPOF.)
 
 **Redlock** solves this by requiring a **quorum of independent Redis nodes** (N=5, quorum=3) to all agree on the lock before it is considered held.
 
@@ -322,7 +322,7 @@ public class Redlock {
 
 **In an interview, if asked:** "Redlock acquires a lock on a majority of independent Redis nodes — the logic is that if any single node crashes, the others still represent a quorum. The effective TTL shrinks by the time spent on acquisition, so if acquiring takes too long, you release and retry rather than claiming a lock that's almost expired."
 
-**Important caveat (Tier 2 depth):** Martin Kleppmann wrote a critique arguing Redlock is still unsafe under certain clock-skew and GC-pause scenarios — the only truly safe answer is combining Redlock with fencing tokens at the storage layer.
+**Important caveat (Tier 2 depth):** Martin Kleppmann wrote a critique arguing Redlock is still unsafe under certain clock-skew and GC-pause scenarios. His deeper point: if you add **fencing tokens at the storage layer** (the thing that actually guarantees correctness), then Redlock's 5-node quorum buys you little — a single lock service + fencing tokens is already safe, so Redlock occupies an awkward middle ground. He also notes Redis can't produce reliably-monotonic fencing tokens (non-durable, wall-clock dependent), whereas ZooKeeper's `zxid` is a natural one. Practical rule: use a single Redis node for *efficiency* locks (a rare double-execution is merely wasteful), and fencing tokens (or ZooKeeper) for *correctness* locks (double-execution corrupts data).
 
 ---
 
@@ -403,6 +403,12 @@ public class Redlock {
 
 ---
 
+### Q (Tier 2): "How does ZooKeeper implement a distributed lock, and why is it considered safer than Redis for correctness locks?"
+
+> Each client creates an **ephemeral sequential znode** under a lock path, e.g. `/lock/req-`, and ZooKeeper appends a monotonic counter → `/lock/req-0000000017`. The client lists the children; **the lowest sequence number holds the lock.** A waiter doesn't poll — it sets a **watch on the single znode immediately before it** in the ordering, so it's notified exactly when its predecessor releases (this avoids the "herd effect" of everyone watching the lock). Why it's safer than Redis for correctness: (1) the znode is **ephemeral** — tied to the client's session, so if the client crashes or its heartbeat lapses, ZooKeeper deletes the node and the lock releases automatically (liveness via session, not a guessed TTL); (2) the **sequence number is a natural monotonic fencing token** (like `zxid`) you can pass to the resource layer to reject stale writers; (3) acquisition is decided by consensus (ZAB) across a quorum, not by async replication that can lose the key on failover. The trade-off: ZooKeeper has higher operational overhead and lower throughput than a single Redis node. etcd offers a similar model via leases + compare-and-swap on the key's mod-revision.
+
+---
+
 ## 🧾 TL;DR — One Interviewer-Ready Line
 
 > "Distributed locking uses Redis SETNX with TTL (auto-expiry on crash) and a Lua-script conditional release (only the owner can unlock) — for multi-node safety, Redlock requires a quorum of independent Redis nodes, and fencing tokens at the resource layer protect against stale writers who wake up after their TTL has expired."
@@ -433,3 +439,4 @@ public class Redlock {
 | Date | Change |
 |---|---|
 | June 2026 | File created. Covers: SETNX + TTL, safe release with Lua script, fencing tokens, Redlock quorum algorithm, when to use vs optimistic locking. 7 Q&As (4 Tier 1 + 3 Tier 2). |
+| Jul 19, 2026 | **Clarity fix + gap.** (1) Rewrote the "problem with single-node" motivation for Redlock — the original conflated a single-node crash with a replica serving a new owner; corrected to the canonical master–replica async-failover race. (2) Strengthened the Kleppmann caveat (fencing tokens make Redlock's quorum largely redundant for correctness; Redis can't produce monotonic fencing tokens). (3) Added a ZooKeeper ephemeral-sequential-znode lock Q&A (predecessor-watch, session-based liveness, zxid as natural fencing token) — previously ZooKeeper was name-dropped but never explained. |

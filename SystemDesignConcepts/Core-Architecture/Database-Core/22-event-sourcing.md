@@ -489,6 +489,132 @@ public static Order rebuildFromEventsWithSnapshot(String orderId) {
 
 ---
 
+**Pattern 4: Optimistic Concurrency Control — Preventing Lost Updates on the Event Stream**
+
+The single most common senior interview probe on event sourcing: *"Two commands hit the same aggregate at the same time — how do you stop one from silently clobbering the other?"* A blind `eventStore.append(event)` (as shown in Pattern 1) has a race: two writers both load Order #123 at version 5, both decide to append, and both writes land — producing an inconsistent history where each ignored the other's change.
+
+The fix is **optimistic concurrency control** (OCC — assume conflicts are rare, detect them at write time instead of locking up front): every append carries the **expected version** (the sequence number the writer believes is current). The event store commits the new event *only if* the aggregate's current version still equals the expected version. If another writer got there first, the version won't match, the append is rejected, and the caller reloads and retries.
+
+**Steps in plain English:**
+
+1. **Load with version** — when rebuilding the aggregate, also read its current version (the sequence number of its latest event).
+2. **Decide** — run the command's business logic against that loaded state, producing a new event.
+3. **Append conditionally** — write the event with `expectedVersion = loadedVersion`. The store enforces "commit only if current version is still `expectedVersion`."
+4. **Detect conflict** — if a concurrent writer already advanced the version, the conditional write fails with a concurrency exception.
+5. **Retry** — on conflict, reload the aggregate (now at the newer version), re-run the command, and try again (or surface the conflict to the user if the command no longer makes sense).
+
+```java
+public class ConcurrencyException extends RuntimeException {
+    public ConcurrencyException(String message) {
+        super(message);
+    }
+}
+
+@Component
+public class VersionedEventStore {
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    // Step 3 — append ONLY if the aggregate is still at expectedVersion.
+    // The UNIQUE constraint on (aggregate_id, version) is what makes this atomic:
+    // two writers targeting the same version — one INSERT wins, the other violates
+    // the constraint and is rejected.
+    public void appendWithVersionCheck(String aggregateId, Order.OrderEvent event, long expectedVersion) {
+        int rowsInserted = jdbcTemplate.update(
+            "INSERT INTO events (aggregate_id, version, event_type, event_data, timestamp) " +
+            "SELECT ?, ?, ?, ?, ? " +
+            "WHERE NOT EXISTS ( " +
+            "    SELECT 1 FROM events WHERE aggregate_id = ? AND version > ? " +
+            ")",
+            aggregateId,
+            expectedVersion + 1,
+            event.getClass().getSimpleName(),
+            toJson(event),
+            event.timestamp,
+            aggregateId,
+            expectedVersion
+        );
+
+        // Step 4 — no row inserted (or unique-constraint violation) means a
+        // concurrent writer advanced the version first.
+        if (rowsInserted == 0) {
+            throw new ConcurrencyException(
+                "Aggregate " + aggregateId + " was modified concurrently; expected version " + expectedVersion
+            );
+        }
+    }
+
+    private String toJson(Object obj) {
+        return "";
+    }
+}
+
+@Service
+public class OrderCommandService {
+    @Autowired
+    private VersionedEventStore eventStore;
+
+    private static final int MAX_RETRIES = 3;
+
+    // Steps 1-5 — load, decide, append-with-check, retry on conflict
+    public void shipOrder(String orderId, String carrier) {
+        for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            // Step 1 — load current state AND its version
+            LoadedOrder loaded = rebuildWithVersion(orderId);
+
+            // Step 2 — business decision against the loaded state
+            if ("shipped".equals(loaded.order.getStatus())) {
+                // already shipped — command is a no-op, do not append
+                return;
+            }
+            Order.OrderShippedEvent event = new Order.OrderShippedEvent(
+                orderId, carrier, System.currentTimeMillis()
+            );
+
+            try {
+                // Step 3 — conditional append
+                eventStore.appendWithVersionCheck(orderId, event, loaded.version);
+                return;
+            } catch (ConcurrencyException e) {
+                // Step 5 — someone else won the race; loop reloads and retries
+                if (attempt == MAX_RETRIES - 1) {
+                    throw e;
+                }
+            }
+        }
+    }
+
+    private LoadedOrder rebuildWithVersion(String orderId) {
+        // returns the rebuilt aggregate plus the version of its latest event
+        return null;
+    }
+
+    private static class LoadedOrder {
+        Order order;
+        long version;
+    }
+}
+```
+
+**Idempotent projections — the read-side counterpart.** OCC protects the write side; projections need their own guard. When a listener crashes mid-batch and Kafka redelivers, the same event can be processed twice — double-incrementing a counter or double-inserting a row. Make projection updates **idempotent** by tracking the last-processed event version per aggregate in the projection store, and skipping any event whose version is `<=` the last one already applied:
+
+```java
+@KafkaListener(topics = "order-events")
+public void project(Order.OrderEvent event, long eventVersion) {
+    // Skip if this projection already applied this version (redelivery / replay)
+    long lastApplied = projectionRepo.getLastAppliedVersion(event.orderId);
+    if (eventVersion <= lastApplied) {
+        return;
+    }
+    // Apply the state change AND advance the watermark in one transaction
+    projectionRepo.applyAndAdvance(event, eventVersion);
+}
+```
+
+**Interview phrasing:** *"Appends are guarded by optimistic concurrency — each write carries an expectedVersion, and a UNIQUE constraint on (aggregate_id, version) makes the check atomic. Concurrent writers race for the same version; one wins, the loser gets a ConcurrencyException, reloads, and retries. On the read side, projections dedupe by tracking the last-applied version per aggregate, so redelivered or replayed events are idempotent."*
+
+---
+
 **What is Event Store, Aggregate Root, and Projection, and why do they fit here?**
 
 - **Event Store:** Immutable append-only log of all domain events. Can be a database table or Kafka topic. In an interview: *"Event store is the single source of truth; all state is derived from replaying events."*
@@ -640,3 +766,4 @@ public static Order rebuildFromEvents(String orderId) {
 |---|---|
 | June 25, 2026 | Created as Concept 22. Covered event store, replay, temporal queries, aggregate root, projections, versioning challenges. |
 | July 1, 2026 | Added snapshotting Pattern 3 with full Java implementation (snapshot save/load/resume). Added upcasting code example to schema versioning Q&A. |
+| Jul 19, 2026 | **Gap closed — concurrency control.** Added Pattern 4: optimistic concurrency on the event stream (expectedVersion check + UNIQUE (aggregate_id, version) constraint + reload-and-retry loop) and idempotent projections (last-applied-version watermark to dedupe redelivered/replayed events). Fills the common senior probe "two concurrent commands on one aggregate — how do you prevent a lost update?", which the original CRUD-style `append()` did not address. |

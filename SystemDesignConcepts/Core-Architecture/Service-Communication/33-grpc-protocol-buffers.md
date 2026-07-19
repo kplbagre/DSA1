@@ -592,11 +592,19 @@ HTTP/2 is the **successor to HTTP/1.1** with multiplexing (multiple concurrent s
 
 ### Q: "Server streams 1M orders to client. Network drops halfway through. How do you resume?"
 
-> Streams are half-duplex. If download fails, entire stream is lost. Mitigation: (1) Paginate (server streams 1000 at a time, client requests next page if needed). (2) Checkpoint offsets (client remembers last received ID, requests resume from there). (3) Client-side buffering (receive into local queue, process asynchronously). ⭐ **Tier 2 — Streaming robustness**
+> gRPC streams are **full-duplex** (both sides can send independently over the same HTTP/2 stream), but they are **not resumable** — a broken connection tears down the stream and any un-received messages are lost; gRPC has no built-in resume/replay. Mitigation: (1) Paginate (server streams 1000 at a time, client requests next page if needed). (2) Checkpoint offsets (client remembers last received ID, requests resume from there). (3) Client-side buffering (receive into local queue, process asynchronously). ⭐ **Tier 2 — Streaming robustness**
 
 ### Q: "gRPC request takes 100ms (server processing: 90ms, network latency: 10ms). You make 100 concurrent gRPC calls. Total time?"
 
 > max(100ms per call) = 100ms (concurrent calls on multiplexed connection). With REST+HTTP/1.1: would need separate connections, possibly 100 × 100ms = 10,000ms in worst case (or use connection pooling, but still slower due to non-multiplexing). ⭐ **Tier 2 — Concurrency**
+
+### Q: "You put gRPC services behind a standard load balancer and one backend pod is getting all the traffic. Why?" ⭐
+
+> The classic gRPC operational gotcha. gRPC holds a **single long-lived HTTP/2 connection** and multiplexes all calls over it. A connection-level (L4) load balancer picks a backend *once* at connection setup and pins every subsequent request there — so a client hammers one pod while others sit idle, and new pods added by autoscaling get no traffic. Fixes: (1) **L7 / request-level load balancing** (Envoy, Linkerd, a service mesh, or gRPC-aware NGINX) that balances individual streams, not connections; (2) **client-side load balancing** (the gRPC client resolves all backend addresses and round-robins itself); (3) **lookaside/xDS load balancing** for large fleets. Also periodically recycle connections (`MAX_CONNECTION_AGE`) so rebalancing can happen. This is one of the most-probed real-world gRPC issues.
+
+### Q: "How do timeouts and errors propagate across a gRPC call chain?"
+
+> gRPC uses **deadlines**, not per-hop timeouts: the client sets an absolute deadline, and it propagates through the metadata down the call chain — every downstream service sees the remaining time budget and aborts with `DEADLINE_EXCEEDED` if it's blown, preventing wasted work on a request the caller already gave up on. Errors use gRPC's own **status codes** (distinct from HTTP: `OK`, `NOT_FOUND`, `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `RESOURCE_EXHAUSTED`, `FAILED_PRECONDITION`, …), returned in the trailing metadata. `UNAVAILABLE` is the retryable one; `FAILED_PRECONDITION` is not. ⭐ **Tier 2 — error model**
 
 ---
 
@@ -630,3 +638,4 @@ HTTP/2 is the **successor to HTTP/1.1** with multiplexing (multiple concurrent s
 |---|---|
 | June 25, 2026 | Created as Concept 33. Covered gRPC as high-performance RPC over HTTP/2, Protocol Buffers binary serialization, four streaming types (unary, server-stream, client-stream, bidirectional), multiplexing benefits, backward compatibility, when to use gRPC vs REST. |
 | July 1, 2026 | Added proto3 schema evolution table (safe vs breaking changes, reserved fields), "When REST wins" table, ⭐ schema evolution Q&A. Updated TL;DR. |
+| Jul 19, 2026 | **Factual fix + gaps.** (1) Corrected "streams are half-duplex" — gRPC bidi streams are full-duplex (contradicted the rest of the file); the real point is streams aren't resumable. (2) Added the classic HTTP/2 single-connection load-balancing gotcha (why one backend gets all traffic; L7/client-side LB fix) and (3) a deadline-propagation + gRPC status-code Q&A. |

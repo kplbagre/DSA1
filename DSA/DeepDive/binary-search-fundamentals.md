@@ -15,6 +15,28 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can do after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings explained |
+| [🌲 What Is Binary Search?](#what-is-bs) | Monotonicity contract — the one idea you need |
+| [📖 Terminology](#terminology) | lo, hi, mid, left-bias, right-bias, invariant |
+| [🔨 Phase 1 — Three Decisions](#setup) | Boundary choice, mid formula, shrink rule |
+| [🧠 Mental Model](#mental-model) | Eliminating half the universe each step |
+| [🎨 Style Habits](#style-habits) | lo+hi>>1, lo<=hi vs lo<hi, when to use bisect variants |
+| [🧭 Patterns](#patterns) | Classic, bisect-left/right, rotated, answer-space, matrix |
+| [🔬 Worked Walkthroughs](#walkthroughs) | Problems traced step by step |
+| [⚠️ Gotchas](#gotchas) | Infinite loop, off-by-one, wrong shrink direction |
+| [🗺️ Practice Plan](#practice-plan) | Tiered progression |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+| [🔄 Changelog](#changelog) | Doc history |
+
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This
 
 After this deep dive, you will:
@@ -28,6 +50,7 @@ By the end, LC 704 (Classic), LC 34 (Bisect), LC 875 (Koko), and the gem-gap pro
 
 ---
 
+<a id="difficulty-tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 | Tag | Meaning | Action |
@@ -38,6 +61,7 @@ By the end, LC 704 (Classic), LC 34 (Bisect), LC 875 (Koko), and the gem-gap pro
 
 ---
 
+<a id="what-is-bs"></a>
 ## 🌲 What Is Binary Search?
 
 **Binary search** (also called *divide and conquer search*) finds a target by repeatedly halving the search space. Instead of checking every candidate, it exploits a **monotonic property**: a condition that flips exactly once from false → true (or true → false) across the search space.
@@ -55,6 +79,7 @@ By the end, LC 704 (Classic), LC 34 (Bisect), LC 875 (Koko), and the gem-gap pro
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology Table
 
 | Term | Meaning | Interview context |
@@ -71,6 +96,7 @@ By the end, LC 704 (Classic), LC 34 (Bisect), LC 875 (Koko), and the gem-gap pro
 
 ---
 
+<a id="setup"></a>
 ## 🔨 Phase 1 — Three Decisions Before You Write the Loop
 
 > **Binary search bugs are almost always Phase 1 failures** — wrong `lo`/`hi`, wrong loop terminator, or wrong mid-update. Make these three decisions before touching the loop body.
@@ -136,6 +162,7 @@ int mid = lo + (hi - lo + 1) / 2;
 
 ---
 
+<a id="mental-model"></a>
 ## 🧠 Mental Model — Eliminating Half the Universe
 
 > **The core idea:** Binary search works not because the array is sorted, but because the search space has a **monotonic property** — there is a SINGLE flip point. Below it: condition fails. Above it: condition holds. You binary-search for that flip point.
@@ -181,6 +208,7 @@ This is the key insight: **binary search doesn't need an array. It needs a monot
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 > Some habits apply to every binary search you write. Others only matter for specific variants. **Master the universal ones now**; skim the context-specific ones and revisit them when you hit the pattern.
@@ -316,6 +344,7 @@ int hours = (pile + speed - 1) / speed;
 
 ---
 
+<a id="patterns"></a>
 ## 🧭 Patterns
 
 ---
@@ -807,6 +836,7 @@ public boolean searchMatrix(int[][] matrix, int target) {
 
 ---
 
+<a id="walkthroughs"></a>
 ## 🔬 Worked Walkthroughs
 
 ---
@@ -1404,6 +1434,7 @@ int hi = Arrays.stream(nums).sum();
 
 ---
 
+<a id="gotchas"></a>
 ## ⚠️ Gotchas — Silent Bug Hall of Fame
 
 ---
@@ -1537,6 +1568,7 @@ public int search(int[] nums, int target) {
 
 ---
 
+<a id="practice-plan"></a>
 ## 🗺️ Practice Plan — A Progression That Works
 
 Binary search has a steep recognition curve — the classic template is easy; knowing WHEN and WHICH variant is the real skill. Work each tier before moving on.
@@ -1605,6 +1637,7 @@ Treat as bedtime reading. Come back after Tier 4 is solid.
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 - **Binary search** = eliminate half the search space at each step by exploiting a monotone property
@@ -1623,6 +1656,7 @@ Treat as bedtime reading. Come back after Tier 4 is solid.
 
 ---
 
+<a id="changelog"></a>
 ## 🔄 Changelog
 
 | Date | Change |

@@ -486,9 +486,11 @@ Pattern: `Publisher → SNS Topic → [SQS email-queue, SQS inventory-queue, SQS
 
 - **Partition:** Kafka splits a topic into partitions for parallelism. Each partition is an immutable log. Consumers from the same group are assigned non-overlapping partitions. Messages with the same key always go to the same partition (ordering guarantee). In an interview: *"Partitioning allows multiple consumers to process the same topic in parallel without interfering."*
 
-- **Replication:** Each partition is replicated across multiple brokers. If a broker crashes, a replica takes over. Default replication factor is 2–3. In an interview: *"Replication ensures durability; Kafka can lose at most (replication_factor - 1) brokers."*
+- **Replication:** Each partition is replicated across multiple brokers. If a broker crashes, a replica takes over. The broker *default* `replication.factor` is **1**; the **production standard is 3** (paired with `min.insync.replicas=2`). In an interview: *"With RF=3, min.insync.replicas=2, and acks=all, a partition survives losing 1 broker with zero data loss. RF alone isn't a durability guarantee — the acks setting is what makes it real."*
 
-- **Offset:** A consumer tracks how many messages it's read from a partition (e.g., "I've read up to message #500"). On restart, it reads from offset #501 onwards. Consumer groups store offsets in a special Kafka topic (`__consumer_offsets`). In an interview: *"Offset tracking is how Kafka guarantees exactly-once semantics per consumer group."*
+- **Durability knobs (`acks` + `min.insync.replicas`) — the most-probed Kafka reliability question:** `acks=0` (fire-and-forget, can lose data), `acks=1` (leader only — you can lose committed data if the leader dies before replicating), `acks=all` (leader waits for all in-sync replicas). `min.insync.replicas=2` means a write is only accepted if at least 2 replicas are in-sync; combined with `acks=all` this is the standard no-data-loss config. Without these, "RF=3" buys you nothing.
+
+- **Offset:** A consumer tracks how many messages it's read from a partition (e.g., "I've read up to message #500"). On restart, it reads from offset #501 onwards. Consumer groups store offsets in a special Kafka topic (`__consumer_offsets`). Offset commit order determines the guarantee: **committing offsets AFTER processing gives at-least-once** (the default and most common); committing before processing gives at-most-once. In an interview: *"Offset tracking alone gives at-least-once — a redelivery after a crash is normal. True exactly-once needs the idempotent producer + Kafka transactions, or an idempotent consumer."* (This is consistent with the "at-least-once" note in the Q&A below.)
 
 ---
 
@@ -540,7 +542,7 @@ Pattern: `Publisher → SNS Topic → [SQS email-queue, SQS inventory-queue, SQS
 
 ### Q: "What happens if a consumer group has fewer consumers than partitions?"
 
-> Partition Assignment (default: RoundRobin): Consumer 1 gets partitions [0, 2], Consumer 2 gets partitions [1, 3]. One consumer reads from 2 partitions. When Consumer 3 joins, rebalancing happens: Kafka re-assigns (Consumer 1 → [0], Consumer 2 → [1], Consumer 3 → [2, 3]). During rebalancing (typically 10–30s), that consumer group pauses. Messages queue up; processing resumes after rebalancing. If you have 5 partitions and 2 consumers, add a 3rd consumer — it will take over 1–2 partitions. ⭐ **Tier 2 — scalability**
+> Partition Assignment (default assignor is **RangeAssignor**, and modern Kafka defaults to `[RangeAssignor, CooperativeStickyAssignor]` — RoundRobin is available but is NOT the default): e.g. Consumer 1 gets partitions [0, 2], Consumer 2 gets partitions [1, 3]. One consumer reads from 2 partitions. When Consumer 3 joins, rebalancing happens: Kafka re-assigns (Consumer 1 → [0], Consumer 2 → [1], Consumer 3 → [2, 3]). During rebalancing (typically 10–30s), that consumer group pauses. Messages queue up; processing resumes after rebalancing. If you have 5 partitions and 2 consumers, add a 3rd consumer — it will take over 1–2 partitions. ⭐ **Tier 2 — scalability**
 
 ### Q: "Your Kafka consumer is slow. Orders are piling up. How do you debug?"
 
@@ -589,3 +591,4 @@ Pattern: `Publisher → SNS Topic → [SQS email-queue, SQS inventory-queue, SQS
 |---|---|
 | June 25, 2026 | Created as Concept 19. Covered RabbitMQ (task queue) and Kafka (event stream) with code examples, partition/replication/offset explanations. |
 | July 9, 2026 | Added Pattern 3: Pub/Sub — FanoutExchange code, point-to-point vs pub/sub ASCII diagram, AWS SNS+SQS comparison, Redis Pub/Sub fire-and-forget caveat, routing models table. Added Pub/Sub, FanoutExchange, SNS+SQS terminology rows. Added Q&A: "queue vs pub/sub." |
+| Jul 19, 2026 | **Factual fixes + gap.** (1) "Offset tracking guarantees exactly-once" corrected to at-least-once (contradicted the file's own Q&A); exactly-once needs idempotent producer + transactions. (2) "Default replication factor 2–3" corrected — broker default is 1, production standard is 3. (3) Consumer partition-assignment "default RoundRobin" corrected to RangeAssignor/CooperativeStickyAssignor. (4) Added the `acks` + `min.insync.replicas` durability model (the top Kafka reliability probe) and clarified that RF alone isn't a durability guarantee. |

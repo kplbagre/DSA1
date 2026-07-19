@@ -15,6 +15,30 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can do after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings explained |
+| [🌲 Definition](#definition) | Stack LIFO, Queue FIFO, PriorityQueue heap-backed |
+| [📖 Terminology](#terminology) | Push/pop, offer/poll, peek, deque, monotonic |
+| [🧠 Mental Model](#mental-model) | Stack = 'things I haven't dealt with yet' |
+| [🎨 Visual](#visual) | Stack vs Queue vs PriorityQueue vs Monotonic Deque |
+| [🎨 Style Habits](#style-habits) | Deque as Stack, comparator discipline, peek before pop |
+| [🔨 Choosing the Right Variant](#choosing-variant) | Stack vs Queue vs PQ vs Monotonic — decision table |
+| [🧭 Patterns](#patterns) | Bracket matching, monotonic stack, expression eval… |
+| [🔬 Worked Walkthroughs](#walkthroughs) | Problems traced step by step |
+| [⚠️ Gotchas](#gotchas) | EmptyStackException, pop vs peek, Deque direction |
+| [🗺️ Practice Plan](#practice-plan) | Tiered progression |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+| [🔗 Cross-References](#cross-refs) | Links to related files |
+| [🔄 Changelog](#changelog) | Doc history |
+
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This
 
 After reading this, you will:
@@ -28,6 +52,7 @@ After reading this, you will:
 
 ---
 
+<a id="difficulty-tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 | Tag | Meaning | Action |
@@ -38,6 +63,7 @@ After reading this, you will:
 
 ---
 
+<a id="definition"></a>
 ## 🌲 Definition — What Is a Stack? What Is a Queue?
 
 **Stack (LIFO — Last In, First Out):**
@@ -76,6 +102,7 @@ System.out.println(pq.poll());  // 2 (smallest, not first added)
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology Table
 
 | Term | Meaning | Interview context |
@@ -91,6 +118,7 @@ System.out.println(pq.poll());  // 2 (smallest, not first added)
 
 ---
 
+<a id="mental-model"></a>
 ## 🧠 Mental Model — Stack Is "Things I Haven't Dealt With Yet"
 
 **Stack intuition:**
@@ -110,6 +138,7 @@ System.out.println(pq.poll());  // 2 (smallest, not first added)
 
 ---
 
+<a id="visual"></a>
 ## 🎨 Visual — Stack vs Queue vs PriorityQueue vs Monotonic Deque
 
 ```
@@ -162,6 +191,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 ### 🌐 Universal Habits
@@ -338,6 +368,7 @@ for (int i = 0; i < nums.length; i++) {
 
 ---
 
+<a id="choosing-variant"></a>
 ## 🔨 Choosing the Right Variant — Before Writing the Loop
 
 > **The Phase 1 question for stacks and queues:** *Which variant do I reach for?* The wrong choice forces you to rewrite the whole loop. Match keywords in the problem to the table below before writing a single line.
@@ -365,6 +396,7 @@ Before writing the loop, answer:
 
 ---
 
+<a id="patterns"></a>
 ## 🧭 Patterns — Stack, Queue, Priority Queue
 
 ### Pattern 1 — Bracket Matching (Classic Stack)
@@ -1366,6 +1398,7 @@ class Solution {
 
 ---
 
+<a id="walkthroughs"></a>
 ## 🔬 Worked Walkthroughs
 
 ### WW-1 — LC 20 Valid Parentheses
@@ -1816,6 +1849,7 @@ class MyQueue {
 
 ---
 
+<a id="gotchas"></a>
 ## ⚠️ Gotchas — Silent Bug Hall of Fame
 
 ### Gotcha 1 — LinkedList as Queue is Slower Than ArrayDeque
@@ -1895,6 +1929,7 @@ if (val != null) {
 
 ---
 
+<a id="practice-plan"></a>
 ## 🗺️ Practice Plan (in tiers)
 
 ### Tier 1 — Stack Basics ⭐
@@ -1924,6 +1959,7 @@ if (val != null) {
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 **When to Use:**
@@ -1952,6 +1988,7 @@ if (val != null) {
 
 ---
 
+<a id="cross-refs"></a>
 ## 🔗 Cross-References
 
 - **HashMap patterns:** `DSA/DeepDive/hashmaps-fundamentals.md` — pattern-driven approach
@@ -1961,6 +1998,7 @@ if (val != null) {
 
 ---
 
+<a id="changelog"></a>
 ## 🔄 Changelog
 
 | Date | Change |

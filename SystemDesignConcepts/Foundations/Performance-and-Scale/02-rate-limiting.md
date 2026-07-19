@@ -98,9 +98,9 @@ This is perfectly accurate — no boundary spike, no approximation. The window t
 ---
 
 **Method 4 — Sliding Window Counter (Two-Bucket Estimate):**
-Instead of the full logbook, the bouncer remembers only two numbers: how many people entered in the previous hour window (say, 7) and how many in the current window so far (say, 3). He calculates an estimate: "We're 45 minutes into the current hour, so 75% of the previous hour's count still 'overlaps' this window."
+Instead of the full logbook, the bouncer remembers only two numbers: how many people entered in the previous hour window (say, 7) and how many in the current window so far (say, 3). He calculates an estimate: "We're 45 minutes (75%) into the current hour, so the sliding 60-minute window covers only the last 25% of the previous hour — I weight the previous count by 0.25."
 
-Estimate = 7 × 0.25 (old window's remaining fraction) + 3 (current window) = 4.75. Well under 10 — allow entry.
+Estimate = 7 × 0.25 (fraction of previous window still overlapped) + 3 (current window) = 4.75. Well under 10 — allow entry.
 
 This is a pragmatic approximation. Not perfectly accurate (the estimate assumes the previous window's requests were spread evenly), but memory footprint is just 2 numbers per client. Good enough for most APIs.
 
@@ -496,3 +496,4 @@ For most APIs: fail open. For payment APIs: fail closed.
 | Date | Change |
 |---|---|
 | June 2026 | File created. DocuSign R2 prep — confirmed asked with JWT + KYC depth. Sources: ByteByteGo, hellointerview.com, Arpit Bhayani, DocuSign API docs. |
+| Jul 19, 2026 | **Factual fix.** Corrected the sliding-window-counter prose — it said "75% of the previous hour's count still overlaps" while the formula correctly weighted the previous window by 0.25. At 45 min into the current window, the sliding window overlaps only the *last 25%* of the previous window; prose now matches the formula. |

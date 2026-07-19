@@ -264,7 +264,7 @@ public class SagaOrchestrator {
 
 ## 🏢 Real World — Where Companies Use This
 
-- **Banking (2PC):** Bank transfers across institutions use 2PC for regulatory compliance. Money cannot be in flight; accounts must be consistent. SWIFT protocol enforces 2PC-like semantics. Cost: transfers take 2-3 business days (slow due to locking and coordination overhead).
+- **2PC (within a single organization's databases):** 2PC/XA is used *inside* one company's boundary across its own resource managers — e.g., a bank atomically debiting one internal ledger DB and crediting another, or a transaction spanning a DB and a JMS queue via a JTA transaction manager. It is NOT used across independent institutions. (Correction: SWIFT is a *messaging* network — it transmits payment instructions between banks; it does not run a cross-bank 2PC atomic commit. Cross-border settlement takes days because of correspondent-banking / nostro-vostro clearing and batch settlement, not because of 2PC lock-holding.)
 
 - **Uber (Saga pattern):** Uber charges driver → Marks ride complete → Pays driver. Each step commits independently. If payment fails mid-flow, Saga compensates (reverse charges, retry driver payment). Can't use 2PC across geographically distributed services — too slow. Saga trades consistency for availability.
 
@@ -299,6 +299,28 @@ public class SagaOrchestrator {
 | **You lose (Saga)** | Temporary inconsistency between steps; compensating transactions are complex; idempotency and retry logic required |
 | **Failure mode (2PC)** | Coordinator crashes mid-commit → transactions hang forever, locks never released, manual recovery needed |
 | **Failure mode (Saga)** | Compensation fails → temporary inconsistency becomes permanent; requires manual reconciliation |
+
+---
+
+## ⚠️ The One-Line Distinction: Saga Gives Up Isolation (the "I" in ACID)
+
+The crispest way to separate the two in an interview: **2PC preserves all of ACID including Isolation; a Saga preserves Atomicity (via compensation) and Durability, but deliberately sacrifices Isolation.** Because each saga step commits locally *before* the whole saga finishes, other transactions can see those partial, uncommitted-at-the-saga-level results. This produces real anomalies:
+
+- **Dirty read:** Order B reads the inventory that Order A's saga already decremented — then Order A's saga fails and compensates, so B acted on data that "never should have existed."
+- **Lost update:** Two sagas read the same balance and both write back, one clobbering the other.
+- **Fuzzy/non-repeatable read:** a saga re-reads a value mid-flow and it changed underneath it.
+
+**Countermeasures** (Chris Richardson's canonical list — name at least one in an interview):
+
+| Countermeasure | What it does |
+| --- | --- |
+| **Semantic lock** | Mark the record with an in-progress flag (e.g., `PENDING`) so other transactions know it's mid-saga and can wait or skip it |
+| **Commutative updates** | Design steps so order doesn't matter (increment/decrement instead of set), avoiding lost updates |
+| **Pessimistic view** | Reorder saga steps so the step most likely to cause a dirty read runs last |
+| **Re-read value** | Before updating, re-read and verify the value hasn't changed (optimistic check) |
+| **By-value** | Pick 2PC vs Saga per-request based on risk/value of the specific business transaction |
+
+**Retriable vs compensatable vs pivot steps:** classify each saga step. *Compensatable* steps (can be undone) run first; the *pivot* step is the point of no return (once it commits, the saga must go forward); *retriable* steps come after the pivot and must eventually succeed. Some actions genuinely can't be compensated — a sent email, a dispatched physical shipment — so they belong after the pivot, not before it.
 
 ---
 
@@ -363,3 +385,4 @@ public class SagaOrchestrator {
 | Date | Change |
 |---|---|
 | June 25, 2026 | Initial creation. Added 2PC voting phase vs Saga compensation flow, code example for both patterns, JDBC transaction control, Saga orchestrator with compensation. Real-world examples (Banking, Uber, Amazon Prime, Razorpay, PayPal). Seven Q&As covering blocking behavior, compensation failures, idempotency, Saga vs 2PC trade-off. |
+| Jul 19, 2026 | **Factual fix + gap.** (1) Corrected the "SWIFT enforces 2PC-like semantics" claim — SWIFT is a messaging network, not a cross-bank atomic-commit protocol; settlement latency is from correspondent-banking clearing, not 2PC locks. Reframed the example to intra-org XA/JTA 2PC. (2) Added the "Saga sacrifices Isolation" section — the crispest 2PC-vs-Saga distinction (dirty read / lost update anomalies + semantic-lock/commutative/pivot countermeasures), which was previously missing. |

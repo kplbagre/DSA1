@@ -4,6 +4,33 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can do after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings explained |
+| [📖 Terminology](#terminology) | State, pruning, choice, constraint, candidate |
+| [🧠 Universal Backtracking Recipe](#recipe) | The 4-line mental model that covers all sub-patterns |
+| [🔑 Decision Framework](#decision-framework) | Take/Not-Take vs For-loop — which to use |
+| [🔨 Setup — Phase 1](#setup) | What to prepare before calling backtrack() |
+| [🪜 Sub-Pattern 1: Take/Not-Take](#subpattern-1) | Subsets, combination sum II, partition equal subset |
+| [🪜 Sub-Pattern 2: For-loop](#subpattern-2) | Combinations, letter combos of phone number |
+| [🪜 Sub-Pattern 3: Permutations](#subpattern-3) | All permutations with/without duplicates |
+| [🪜 Sub-Pattern 4: Pruning](#subpattern-4) | N-Queens — hard constraint satisfaction |
+| [🪜 Sub-Pattern 5: Grid](#subpattern-5) | Word search — 2D DFS with visited tracking |
+| [🪜 Sub-Pattern 6: Partitioning](#subpattern-6) | Palindrome partitioning — cut-point decisions |
+| [🎨 Style Habits](#style-habits) | Undo discipline, result.add(new ArrayList(current)) |
+| [🐞 Common Bugs](#common-bugs) | Forgetting undo, shared list mutation, wrong pruning |
+| [🔬 Worked Walkthroughs](#walkthroughs) | Problems traced step by step |
+| [🗺️ Practice Plan](#practice-plan) | Tier-by-tier progression |
+| [⚠️ Gotchas](#gotchas) | Silent bugs that compile but produce wrong output |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This (The Goal)
 
 Backtracking is the pattern that confuses people the most because of the "undo." Most interviewees get the structural shape but freeze when they see a problem like *"all permutations"* or *"N-Queens"* because the **choice space changes** between sub-patterns and the templates look different.
@@ -26,6 +53,7 @@ By the end you should be able to:
 
 ---
 
+<a id="difficulty-tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 Every problem in this doc is tagged so you know whether to attempt it **now** or **wait** until you've covered more material.
@@ -40,6 +68,7 @@ Every problem in this doc is tagged so you know whether to attempt it **now** or
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology (Memorize These)
 
 | Term | Definition | Example |
@@ -56,6 +85,7 @@ Every problem in this doc is tagged so you know whether to attempt it **now** or
 
 ---
 
+<a id="recipe"></a>
 ## 🧠 The Universal Backtracking Recipe
 
 > **Every backtracking problem follows the same shape.** The only thing that changes between sub-patterns is **what counts as a "choice"** and **what state you carry**.
@@ -158,6 +188,7 @@ WHY THE UNDO IS NON-NEGOTIABLE:
 
 ---
 
+<a id="decision-framework"></a>
 ## 🔑 The Decision Framework — Which Sub-Pattern Is This?
 
 When you read a backtracking problem, scan for these signal phrases. They map directly to one of the six sub-patterns.
@@ -183,6 +214,7 @@ When you read a backtracking problem, scan for these signal phrases. They map di
 
 ---
 
+<a id="setup"></a>
 ## 🔨 Setting Up Before You Call `backtrack()` — Phase 1
 
 > **⬛ The choices array in backtracking is usually the raw input itself** — no adjacency-list or TreeNode construction needed. What trips interviewees is forgetting to initialize **auxiliary state** (the `used[]` array, the board, constraint sets) before the first `backtrack()` call, and forgetting to sort when duplicates are present.
@@ -290,6 +322,7 @@ private void backtrack(String digits, int ind, StringBuilder path,
 
 ---
 
+<a id="subpattern-1"></a>
 ## 🪜 Sub-Pattern 1: Take/Not-Take
 
 > **Already covered in `recursion-fundamentals.md` Pattern 3.1 + 3.2 (Subsequence Trilogy).** This section is a recap + the bridge to the rest of backtracking.
@@ -332,6 +365,7 @@ void f(int ind, int[] arr, int n, List<Integer> path, List<List<Integer>> ans) {
 
 ---
 
+<a id="subpattern-2"></a>
 ## 🪜 Sub-Pattern 2: For-loop "Pick Next"
 
 > When at each state you can pick **any of many** next options (not just include/skip), use a `for` loop over the choices. The `start` index parameter prevents revisits and duplicates.
@@ -449,6 +483,7 @@ for (int i = start; i < cand.length; i++) {
 
 ---
 
+<a id="subpattern-3"></a>
 ## 🪜 Sub-Pattern 3: Permutations
 
 > **Why this isn't take/not-take or for-loop with `start`:** permutations need every element in **every position**. That's a fundamentally different choice space — at each level, the choice is *"which element haven't I used yet?"*
@@ -598,6 +633,7 @@ for (int i = 0; i < nums.length; i++) {
 
 ---
 
+<a id="subpattern-4"></a>
 ## 🪜 Sub-Pattern 4: Constraint-Driven (Pruning) — N-Queens
 
 > When the choice space is large but most branches are invalid, **prune before recursing**. The validity check is the entire game.
@@ -865,6 +901,7 @@ For each empty cell, try digits 1-9; check `rows[r][d] || cols[c][d] || boxes[b]
 
 ---
 
+<a id="subpattern-5"></a>
 ## 🪜 Sub-Pattern 5: Grid / 2D Backtracking — Word Search
 
 > When the choice space is **4 directional moves on a grid**, you need a `visited` matrix and a directions array. Don't forget to undo `visited` on the way back.
@@ -1048,6 +1085,7 @@ private void dfs(char[][] grid, int r, int c) {
 
 ---
 
+<a id="subpattern-6"></a>
 ## 🪜 Sub-Pattern 6: Cut-Points / Partition — Palindrome Partitioning
 
 > When the problem is *"split this string into pieces where each piece satisfies P"*, the **choice at each step is where to make the next cut**, not which element to take.
@@ -1202,6 +1240,7 @@ private void backtrack(String s, int start, List<String> path, List<String> resu
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 > Some habits apply to **every backtracking problem**. Others matter only in specific sub-patterns. **Master the universal ones first**, then internalize context-specific ones as you encounter them.
@@ -1325,6 +1364,7 @@ This converts "Combination Sum" (LC 39) into "Combination Sum II" (LC 40), and "
 
 ---
 
+<a id="common-bugs"></a>
 ## 🐞 Common Bugs (Hall of Fame)
 
 ### Bug 1 — Forgetting the undo
@@ -1479,6 +1519,7 @@ Always: **success base case → fail base case → pruned loop → recurse**. In
 
 ---
 
+<a id="walkthroughs"></a>
 ## 🔬 Worked Walkthroughs
 
 ---
@@ -1989,6 +2030,7 @@ private void backtrack(char[][] board, int row, int n,
 
 ---
 
+<a id="practice-plan"></a>
 ## 🗺️ Practice Plan — Tier-by-Tier
 
 Don't try to solve all of these in one sitting. Spread over 1–2 weeks. Time-box each at 25 minutes.
@@ -2063,6 +2105,7 @@ Don't try to solve all of these in one sitting. Spread over 1–2 weeks. Time-bo
 
 ---
 
+<a id="gotchas"></a>
 ## ⚠️ Gotchas (Silent Bug Hall of Fame)
 
 **Forgetting `Arrays.sort()` before skip-duplicate trick.**
@@ -2167,6 +2210,7 @@ For "find ONE" problems, propagate `true` the moment you have it.
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 - **Backtracking** = recursion + an undo step that restores state before the next sibling branch

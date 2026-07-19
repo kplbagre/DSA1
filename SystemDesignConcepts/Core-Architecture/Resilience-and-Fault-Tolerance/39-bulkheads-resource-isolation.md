@@ -199,7 +199,7 @@ KEY INVARIANT:
 ### Mechanism 1: Thread Pool Bulkhead (Resilience4j ThreadPoolBulkhead)
 
 **Steps:**
-1. Define a `ThreadPoolBulkheadConfig` with `maxConcurrentCalls` (thread pool size) and `maxWaitDuration` (how long to wait if pool is full before throwing `BulkheadFullException`).
+1. Define a `ThreadPoolBulkheadConfig` with `maxThreadPoolSize` + `coreThreadPoolSize` + `queueCapacity` (these size the pool and its queue) and `maxWaitDuration` (how long to wait if pool+queue are full before throwing `BulkheadFullException`). Note: `maxConcurrentCalls` belongs to the *semaphore* `BulkheadConfig`, NOT `ThreadPoolBulkheadConfig` — don't mix them up.
 2. Decorate each downstream call with its own named bulkhead.
 3. When the thread pool is saturated, new calls immediately throw `BulkheadFullException` — the caller is rejected, not blocked.
 4. Monitor pool utilization; alert when pool usage exceeds 80% for more than 30 seconds.
@@ -665,3 +665,4 @@ spec:
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 39. Three isolation mechanisms: thread pool bulkhead (Resilience4j ThreadPoolBulkhead), semaphore bulkhead (Resilience4j Bulkhead), and connection pool bulkhead (HikariCP per tenant). Composite pattern with circuit breaker (Decorators API). Celebrity problem and Little's Law pool sizing in Q&A. Seven Q&As covering bulkhead vs circuit breaker distinction, pool sizing, tenant isolation, and Hystrix-to-Resilience4j migration. |
+| Jul 19, 2026 | **Factual fix.** Step 1 of the ThreadPoolBulkhead section wrongly listed `maxConcurrentCalls` as the thread-pool-size property — that property belongs to the *semaphore* `BulkheadConfig`. Corrected to `maxThreadPoolSize`/`coreThreadPoolSize`/`queueCapacity` (which the code already used) and added a note not to confuse the two configs. |

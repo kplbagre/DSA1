@@ -24,7 +24,7 @@
 | Fanout | Copying and delivering one event to many recipients — decoupling the single write from millions of individual deliveries | Celebrity posts → 1 Kafka event → 50M fan-out worker deliveries |
 | Dead Token | A device token that APNs/FCM marks invalid because the user uninstalled the app or the token expired | APNs returns `BadDeviceToken`; worker must immediately mark token inactive in DB |
 | Thundering Herd (push) | Millions of devices wake up simultaneously and hammer your API for content after receiving a notification | "You have a new post" notification → 50M devices all call `/api/feed` at once; fix by including full payload in push |
-| Batch Push | Sending a single API call with up to 1,000 device tokens instead of one call per token to improve throughput | APNs HTTP/2 supports 1K concurrent streams per connection |
+| Concurrent Multiplexing (NOT batching) | APNs has **no multi-token batch API** — each push is a separate HTTP/2 request with exactly one device token. Throughput comes from multiplexing many single-token requests concurrently over one HTTP/2 connection | APNs advertises ~1,000 max concurrent HTTP/2 streams per connection → send up to ~1,000 single-token requests in flight at once. (FCM's `sendEach` fans out to ≤500 individual sends under the hood — also not a true batch) |
 | Fanout Worker | A Kafka consumer pod that owns a partition and delivers notifications to its slice of subscribers | Worker pod 1 owns partition 0 and delivers to users 0–500K |
 
 ---
@@ -322,7 +322,9 @@ private void sendViaFcm(NotificationEvent event, List<DeviceToken> tokens) {
                 event.getTitle(),
                 event.getBody()
             );
-            if (response.isError() && "registration/invalid".equals(response.getErrorCode())) {
+            // FCM v1 returns UNREGISTERED (HTTP 404) for tokens that are no longer
+            // valid, and INVALID_ARGUMENT (HTTP 400) for malformed tokens.
+            if (response.isError() && "UNREGISTERED".equals(response.getErrorCode())) {
                 // FCM confirmed this registration token is no longer valid — deactivate immediately
                 tokenRepository.markInactive(token.getId());
             }
@@ -448,19 +450,21 @@ APNs HTTP/2 multiplexing supports up to 1,000 concurrent push streams per connec
 
 **Q1 (Tier 1):** "How do you design push notifications for a system with 100M users where a celebrity posts and all followers must be notified within 30 seconds?"
 
-> Publish one "new-post" `NotificationEvent` to a Kafka topic partitioned by `celebrity_user_id`. N fan-out workers each own a Kafka partition and a slice of the follower list (stored in Cassandra, paginated by user_id range). Each worker fetches device tokens in pages of 1000 and calls APNs/FCM batch API. Horizontal worker scale controls throughput. With 100 workers each processing 1K tokens/sec = 100K tokens/sec → 100M deliveries in ~1000 seconds. To hit 30 seconds, you need approximately 3300 workers or larger batch sizes. Identify the throughput constraint explicitly and state that you'd scale workers or increase batch size. In practice, Instagram achieves this with a combination of pre-sharded follower lists and prioritized delivery for highly-engaged users.
+> Publish one "new-post" `NotificationEvent` to a Kafka topic partitioned by `celebrity_user_id`. N fan-out workers each own a Kafka partition and a slice of the follower list (stored in Cassandra, paginated by user_id range). Each worker fetches device tokens in pages of ~1000 and fires them as concurrent single-token HTTP/2 requests to APNs/FCM (there is no multi-token batch API — throughput = concurrency over the HTTP/2 connection). Horizontal worker scale controls throughput. With 100 workers each processing 1K tokens/sec = 100K tokens/sec → 100M deliveries in ~1000 seconds. To hit 30 seconds, you need approximately 3300 workers or larger batch sizes. Identify the throughput constraint explicitly and state that you'd scale workers or increase batch size. In practice, Instagram achieves this with a combination of pre-sharded follower lists and prioritized delivery for highly-engaged users.
 
 ---
 
 **Q2 (Tier 1):** "What happens when a device token expires or the user uninstalls the app?"
 
-> APNs returns "BadDeviceToken" and FCM returns "registration/invalid" in their API response on the next push attempt after the token becomes invalid. The fan-out worker checks every API response and, on receiving this error code, immediately calls `tokenRepository.markInactive(token.getId())`. This prevents future push attempts to that token. Additionally, run a scheduled cleanup job (nightly or weekly) to hard-delete tokens that have been inactive for more than 30 days. Without this cleanup, your `device_token` table accumulates millions of dead tokens, making follower-to-token lookups progressively slower and bloating storage.
+> APNs returns `BadDeviceToken` (or HTTP 410 `Unregistered`) and FCM v1 returns `UNREGISTERED` (HTTP 404) in their API response on the next push attempt after the token becomes invalid. The fan-out worker checks every API response and, on receiving this error code, immediately calls `tokenRepository.markInactive(token.getId())`. This prevents future push attempts to that token. Additionally, run a scheduled cleanup job (nightly or weekly) to hard-delete tokens that have been inactive for more than 30 days. Without this cleanup, your `device_token` table accumulates millions of dead tokens, making follower-to-token lookups progressively slower and bloating storage.
 
 ---
 
 **Q3 (Tier 1):** "What is the difference between fan-out on write vs fan-out on read for notifications?"
 
-> Fan-out on write: when a post is created, immediately update every follower's notification inbox or device token delivery queue. Pros: notifications can be pushed instantly; fan-out happens at write time so read is O(1). Cons: write amplification — 1 celebrity post → 50M writes across the DB and 50M APNs calls. Fan-out on read: do not write to followers at post time — when a follower opens the app, pull the celebrity's latest posts on demand. Pros: no write amplification; simpler producer path. Cons: impossible to push — you don't know when the follower will open the app, so you cannot trigger a notification. Hybrid strategy (used by Instagram): fan-out on write for users with fewer than 10K followers; fan-out on read for mega-celebrities with over 10M followers, delivering to a sampled or segmented subset of followers asynchronously rather than all 50M simultaneously.
+> Fan-out on write: when a post is created, immediately update every follower's notification inbox or device token delivery queue. Pros: notifications can be pushed instantly; fan-out happens at write time so read is O(1). Cons: write amplification — 1 celebrity post → 50M writes across the DB and 50M APNs calls. Fan-out on read: do not write to followers at post time — when a follower opens the app, pull the celebrity's latest posts on demand. Pros: no write amplification; simpler producer path. Cons: **you cannot push at all** — a push is by definition delivered at event time, so notifications are inherently fan-out-on-write.
+>
+> **Key clarification for notifications specifically:** fan-out-on-read is a *timeline/feed assembly* strategy, not a notification strategy. You cannot "read-fanout" a push. The real celebrity mitigation for *notifications* is **throttled / prioritized / sampled fan-out-on-write** — still writing at event time, but rate-limiting the delivery, prioritizing highly-engaged followers first, and dropping/deferring push for low-engagement followers. Instagram's write-vs-read hybrid (write-fanout under ~10K followers, read-fanout for mega-celebrities) applies to the *home timeline*; the notification path stays write-fanout but throttled.
 
 ---
 
@@ -506,3 +510,4 @@ APNs HTTP/2 multiplexing supports up to 1,000 concurrent push streams per connec
 | Date | Change |
 |---|---|
 | Jul 1, 2026 | Added Section 4d — Deduplication as a first-class section (idempotency table with `ON CONFLICT DO NOTHING` + APNs/FCM collapse key as second layer); added batch sizing table aligned to APNs HTTP/2 1K stream limit. |
+| Jul 19, 2026 | **Factual fixes.** (1) Corrected the "batch send API / 1,000 tokens per call" framing — APNs has NO multi-token batch API; each push is one single-token HTTP/2 request and throughput comes from concurrent multiplexing (FCM `sendEach` also fans out to ≤500 individual sends). (2) Replaced the fabricated FCM error code `registration/invalid` with the real `UNREGISTERED` (HTTP 404) / `INVALID_ARGUMENT` (400). (3) Fixed the Q3 fan-out muddle — push is inherently fan-out-on-write; the celebrity mitigation is throttled/prioritized write-fanout, not read-fanout (which is a timeline strategy). |

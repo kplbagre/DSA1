@@ -103,6 +103,8 @@ KEY INVARIANT:
    less available than a monolith.
 ```
 
+> ⚠️ **The parallel formula assumes INDEPENDENT failures — and in the real world they usually aren't.** `A = 1 - (1 - A_single)^n` only holds if the redundant instances fail for *unrelated* reasons. In practice, failures are **correlated**: a bad deploy, a poisoned config push, an expired certificate, a shared control-plane/DNS dependency, or a full-region/AZ outage takes down *all* replicas at once. When failures are correlated, the "four nines" the formula promises collapses toward the single-instance number. This is why real high-availability work is as much about **eliminating correlated/common-cause failures** (staggered deploys, cell-based architecture, config canaries, independent power/network) as about adding replica count. Quote the formula in an interview — then immediately name its independence assumption; that's the senior signal.
+
 ---
 
 ## ⚙️ How It Actually Works
@@ -249,3 +251,4 @@ public class HealthController {
 | Date | Change |
 |---|---|
 | Jul 10, 2026 | File created. Covers nines table, serial dependency math, parallel redundancy formula, active-passive vs active-active, sync vs async replication, liveness/readiness health check code, and 6 Q&As including 3 Tier 2 probe questions. |
+| Jul 19, 2026 | **Gap closed.** Added the independence-assumption caveat to the parallel-redundancy formula `A = 1 - (1 - A_single)^n` — it only holds for *independent* failures; correlated/common-cause failures (bad deploy, config push, cert expiry, shared control plane, region outage) collapse the promised nines. All availability math verified correct (nines table, 0.999³≈99.7%, two-AZ 99.9999%). |

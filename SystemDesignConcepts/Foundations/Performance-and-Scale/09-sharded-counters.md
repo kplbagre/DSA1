@@ -17,7 +17,7 @@ Counting at scale sounds trivial until a single database row becomes the bottlen
 | Shard Row | One of N physical rows in the counter table, each holding a partial count for the same logical counter | `counter_shards (counter_id='video:123', shard_id=3, shard_count=512000)` |
 | SUM Aggregation | The read query that adds up all N shard rows to return the total logical counter value | `SELECT SUM(shard_count) WHERE counter_id = 'video:123'` |
 | Redis INCR | An atomic Redis command that increments an integer key by 1 in a single operation with no lock overhead | `INCR video:123:shard:4` returns new value |
-| HyperLogLog | A probabilistic data structure that estimates the count of *distinct* elements with ~2% error in ~12 KB | `PFADD visitors userId42` then `PFCOUNT visitors` ≈ unique viewer count |
+| HyperLogLog | A probabilistic data structure that estimates the count of *distinct* elements with ~0.81% error in ~12 KB | `PFADD visitors userId42` then `PFCOUNT visitors` ≈ unique viewer count |
 | Eventual Consistency (counters) | The read total may lag slightly behind real-time because shards are written independently and aggregated periodically | YouTube view count jumps from 998 to 1,003 instead of incrementing one at a time |
 
 ---
@@ -230,11 +230,11 @@ public class RedisShardedCounter {
 
 ### What is HyperLogLog, and when is it an alternative?
 
-**HyperLogLog** is a probabilistic data structure that estimates the count of **distinct elements** (cardinality) in a set using a fixed ~12 KB of memory regardless of how many unique elements there are. It trades exact accuracy (~2% error) for massive space savings.
+**HyperLogLog** is a probabilistic data structure that estimates the count of **distinct elements** (cardinality) in a set using a fixed ~12 KB of memory regardless of how many unique elements there are. It trades exact accuracy (~0.81% error) for massive space savings.
 
 **When to use instead of sharded counters:** Sharded counters count **total events** (including duplicates) — views, clicks, transactions. HyperLogLog counts **unique elements** — unique visitors, unique URLs, unique users who liked a post. If you need "how many distinct users watched this video," use HyperLogLog (`PFADD`, `PFCOUNT` in Redis). If you need "how many total views," use a sharded counter.
 
-**In an interview, if asked:** "HyperLogLog estimates distinct-element counts in ~12 KB with ~2% error — Redis supports it natively with PFADD/PFCOUNT. I'd use it for unique visitor counts or unique impressions where approximate is acceptable. For total view counts where I need exact numbers, I'd use a sharded counter instead."
+**In an interview, if asked:** "HyperLogLog estimates distinct-element counts in ~12 KB with ~0.81% error — Redis supports it natively with PFADD/PFCOUNT. I'd use it for unique visitor counts or unique impressions where approximate is acceptable. For total view counts where I need exact numbers, I'd use a sharded counter instead."
 
 ---
 
@@ -294,7 +294,7 @@ public class RedisShardedCounter {
 
 ### Q: "What's the difference between a sharded counter and HyperLogLog?"
 
-> A sharded counter counts **total events** — every view increments the count, including repeat views from the same user. HyperLogLog counts **distinct elements** — it tracks unique users who viewed, deduplicated with ~2% error and ~12 KB of memory. Use a sharded counter for "total views" (10M views by 2M unique users = 10M). Use HyperLogLog for "unique viewers" (that same video has 2M unique viewers). In practice, YouTube uses both.
+> A sharded counter counts **total events** — every view increments the count, including repeat views from the same user. HyperLogLog counts **distinct elements** — it tracks unique users who viewed, deduplicated with ~0.81% error and ~12 KB of memory. Use a sharded counter for "total views" (10M views by 2M unique users = 10M). Use HyperLogLog for "unique viewers" (that same video has 2M unique viewers). In practice, YouTube uses both.
 
 ---
 
@@ -340,3 +340,4 @@ public class RedisShardedCounter {
 | Date | Change |
 |---|---|
 | June 2026 | File created. Covers: hot-write problem, DB shard table design, Redis INCR sharding, HyperLogLog distinction, sizing formula, background flush pattern. 6 Q&As (4 Tier 1 + 2 Tier 2). |
+| Jul 19, 2026 | **Precision fix.** HyperLogLog standard-error figure aligned from "~2%" to the canonical Redis value "~0.81%" (kept ~12 KB, which was already correct) — resolves a cross-file mismatch with `09-sharded-counters_advanced.md`. |

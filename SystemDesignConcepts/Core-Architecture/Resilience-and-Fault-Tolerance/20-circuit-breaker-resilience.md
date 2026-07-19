@@ -314,7 +314,11 @@ public class ThreadPoolConfig {
         executor.setMaxPoolSize(20);
         executor.setQueueCapacity(100);  // queue up to 100 requests
         executor.setThreadNamePrefix("fraud-");
-        executor.setRejectedExecutionHandler(new ThreadPoolTaskExecutor.CallerRunsPolicy());  // reject if full
+        // CallerRunsPolicy does NOT reject — it runs the task on the submitting
+        // thread when the pool+queue are full, which naturally throttles the
+        // caller (backpressure). Use AbortPolicy (throws RejectedExecutionException)
+        // if you want fail-fast rejection instead.
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.initialize();
         return executor;
     }
@@ -483,3 +487,4 @@ public class PaymentProcessing {
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 20. Added circuit breaker states (closed/open/half-open), bulkhead isolation, retry with exponential backoff + jitter. |
+| Jul 19, 2026 | **Factual fix.** Corrected the `CallerRunsPolicy` comment ("reject if full") — `CallerRunsPolicy` does NOT reject; it runs the task on the submitting thread (backpressure). Noted `AbortPolicy` as the fail-fast alternative. Also fixed the nested class reference to `ThreadPoolExecutor.CallerRunsPolicy`. |

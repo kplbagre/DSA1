@@ -450,7 +450,7 @@ For sticky sessions at scale (thousands of servers), simple hash-modulo fails: i
 
 ### Q: "How does consistent hashing differ from round robin?"
 
-> Round robin assigns by request order (deterministic, simple). Consistent hashing assigns by content (request ID or session ID) to the same server. If you add/remove a server, round robin continues; consistent hashing rehashes some requests but not all. Consistent hashing is used for stateful services where you need the same request to land on the same server to preserve cache/state. Round robin is stateless and faster (no hashing). ⭐ **Tier 2 — conceptual**
+> Round robin assigns by request order (deterministic, simple). Consistent hashing routes by a **stable key** — session ID, user ID, or cache key — so the same key always lands on the same server. (Never hash a per-request unique ID like a request ID — that would scatter every request randomly and defeat the purpose.) If you add/remove a server, round robin continues; consistent hashing remaps only ~1/N of keys, not all. Consistent hashing is used for stateful services where you need the same request to land on the same server to preserve cache/state. Round robin is stateless and faster (no hashing). ⭐ **Tier 2 — conceptual**
 
 ### Q: "When would you use an L4 load balancer vs an L7 load balancer?" ⭐
 
@@ -493,3 +493,4 @@ For sticky sessions at scale (thousands of servers), simple hash-modulo fails: i
 |---|---|
 | June 25, 2026 | Created as Concept 17. Added four algorithms (round robin, least connections, weighted RR, sticky sessions) with code examples and mental model. |
 | July 1, 2026 | Added L4 vs L7 section: NLB vs ALB comparison table, ASCII routing diagram, use-case guidance, and L4/L7 interview Q&A. Updated TL;DR. Added Terminology Table (load balancer, round robin, least connections, sticky sessions/session affinity, health check, L4/L7) — sticky sessions was used in KEY INVARIANT before being defined. |
+| Jul 19, 2026 | **Factual fix.** Corrected the consistent-hashing Q&A — it said hashing keys on "request ID or session ID"; a per-request unique ID would scatter requests randomly and defeat the purpose. Fixed to route by a *stable* key (session/user/cache key) and noted the ~1/N remap property. |

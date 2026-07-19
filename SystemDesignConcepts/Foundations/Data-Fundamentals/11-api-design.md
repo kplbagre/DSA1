@@ -282,7 +282,7 @@ Three strategies, one clear winner for REST APIs:
 |---|---|---|
 | **URL path versioning** | `/v1/documents` | ✅ Default choice — visible, cacheable, easy to route |
 | **Header versioning** | `Accept-Version: 2` header | Internal APIs, when URLs must stay clean |
-| **Query param versioning** | `/documents?version=2` | Avoid — gets lost in logging, looks like a filter |
+| **Query param versioning** | `/documents?version=2` | Avoid — fragments/busts HTTP caches (query string is part of the cache key) and semantically mixes versioning with resource filtering |
 
 **Breaking vs non-breaking changes:**
 
@@ -295,11 +295,27 @@ Three strategies, one clear winner for REST APIs:
 
 ---
 
+## 🧭 REST vs GraphQL vs gRPC + 202 + HATEOAS (commonly probed)
+
+**Protocol choice:**
+
+| | REST | GraphQL | gRPC |
+| --- | --- | --- | --- |
+| **Best for** | Public/partner APIs, CRUD, cacheable resources | Client-driven UIs with varied data needs; mobile (avoid over/under-fetching) | Internal service-to-service, low latency, streaming |
+| **Shape** | Many endpoints, HTTP verbs + status codes | Single endpoint, client specifies exact fields | Binary (protobuf) over HTTP/2, typed contract |
+| **Downsides** | Over/under-fetching; N calls for related data | Caching is harder; query cost/complexity attacks; N+1 resolvers | Not browser-native without a proxy; opaque payloads |
+
+**`202 Accepted` — the async workhorse:** for long-running operations, return `202` immediately with a `Location`/status URL the client polls (or a webhook). Standard for "kick off a job, get the result later" — pairs with idempotency keys so a retried kickoff doesn't start the job twice.
+
+**HATEOAS** (Hypermedia As The Engine Of Application State) — REST's top maturity level (Richardson Level 3): responses embed links to the next valid actions (`{"status":"pending","_links":{"cancel":"/orders/42/cancel"}}`) so clients discover transitions instead of hard-coding URLs. Rarely fully adopted in practice, but worth naming — most "REST" APIs stop at Level 2 (verbs + status codes).
+
+---
+
 ## 🏢 Real World — Where Companies Use This
 
 - **DocuSign** — Cursor pagination on `/v2/accounts/{id}/envelopes` for large envelope histories. The confirmed R2 question (C3) maps exactly to this: design pagination where clients can retrieve thousands of records without duplicates or skips on live data.
 - **Stripe** — `Idempotency-Key` header is mandatory on all write operations. Their docs explicitly state: "Stripe's idempotent APIs use this key to guarantee at-most-once execution." Every payment SDK sends this header automatically.
-- **GitHub API** — URL versioning (`/v3/`) in headers (`Accept: application/vnd.github.v3+json`). They moved from path versioning to header versioning and documented the transition — a real example of a breaking versioning change.
+- **GitHub API** — **media-type (header) versioning**: `v3` was selected via the `Accept: application/vnd.github.v3+json` content-negotiation header (not a URL path). The modern REST API uses a **date-based** header `X-GitHub-Api-Version: 2022-11-28`. (Note: GitHub `v4` is a *different* API — GraphQL — not a REST path version.) A real example of header/date-based versioning.
 - **Razorpay** — Returns `422 Unprocessable Entity` for business-rule violations (invalid beneficiary account) distinct from `400 Bad Request` (missing field). This distinction is what separates a "client input error" from a "your data passed validation but violated business rules" error.
 - **Swiggy / Zomato** — Cursor pagination on order history feeds. `GET /orders?cursor=<token>` on a feed that changes in real time (new orders arrive while you paginate) — offset would give duplicates or skips; cursor is stable.
 - **AWS SDK** — Every mutating call accepts a `ClientToken` (AWS's name for idempotency key) on resource creation. `CreateStack` with the same `ClientToken` twice returns the same stack, not two stacks.
@@ -398,3 +414,4 @@ Three strategies, one clear winner for REST APIs:
 | Date | Change |
 |---|---|
 | June 2026 | File created. DocuSign R2 prep — confirmed format "API design OR server-side". Covers REST contract, idempotency key, cursor pagination, versioning. |
+| Jul 19, 2026 | **Factual fixes + gaps.** (1) Query-param versioning rationale was backwards ("gets lost in logging" — it isn't); corrected to the real downside (cache fragmentation + mixing versioning with filtering). (2) Fixed the GitHub versioning example — it's media-type/header versioning (`Accept: ...v3+json`) and now date-based (`X-GitHub-Api-Version`), not "URL versioning in headers"; `v4` is GraphQL, not a REST path. (3) Added a REST vs GraphQL vs gRPC comparison + `202 Accepted` async pattern + HATEOAS — all commonly probed and previously absent. |

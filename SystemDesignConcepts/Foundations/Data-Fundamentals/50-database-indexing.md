@@ -26,7 +26,7 @@
 |------|----------------------|---------|
 | **B-tree Index** | The default index type — a self-balancing sorted tree where leaf nodes hold column value + row pointer pairs, linked for range scans. O(log N) lookup. | `CREATE INDEX ON restaurants (city)` — find "Mumbai" in O(log 5M) steps instead of scanning all 5M rows. |
 | **Composite Index** | An index on multiple columns, sorted by column 1 first, then column 2 within each column 1 value. Column order is critical — it determines which queries can use the index. | `CREATE INDEX ON restaurants (city, rating)` — city is the leading column; rating is sorted within each city group. |
-| **Leftmost Prefix Rule** | A composite index can only speed up queries that filter on its **leading (leftmost) column(s)**. Skipping the leading column breaks the tree's sorted order, making the index unusable — the planner falls back to a full table scan. | Index `(city, rating)`: `WHERE city='Mumbai'` ✅, `WHERE city='Mumbai' AND rating>4.5` ✅, `WHERE rating>4.5` ❌ (no city filter = seq scan). |
+| **Leftmost Prefix Rule** | A composite index supports an **efficient seek/tree-descent** only when the query filters on its **leading (leftmost) column(s)**. Skipping the leading column means no seek — but the planner may still do a **full index scan** (read the whole index) or, in Postgres, an **index-only scan** when the index is narrower than the heap, which can beat a seq scan. So "no leading column" ≠ "index always ignored"; it means "no fast range seek." | Index `(city, rating)`: `WHERE city='Mumbai'` ✅ seek, `WHERE city='Mumbai' AND rating>4.5` ✅ seek, `WHERE rating>4.5` ⚠️ no seek — full index scan or seq scan depending on the planner's cost estimate. |
 | **Selectivity** | How many rows a filter condition eliminates. **High selectivity** = very few rows survive (e.g., `WHERE user_id=123` returns 1 of 50M). **Low selectivity** = most rows survive (e.g., `WHERE is_active=true` returns 45M of 50M). The query planner silently ignores low-selectivity indexes — random I/O across 45M scattered rows costs more than one sequential scan. | `is_active` index ignored (90% rows match). `user_id` index used (1 row matches). Same index presence, opposite behavior. |
 | **Covering Index** | An index that contains all columns the query needs — both filter columns (WHERE) and return columns (SELECT). The database reads only the index leaves, never touching actual table rows (Index Only Scan — fastest possible read path). | `CREATE INDEX ON restaurants (city, rating) INCLUDE (name)` — `SELECT name WHERE city='Mumbai' AND rating>4.5` never reads the table. |
 | **Full Table Scan (Seq Scan)** | Reading every row in the table sequentially to check each one against the WHERE condition. O(N). Costs 8–20 seconds at 100M rows but uses efficient sequential prefetch I/O — can legitimately beat a bad index. | No index on `city`: scan all 50M rows, check each. The query planner sometimes chooses this deliberately over a low-selectivity index. |
@@ -287,6 +287,22 @@ public interface RestaurantRepository extends JpaRepository<Restaurant, Long> {
 
 ---
 
+## 🧭 B-tree vs LSM-tree — Two Index Storage Engines
+
+Every DB you name in an interview uses one of two index engines. Know the trade-off:
+
+| | **B-tree** (Postgres, MySQL/InnoDB, Oracle) | **LSM-tree** (Cassandra, RocksDB, ScyllaDB, LevelDB) |
+| --- | --- | --- |
+| **Write path** | Update-in-place — find the leaf page, write it (random I/O) | Append to an in-memory memtable, flush sorted immutable SSTables (sequential I/O) |
+| **Optimized for** | Reads + range scans; balanced workloads | High write throughput |
+| **Read cost** | 1 tree descent, O(log N) | May check memtable + several SSTable levels → **read amplification**; mitigated by **Bloom filters** (skip SSTables that definitely don't hold the key) |
+| **Write cost** | Random writes, page splits | Fast appends, but background **compaction** merges SSTables (write amplification + I/O) |
+| **Deletes** | Remove in place | Write a **tombstone**; space reclaimed only at compaction |
+
+> **Interview line:** "B-tree updates in place — great for reads and ranges, but every write is a random I/O. LSM turns writes into sequential appends + background compaction, so it wins on write-heavy workloads (Cassandra, time-series); the cost is read amplification, which Bloom filters and compaction keep in check." See `08-bloom-filter.md` and `../../Core-Architecture/Database-Core/59-nosql-cassandra-mongo-dynamo.md`.
+
+---
+
 ## 🧾 TL;DR
 
 > "A composite index trades write overhead for read speed — column order follows the leftmost prefix rule, covering indexes eliminate heap lookups entirely, and the query planner will silently skip your index if selectivity is too low or statistics are stale."
@@ -315,3 +331,4 @@ public interface RestaurantRepository extends JpaRepository<Restaurant, Long> {
 | Date | Change |
 |------|--------|
 | Jul 1, 2026 | Note created. Covers B-tree indexes, composite indexes (leftmost prefix rule), covering indexes, selectivity, EXPLAIN ANALYZE, clustered vs non-clustered. Tier 2 Q&As: "index got slower" + "covering index trade-off." Added Terminology Table (B-tree, composite index, leftmost prefix rule, selectivity, covering index, seq scan, heap fetch) — terms were used in KEY INVARIANTs before being defined. |
+| Jul 19, 2026 | **Accuracy fix + gap.** (1) Softened the leftmost-prefix rule — "skip the leading column → always seq scan" overstated it; Postgres can full-index-scan / index-only-scan / skip-scan, so "no leading column" means "no fast seek," not "index ignored." (2) Added a B-tree vs LSM-tree storage-engine comparison (write/read amplification, compaction, tombstones, Bloom filters) — a common SDE-3 probe the file cross-referenced but never explained. |

@@ -15,6 +15,31 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can do after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings explained |
+| [🌲 Definition](#definition) | Singly vs doubly linked, node structure |
+| [📖 Terminology](#terminology) | Head, tail, next, dummy node, sentinel |
+| [🛠️ ListNode Class](#listnode-class) | Java class + constructor |
+| [🧠 Mental Model](#mental-model) | Pointers as hands — move one at a time |
+| [🎨 Visual — Pointer Patterns](#visual-pointer-patterns) | Core animations: reverse, slow/fast, dummy |
+| [🎨 Style Habits](#style-habits) | Dummy head, while vs for, null-check discipline |
+| [🔨 Setup — Phase 1](#setup) | What to initialize before the pointer loop |
+| [🧭 Patterns — 5 Core](#patterns) | Dummy, slow/fast, reverse, merge, gap pointer |
+| [🔬 Worked Walkthroughs](#walkthroughs) | Problems traced step by step |
+| [⚠️ Gotchas](#gotchas) | Lost nodes, wrong order, NPE on next.next |
+| [🗺️ Practice Plan](#practice-plan) | Tiered progression |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+| [🔗 Cross-References](#cross-refs) | Links to related files |
+| [🔄 Changelog](#changelog) | Doc history |
+
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This
 
 After reading this, you will:
@@ -30,6 +55,7 @@ By the end, LC 206 (Reverse), LC 141 (Cycle), LC 142 (Cycle Start), and LC 143 (
 
 ---
 
+<a id="difficulty-tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 | Tag | Meaning | Action |
@@ -40,6 +66,7 @@ By the end, LC 206 (Reverse), LC 141 (Cycle), LC 142 (Cycle Start), and LC 143 (
 
 ---
 
+<a id="definition"></a>
 ## 🌲 Definition — What Is a Linked List?
 
 A **linked list** is a linear data structure where each element (called a **node**) contains:
@@ -60,6 +87,7 @@ Each arrow represents a `next` pointer. To find the value 2, you start at node 1
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology Table
 
 | Term | Meaning | Interview context |
@@ -75,6 +103,7 @@ Each arrow represents a `next` pointer. To find the value 2, you start at node 1
 
 ---
 
+<a id="listnode-class"></a>
 ## 🛠️ ListNode Class Definition
 
 Every linked-list problem assumes you have a `ListNode` class (already provided on LeetCode):
@@ -100,6 +129,7 @@ public class ListNode {
 
 ---
 
+<a id="mental-model"></a>
 ## 🧠 Mental Model — Pointers as Hands
 
 **The big idea:** Linked-list manipulation is like **handing off the list to the next person in a relay race**. Your hand (pointer) must always know where you came from, where you are, and where you're going next.
@@ -121,6 +151,7 @@ Imagine you have three pointers: `prev`, `curr`, `next`.
 
 ---
 
+<a id="visual-pointer-patterns"></a>
 ## 🎨 Visual — Core Pointer Patterns
 
 ```
@@ -195,6 +226,7 @@ Remove left.next (C): A -> B -> D
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 ### 🌐 Universal Habits (apply everywhere)
@@ -323,6 +355,7 @@ return false;
 
 ---
 
+<a id="setup"></a>
 ## 🔨 Setup — Phase 1 Before the Pointer Loop
 
 > **The Phase 1 question for linked lists:** *Before I write the pointer loop, do I need a dummy head? How many pointers? What are their starting positions?* The most common linked-list bugs are not algorithmic — they are setup failures: forgetting `next = curr.next` before flipping an arrow, or not using a dummy when the head itself might be deleted.
@@ -415,6 +448,7 @@ Before writing the pointer loop, answer:
 
 ---
 
+<a id="patterns"></a>
 ## 🧭 Patterns — 5 Core Techniques
 
 ### Pattern 1 — Dummy-Head Node Insertion
@@ -1387,6 +1421,7 @@ class Solution {
 
 ---
 
+<a id="walkthroughs"></a>
 ## 🔬 Worked Walkthroughs
 
 ### WW-1 — LC 206 Reverse Linked List
@@ -1825,6 +1860,7 @@ class Solution {
 | LC 23 Merge K Sorted Lists | K-way merge — use a min-heap seeded with all list heads | `PriorityQueue<ListNode> pq = new PriorityQueue<>(k, Comparator.comparingInt(n -> n.val));` |
 | LC 912 Sort an Array | Same merge sort skeleton on arrays — O(n) extra space for the temp array | `int[] temp = new int[right - left + 1];` during merge |
 
+<a id="gotchas"></a>
 ## ⚠️ Gotchas — Silent Bug Hall of Fame
 
 ### Gotcha 1 — Null Dereference (Most Common)
@@ -1932,6 +1968,7 @@ When removing the kth node, left must point to the **node before** the target. G
 
 ---
 
+<a id="practice-plan"></a>
 ## 🗺️ Practice Plan (in tiers)
 
 ### Tier 1 — Foundational Patterns ⭐ (Must Be Muscle Memory)
@@ -1969,6 +2006,7 @@ Patterns requiring intuition from earlier tiers.
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 **Mental Model:**
@@ -2010,6 +2048,7 @@ while (curr != null) {
 
 ---
 
+<a id="cross-refs"></a>
 ## 🔗 Cross-References
 
 - **Pointer arithmetic details:** See `DSA/Reference/code-style-for-dsa-reference.md`
@@ -2019,6 +2058,7 @@ while (curr != null) {
 
 ---
 
+<a id="changelog"></a>
 ## 🔄 Changelog
 
 | Date | Change |

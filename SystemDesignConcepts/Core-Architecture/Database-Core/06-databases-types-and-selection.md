@@ -33,7 +33,7 @@ Every system design question you face (URL shortener, chat system, expense repor
 | **Sharding** | Horizontal partitioning — split data across multiple databases by some key (e.g., user_id % 10 = shard 0-9). Each shard is smaller, can live on different servers. | At 50M documents, split into 50 shards of 1M each (C3 pagination). |
 | **Replication** | Copying data to multiple servers for redundancy (high availability). **Read replica** = slave can be read from but not written to. **Primary** = the source of truth. | PostgreSQL with 1 primary + 2 read replicas: writes go to primary, reads can hit any replica. |
 | **Indexing** | Data structure (typically B-tree or hash) that speeds up lookups. Without it, every query scans the entire table. | C3 pagination: compound index on (created_at, id) makes cursor queries O(1) instead of O(N). |
-| **Throughput** | How many operations per second the database can handle. Measured in requests/sec (req/sec) or transactions/sec. | E2 auth: 35K token validation requests/sec; PostgreSQL with single instance maxes out around 10K req/sec. |
+| **Throughput** | How many operations per second the database can handle. Measured in requests/sec (req/sec) or transactions/sec. | E2 auth: 35K token validation requests/sec. A single PostgreSQL instance handles **50K+ simple indexed reads/sec** (buffer-cache hits) and **10–20K writes/sec**; complex JOINs/aggregations drop reads to 1–10K/sec. |
 | **Latency** | How long a single operation takes. Measured in milliseconds (ms). | A1 cache hit: 1-5ms (Redis). DB query miss: 10-20ms (PostgreSQL). |
 | **TTL (Time-To-Live)** | Auto-expiry time. Used for caching: after TTL, the entry is deleted. | A1: Redis cache with 1-hour TTL; after 1 hour, the key is gone, forcing a DB query on next access. |
 | **Write Bottleneck** | When the **primary** database receives more write operations than it can process per second. Symptoms: write latency climbs from 5ms → 500ms, CPU maxes out, queries queue up. A single PostgreSQL instance handles roughly 10–20K writes/sec before hitting this wall. Reads can scale by adding replicas; writes cannot — they must all go through the one primary. | A payment system at 15K writes/sec on a single Postgres: insert latency spikes to seconds. Fix: shard or switch to Cassandra. |
@@ -79,19 +79,24 @@ Every system design question you face (URL shortener, chat system, expense repor
 
                              │
                              ▼
-                      How much data?
+              What FORCES you off a single node?
+        (data size alone rarely does — one Postgres/Aurora
+         node holds 64–128 TiB. The real triggers are below.)
                              │
-          ┌──────────────────┼──────────────────┐
-          │                  │                  │
-      < 100GB            100GB - 1TB          > 1TB
-          │                  │                  │
-          ▼                  ▼                  ▼
-    Single Machine    Multiple Machines    Horizontal Sharding
-                             │              Required
-                             │                 │
-                             └────────┬────────┘
-                                      │
-                                      ▼
+          ┌──────────────────┼──────────────────────┐
+          │                  │                      │
+   Writes > 15–20K/sec   Reads swamp the        Working set no
+   sustained            single node            longer fits in RAM
+          │             (writes are fine)      OR storage nears
+          │                  │                 the node ceiling
+          ▼                  ▼                      ▼
+     SHARD              Add READ REPLICAS        SHARD
+   (or Cassandra)      (copies scale reads,    (split data across
+                        NOT data size)          independent nodes)
+          │                  │                      │
+          └──────────────────┴──────────┬───────────┘
+                                         │
+                                         ▼
                       What's your read/write pattern?
                              │
           ┌──────────────────┼────────────────────┐
@@ -178,14 +183,14 @@ Every system design question you face (URL shortener, chat system, expense repor
 
 ```
                 Single Postgres Instance
-                (~10K writes/sec, ~10K reads/sec)
+                (10–20K writes/sec, 50K+ simple reads/sec)
                          │
                          ▼
                What is the bottleneck?
       ┌──────────────────────────────────┐
       │                                  │
  Read-heavy                         Write-heavy
- (reads > 10K/sec,                  (writes > 5K/sec,
+ (reads > 50K/sec,                  (writes > 15–20K/sec,
   writes are fine)                   insert queue grows)
       │                                  │
       ▼                                  ▼
@@ -739,10 +744,12 @@ KEY INVARIANT:
 ### The Decision Tree (use this in interviews)
 
 ```
-Question 1: How much data?
-  < 100 GB  → PostgreSQL (single instance)
-  100GB-1TB → PostgreSQL + replicas (read scale)
-  > 1TB     → PostgreSQL + sharding OR Cassandra (write scale)
+Question 1: What forces you off a single node? (NOT raw data size —
+            one Postgres/Aurora node holds 64–128 TiB)
+  Writes < 10–20K/sec, working set fits RAM → PostgreSQL (single instance)
+  Reads swamp the node (writes fine)        → PostgreSQL + read replicas
+  Writes > 15–20K/sec sustained             → PostgreSQL sharding OR Cassandra
+  Working set > RAM or storage near ceiling → shard
 
 Question 2: What consistency do you need?
   Strong (ACID)           → PostgreSQL
@@ -771,7 +778,7 @@ Question 5: How fast does data change?
 
 | Database | Best For | Avoid For | Latency | Scale |
 |---|---|---|---|---|
-| **PostgreSQL** | Structured data, ACID, simple schemas | Sharding at massive scale | 10-20ms | Single instance: 10K req/sec |
+| **PostgreSQL** | Structured data, ACID, simple schemas | Sharding at massive scale | 10-20ms | Single instance: 50K+ reads/sec, 10–20K writes/sec; up to 64–128 TiB storage |
 | **Cassandra** | Massive scale, high availability, eventual consistency | Strong consistency, small teams | 10-50ms | 100K+ req/sec (distributed) |
 | **MongoDB** | Flexible schemas, nested documents | Complex joins, strong consistency | 20-50ms | Scales with sharding |
 | **Redis** | Caching, counters, sessions, high throughput | Persistence, complex queries | 1-5ms | Fits in memory (25–50 GB fork-safe; up to ~100 GB with persistence disabled) |
@@ -861,6 +868,21 @@ Question 5: How fast does data change?
 
 ---
 
+---
+
+## 🔗 NoSQL Deep Dive — Read Next
+
+This file covers SQL vs NoSQL selection and gives a surface-level view of Cassandra, MongoDB, and DynamoDB. For the question senior interviewers actually ask — *"Why Cassandra and not DynamoDB? Why not MongoDB?"* — read the companion file:
+
+**`59-nosql-cassandra-mongo-dynamo.md`** — covers:
+- The 3-axis decision framework (query model / operational overhead / consistency tuning)
+- Cassandra ring topology, SSTable write path, quorum formula (R + W > RF), tombstones
+- DynamoDB partition+sort key model, GSI caveats, hot partition mitigation
+- MongoDB flexible schema, WiredTiger MVCC, aggregation pipeline
+- 5 interview Q&As including 2 Tier-2 probe questions
+
+---
+
 ## 🔄 Changelog
 
 | Date | Change |
@@ -868,3 +890,5 @@ Question 5: How fast does data change?
 | June 24, 2026 | **File created.** Comprehensive database selection guide for system design interviews. Covers CAP theorem, ACID vs BASE, all major database types (SQL, NoSQL Document, Key-Value, Search, Time-Series, OLAP), decision frameworks, and cross-references to our 10 DocuSign solutions (A1, A2, C1-C3, D1-D3, E1, E2). Includes worked examples, gotchas, practice plan, and TL;DR cheat sheet. Designed for long-term retention through mental models, ASCII visuals, and practical scenarios. |
 | July 1, 2026 | **Comprehension gaps fixed.** (1) Terminology table: added Write Bottleneck and Replication Lag definitions. (2) Scaling Strategies: rewrote section — added prose explaining why reads scale but writes don't, replaced ambiguous "Write Bottleneck? No/Yes" diagram with labelled Read-heavy/Write-heavy branches, added ⚠️ Replication Lag callout, added ⚠️ Cross-Shard Queries callout with fan-out definition. (3) Added `## 🔬 Interview Q&As` section (5 Q&As covering bottleneck detection, Postgres vs Cassandra for auth, cross-shard queries, read-your-own-writes, replica vs shard). (4) Fixed CAP triangle: removed incorrect "NOT a database" Redis label; corrected to Redis single-node ≈ CA, Redis Cluster ≈ AP. |
 | Jul 3, 2026 | **Number consistency fixes** (cross-note scan). (1) Postgres write capacity: updated 4 occurrences of `5K–10K writes/sec` → `10–20K writes/sec` to align with `52-numbers-to-know-scale-triggers.md`. (2) Redis memory ceiling in ASCII diagram: `8 GB max` → `e.g., 25 GB` (fork-safe practical limit). (3) Redis capacity in Quick Lookup Table: `~32-256GB per instance` → `25–50 GB fork-safe; up to ~100 GB with persistence disabled`. |
+| Jul 15, 2026 | **Cross-reference added.** Created companion file `59-nosql-cassandra-mongo-dynamo.md` to close the NoSQL differentiation gap. This file remains the entry point (SQL vs NoSQL); `59` is the deep dive for the Cassandra/MongoDB/DynamoDB triangle. |
+| Jul 19, 2026 | **Accuracy fixes (interview-risk).** (1) Replaced the misleading *data-size → sharding* logic in both the main decision flowchart and the TL;DR decision tree — a single Postgres/Aurora node holds 64–128 TiB, so raw size rarely forces sharding; the real triggers are sustained writes > 15–20K/sec and working-set-exceeds-RAM. Prevents the "premature sharding at 1 TB" down-level signal. (2) Purged stale write-ceiling numbers (`~10K` / `>5K` WPS) from the scaling ASCII diagram and Quick Lookup Table → standardized on 10–20K writes/sec, 50K+ simple reads/sec (aligned with `../../Foundations/Performance-and-Scale/52-numbers-to-know-scale-triggers.md`). (3) Corrected the Throughput terminology row: Postgres single-instance reads are 50K+/sec (was understated as ~10K). |

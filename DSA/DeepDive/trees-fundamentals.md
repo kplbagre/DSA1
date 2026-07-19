@@ -4,6 +4,31 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can code after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings explained |
+| [🌲 What Is a Tree?](#what-is-tree) | Structure, node, root, leaf, height |
+| [📖 Terminology](#terminology) | Height, depth, balanced, complete, BST |
+| [🛠️ TreeNode Class](#treenode-class) | Java class definition + null rules |
+| [🔨 Building the Tree](#building-tree) | Array → tree, edge list, pointer-based input |
+| [🧠 Recursion Mental Model](#recursion-mental-model) | The most important section — trust small |
+| [🎨 Style Habits](#style-habits) | Naming, return type discipline, null checks |
+| [🚶 DFS Traversals](#dfs-traversals) | Preorder, inorder, postorder — top-down vs bottom-up |
+| [🌊 BFS / Level Order](#bfs) | Queue-based, zigzag, right-side view variants |
+| [🧭 Pattern Decision Framework](#pattern-decision) | Which traversal to reach for — decision tree |
+| [🌳 BST](#bst) | Insert, search, validate, kth smallest |
+| [🔬 Worked Walkthroughs](#walkthroughs) | 14 canonical problems traced step by step |
+| [⚠️ Gotchas](#gotchas) | Silent bugs that compile but produce wrong output |
+| [🗺️ Practice Plan](#practice-plan) | Tiered progression — easy to hard |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This (The Goal)
 
 You will see ~3–6 tree problems in any interview loop. They look intimidating because:
@@ -23,6 +48,7 @@ By the end of this doc, you should be able to:
 
 ---
 
+<a id="difficulty-tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 Throughout this doc you will see problems suggested in 🧩 **Try these** callouts. Every problem is tagged so you know whether you should attempt it **right now** or **wait** until you've covered more material.
@@ -37,6 +63,7 @@ Throughout this doc you will see problems suggested in 🧩 **Try these** callou
 
 ---
 
+<a id="what-is-tree"></a>
 ## 🌲 What Is a Tree?
 
 A **tree** is a hierarchical structure where each item has **one parent** (except the top one) and **zero or more children**. Think of a family tree — but with stricter rules: nobody has two parents.
@@ -61,6 +88,7 @@ Most DSA problems use a **binary tree** — every node has **at most 2 children*
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology (Memorize These)
 
 | Term | Definition | Example (using tree above) |
@@ -110,6 +138,7 @@ DEPTH (measure from root DOWN):       HEIGHT (measure from leaves UP):
 
 ---
 
+<a id="treenode-class"></a>
 ## 🛠️ The `TreeNode` Class
 
 LeetCode and most interviews give you this skeleton (you do **not** write it — it's pre-defined):
@@ -151,6 +180,7 @@ root.right = new TreeNode(3);
 
 ---
 
+<a id="building-tree"></a>
 ## 🔨 Building the Tree — Input Formats
 
 > **⬛ 90% of LeetCode problems hand you `TreeNode root` directly.** This section is for the other 10%: when raw input arrives and you must construct the tree yourself before any algorithm runs. Phase 1 (build the tree) must be complete before Phase 2 (run the algorithm) begins.
@@ -281,6 +311,7 @@ When given `int[][] edges` where `edges[i] = [u, v]` means `u` is the parent of 
 
 ---
 
+<a id="recursion-mental-model"></a>
 ## 🧠 Recursion on Trees — The Mental Model (Most Important Section)
 
 If you struggle with tree problems, the issue is almost always **recursion comprehension**, not trees themselves. Spend extra time here.
@@ -459,6 +490,7 @@ Memorize this skeleton. **90% of tree problems fit this shape.**
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 > Some habits apply to **every problem you write** (even non-tree ones). Others only matter when you encounter specific patterns. **Master the universal ones now**; skim the context-specific ones and revisit them when you hit the pattern.
@@ -606,6 +638,7 @@ while (!queue.isEmpty()) {
 
 ---
 
+<a id="dfs-traversals"></a>
 ## 🚶 DFS Traversals — Preorder, Inorder, Postorder
 
 A **traversal** is a complete walk over every node in some order. The three DFS orders differ only in **when you visit the current node** relative to its children.
@@ -801,6 +834,7 @@ public void postorder(TreeNode node) {
 
 ---
 
+<a id="bfs"></a>
 ## 🌊 BFS / Level Order Traversal
 
 DFS dives deep first; **BFS goes wide** — it visits all nodes at depth 0, then all at depth 1, etc.
@@ -956,6 +990,7 @@ Without this trick, you can only get a flat traversal. With it, you can answer q
 
 ---
 
+<a id="pattern-decision"></a>
 ## 🧭 How to Choose a Pattern (Decision Framework)
 
 > **Why this section exists:** By Day 3 of practice, you know *how* each of the 4 patterns works. The remaining bottleneck is the **30 seconds** between reading a new problem and committing to one pattern. Pick wrong and you waste 15 minutes before the function signature stops fitting. This framework is the triage you run before you write a single line.
@@ -1536,6 +1571,7 @@ private boolean isMirror(TreeNode a, TreeNode b) {
 
 ---
 
+<a id="bst"></a>
 ## 🌳 Binary Search Tree (BST)
 
 A BST is a binary tree with one extra rule — the **BST invariant**:
@@ -1792,6 +1828,7 @@ See `Reference/set-section-updated.md` for the full TreeSet treatment.
 
 ---
 
+<a id="walkthroughs"></a>
 ## 🔬 Worked Walkthroughs
 
 Twelve canonical problems — one per structurally unique shape. Every walkthrough: Problem → Brute Force → Intuition Bridge → Steps + Code → Transfers To.
@@ -2844,6 +2881,7 @@ Don't jump to LC 124. Climb this ladder — each step adds one new idea while ke
 
 ---
 
+<a id="gotchas"></a>
 ## ⚠️ Gotchas (Silent Bug Hall of Fame)
 
 **Forgetting the null base case** — easiest way to crash with NPE.
@@ -2969,6 +3007,7 @@ while (!queue.isEmpty()) {
 
 ---
 
+<a id="practice-plan"></a>
 ## 🗺️ Practice Plan — A Progression That Works
 
 Don't try to solve all of these in one sitting. Spread over 2–3 weeks. Do each problem **once on your own with a 25-minute time-box**, then review the optimal solution. **Climb the tiers in order** — each tier assumes you've internalized the one before it.
@@ -3069,6 +3108,7 @@ These either combine multiple patterns or require concepts beyond this doc. Trea
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 - **Tree** = root + children, accessed only by following `.left` / `.right` pointers

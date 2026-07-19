@@ -9,6 +9,38 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can do after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings + stop-here lines |
+| [📍 Reading Roadmap](#reading-roadmap) | Medium vs Senior+ — what to skip |
+| [🧠 What Is DP?](#what-is-dp) | When to suspect DP — the two keywords |
+| [📖 Terminology](#terminology) | State, recurrence, memoization, tabulation |
+| [🪜 Four-Stage Drill](#four-stage-drill) | Brute → memo → tab → space-opt: the canonical drill |
+| [🧭 Pattern Identification](#pattern-id) | Aditya Verma's family taxonomy — spot the family in 30s |
+| [🎨 Style Habits](#style-habits) | Naming, direction, base-case discipline |
+| [🔨 Translating to DP State](#dp-state) | Phase 1: define what dp[i][j] means |
+| [🚶 Family 1 — 1D Linear](#family-1) | House robber, climb stairs, decode ways |
+| [🚶 Family 2 — 2D Grid](#family-2) | Unique paths, min path sum |
+| [🚶 Family 3 — 0/1 Knapsack](#family-3) | Subset sum, target sum, partition equal subset |
+| [🚶 Family 4 — Unbounded Knapsack](#family-4) | Coin change, rod cutting, ribbon cut |
+| [🚶 Family 5 — LCS / Strings](#family-5) | LCS, edit distance, shortest common supersequence |
+| [🚶 Family 6 — LIS](#family-6) | LIS O(n²) and O(n log n) patience sort |
+| [🚶 Family 7 — State Machine](#family-7) | Stock problems — state = hold/not-hold |
+| [🔴 Family 8 — Interval DP](#family-8) | Burst balloons, matrix chain multiplication |
+| [🔴 Family 9 — DP on Trees](#family-9) | Tree DP — re-root technique |
+| [🔴 Family 10 — Misc Hard](#family-10) | Staff+ / Google hard — specialized patterns |
+| [🔬 Worked Walkthroughs](#walkthroughs) | 20 problems traced from brute to optimal |
+| [⚠️ Gotchas](#gotchas) | Silent bugs — wrong base case, off-by-one direction |
+| [🗺️ Practice Plan](#practice-plan) | Tiered — do family-by-family |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This (The Goal)
 
 By the end of this doc, you should:
@@ -22,6 +54,7 @@ By the end of this doc, you should:
 
 ---
 
+<a id="difficulty-tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 Every problem and section in this doc is tagged so you can climb tiers in order.
@@ -36,6 +69,7 @@ Every problem and section in this doc is tagged so you can climb tiers in order.
 
 ---
 
+<a id="reading-roadmap"></a>
 ## 📍 Reading Roadmap — Medium vs Senior+
 
 > **The doc is split into two halves.** The first half is **everything you need for a medium-level SDE-2/SDE-3 DP interview.** The second half is senior+ territory — important to be aware of, optional to master cold.
@@ -51,6 +85,7 @@ Every problem and section in this doc is tagged so you can climb tiers in order.
 
 ---
 
+<a id="what-is-dp"></a>
 ## 🧠 What Is DP? (And When to Suspect It)
 
 > **The big idea, in one sentence:** Dynamic Programming = **recursion + caching**. That's it. Every DP problem starts life as a recursive brute-force that does the same sub-computation multiple times. DP is the act of noticing the repetition and storing each answer the first time you compute it.
@@ -116,6 +151,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology (Memorize These) [Striver DP 1, Aditya Verma 1]
 
 | Term | Meaning |
@@ -140,6 +176,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="four-stage-drill"></a>
 ## 🪜 THE Four-Stage Drill (Mental Model — Drill This Cold)
 
 > **This is the most important section in the entire doc.** Every DP problem from Family 1 (Fibonacci) to Family 10 (Egg Drop) uses the same four stages. **Master the drill on Fibonacci, then mechanically apply it to every later problem.** Skip Stage 1 even once and DP feels like memorization forever.
@@ -401,6 +438,7 @@ public int fib(int n) {
 
 ---
 
+<a id="pattern-id"></a>
 ## 🧭 Pattern Identification — Aditya Verma's Family Taxonomy
 
 > **This is the Aditya Verma half of the doc.** Striver teaches you HOW to solve a DP problem (the four-stage drill). Aditya Verma teaches you HOW TO RECOGNIZE WHICH KIND of DP problem you're looking at. The two skills are independent; you need both.
@@ -483,6 +521,7 @@ If you can answer all three before writing any code, **you've already solved the
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 > Some habits apply to **every DP problem you write** (even the simplest 1D ones). Others only matter when you encounter specific patterns (e.g., loop direction in unbounded knapsack). **Master the universal ones now**; skim the context-specific ones and revisit them when you hit the pattern.
@@ -758,6 +797,7 @@ Min Cost Stairs says "you can start from step 0 **or** step 1" — that's two op
 
 ---
 
+<a id="dp-state"></a>
 ## 🔨 Translating the Problem Into a DP State — Phase 1
 
 > **The Phase 1 question for DP:** *Before I write the recurrence, what does `dp[i]` (or `dp[i][j]`) actually represent, how big is the array, and which cells are the base cases?* Getting this wrong means your recurrence produces values at the wrong indices — a bug that's nearly impossible to spot because the loop structure looks correct.
@@ -858,6 +898,7 @@ Before writing the recurrence, answer:
 
 ---
 
+<a id="family-1"></a>
 ## 🚶 Family 1 — 1D Linear DP
 
 > **Striver videos:** DP 2-6 (Climbing Stairs, Frog Jump, Frog Jump K, House Robber I, House Robber II)
@@ -1027,6 +1068,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="family-2"></a>
 ## 🚶 Family 2 — 2D Grid DP
 
 > **Striver videos:** DP 7-13 (Ninja's Training, Unique Paths, Unique Paths II, Min Path Sum, Triangle, Falling Path Sum, Cherry Pickup II)
@@ -1182,6 +1224,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="family-3"></a>
 ## 🚶 Family 3 — 0/1 Knapsack (Subsequence DP)
 
 > **Striver videos:** DP 14-19 (Subset Sum, Partition Equal Subset, Min Abs Sum Difference, Count Subsets Sum K, Count Partitions Given Diff, 0/1 Knapsack)
@@ -1507,6 +1550,7 @@ public int findTargetSumWays(int[] nums, int target) {
 
 ---
 
+<a id="family-4"></a>
 ## 🚶 Family 4 — Unbounded Knapsack (Infinite Supply)
 
 > **Striver videos:** DP 20-24 (Min Coins, Target Sum, Coin Change 2, Unbounded Knapsack, Rod Cutting)
@@ -1780,6 +1824,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="family-5"></a>
 ## 🚶 Family 5 — LCS / Strings DP (2-String 2D DP)
 
 > **Striver videos:** DP 25-34 — LCS (Longest Common Subsequence), Print LCS (reconstruct the actual subsequence from the table), LC Substring (Longest Common Substring — contiguous, not skippable), LP Subseq (Longest Palindromic Subsequence — LCS of s with its reverse), Min Insertions Palindrome (fewest insertions to turn a string into a palindrome), Min Insertions/Deletions A→B (convert string A into string B with minimum ops), SCS (Shortest Common Supersequence — shortest string containing both s1 and s2 as subsequences), Distinct Subsequences (count how many times s2 appears as a subsequence inside s1), Edit Distance (LC 72 — the canonical hard DP problem), Wildcard Matching (LC 44 — `?` and `*` pattern match)
@@ -2185,6 +2230,7 @@ Full walkthrough comes in the "🔬 Worked Walkthroughs" section. For now, recog
 
 ---
 
+<a id="family-6"></a>
 ## 🚶 Family 6 — Longest Increasing Subsequence (LIS)
 
 > **Why `prev` is a required parameter (the key mental shift for LIS):** In most single-sequence families (1D linear, coin change, knapsack) you only need ONE index — "how far have I gone." LIS adds a hard constraint: `nums[i]` may only join the subsequence if it is strictly greater than the last element you picked. Without `prevIdx` in the state, you cannot check that constraint — you don't know what value you last took. So LIS must track both `i` (where you are) and `prevIdx` (the index of the last picked element, or -1 if nothing picked yet). At each position the choices are: TAKE `nums[i]` (only legal if it exceeds the last pick) or SKIP it (always legal).
@@ -2482,6 +2528,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="family-7"></a>
 ## 🚶 Family 7 — State Machine DP (Stocks)
 
 > **Why `holding` is a required state variable (the key insight for State Machine DP):** Previous families track "how far have I gone" plus a capacity or index. Stocks adds a **legal-move restriction**: you cannot buy stock you already hold, and you cannot sell stock you don't have. This restriction depends entirely on whether you own the stock right now. Without the `holding` flag, the same day `i` could mean two completely different sets of legal choices — you cannot resolve that from `i` alone. The `holding` flag turns the problem into a finite state machine where each state defines which transitions are valid.
@@ -2799,6 +2846,7 @@ public int maxProfit(int[] prices) {
 
 ---
 
+<a id="family-8"></a>
 ## 17. 🔴 Family 8 — Interval / Partition DP
 
 **Aditya Verma's identification triplet:**
@@ -2891,6 +2939,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="family-9"></a>
 ## 18. 🔴 Family 9 — DP on Trees
 
 **Aditya Verma's identification triplet:**
@@ -2997,6 +3046,7 @@ KEY INVARIANT:
 
 ---
 
+<a id="family-10"></a>
 ## 19. 🔴 Family 10 — Misc Hard (Specialized / Staff+)
 
 These don't fit cleanly into the prior 9 families. Most appear in **company-specific question banks** (Google, Amazon Bar-Raiser, Bloomberg). For SDE-3 you can skip — but skim the *identification cues* so you can name the pattern in an interview even if you can't fully implement.
@@ -3041,6 +3091,7 @@ public int superEggDrop(int k, int n) {
 
 ---
 
+<a id="walkthroughs"></a>
 ## 20. 🔬 Worked Walkthroughs
 
 This section walks through **15 canonical DP problems** — each one a distinct recursive structure. For every problem: understand the recursive thinking first, read the memoized code, then use the tabulation description to write the bottom-up version yourself. Master these 15 shapes and any new DP problem you see maps to one of these skeletons.
@@ -4006,6 +4057,7 @@ Fill **right to left** (day from n-1 down to 0) because each day depends on futu
 
 ---
 
+<a id="gotchas"></a>
 ## 21. ⚠️ Gotchas — Silent Bug Hall of Fame
 
 These are bugs that **compile cleanly and pass small test cases** but break on edge cases. Every one of them cost me real time during practice.
@@ -4139,6 +4191,7 @@ public int run(int[] nums) {
 
 ---
 
+<a id="practice-plan"></a>
 ## 22. 🗺️ Practice Plan
 
 The 17-day plan slots DP into **Days 5-14** (10 days). Sequence problems strictly tier-by-tier — don't jump ahead until the prior tier is solved cold (Stage 3 from memory in under 12 min).
@@ -4209,6 +4262,7 @@ If a problem takes > 90 min, stop. Read the editorial, re-derive Stage 3 the nex
 
 ---
 
+<a id="tldr"></a>
 ## 23. 🧾 TL;DR — One-Page Summary
 
 | What | Cheat |

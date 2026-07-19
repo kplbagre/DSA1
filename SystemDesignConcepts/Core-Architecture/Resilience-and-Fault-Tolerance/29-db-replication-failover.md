@@ -176,7 +176,9 @@ ASYNC (Fast, risky):
 │ 4. (later) Send to  │
 │    replicas         │
 └─────────────────────┘
-    Latency: <1ms (no wait for replicas)
+    Latency: ~0 ADDED latency vs a standalone primary (no wait for replicas).
+             Absolute write latency is still the primary's own durable
+             commit (fsync) — typically 1–10ms on real hardware, not <1ms.
     Risk: If primary crashes before sending WAL to replicas,
           recent writes are lost (RPO = seconds/minutes)
 
@@ -556,3 +558,4 @@ If you need to fan changes out to non-MySQL consumers (Elasticsearch, Redis, dow
 |---|---|
 | June 25, 2026 | Created as Concept 29. Covered master-slave replication topology, WAL (write-ahead log), sync vs async mechanisms, RPO/RTO trade-offs, automatic failover detection and promotion, replication lag handling. |
 | Jul 2, 2026 | Added binlog transport mechanism section: IO Thread + SQL Thread + Relay Log protocol, GTID-based replication, Binlog Dump Thread, and Debezium/Kafka cross-reference for CDC fanout. Fills the "how does the binlog actually reach replicas?" interview gap. |
+| Jul 19, 2026 | **Factual fix.** Corrected the async-replication latency claim ("<1ms") — async removes only the *replica ack* from the write path; absolute write latency is still the primary's own durable fsync commit (typically 1–10ms). Reworded to "~0 added latency vs a standalone primary." |

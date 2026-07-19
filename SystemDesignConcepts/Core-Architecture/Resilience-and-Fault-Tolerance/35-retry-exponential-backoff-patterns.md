@@ -23,7 +23,7 @@
 | **Max Retries** | upper limit on retry attempts; prevents infinite retry loops | `maxAttempts=3`; after 3 failures → throw exception to caller |
 | **Cap Delay** | maximum backoff delay regardless of exponent; prevents excessively long waits | `min(base * 2^attempt, 30s)` — caps at 30s even for attempt 10+ |
 | **Non-Retryable Error** | client-side errors (4xx) that indicate a bad request — retrying won't help | `400 Bad Request`, `401 Unauthorized`, `404 Not Found` → don't retry |
-| **Retryable Error** | server-side or transient errors that may succeed on retry | `500 Internal Server Error`, `503 Service Unavailable`, network timeout → safe to retry |
+| **Retryable Error** | transient errors that may succeed on retry | `503 Service Unavailable`, `429 Too Many Requests`, `504 Gateway Timeout`, network timeout → safe to retry. **`500` is ambiguous — treat as non-retryable by default** (it often signals a deterministic bug that will just fail again); retry it only if you know the operation is idempotent and the 500 was transient |
 | **Idempotency (prerequisite)** | operation must be idempotent before it's safe to retry; non-idempotent retries cause duplicates | retry `POST /payments` without idempotency key → double charge |
 
 ---
@@ -158,8 +158,9 @@ public class RetryableClient {
         long exponentialWait = BASE_WAIT_MS * (1L << attempt); // 2^attempt
         long cappedWait = Math.min(MAX_WAIT_MS, exponentialWait);
         
-        // Add random jitter: ±10% of capped wait
-        int jitterMs = RANDOM.nextInt((int)(cappedWait / 10));
+        // Add random jitter: 0 to +10% of capped wait (additive — nextInt returns [0, n))
+        // NOTE: this narrow band is weaker than AWS "full jitter" (see below).
+        int jitterMs = RANDOM.nextInt((int) (cappedWait / 10));
         return cappedWait + jitterMs;
     }
     
@@ -190,6 +191,18 @@ public class RetryableClient {
 | 9 | 100 × 2⁹ = 51,200ms → capped | **32s** | Yes |
 
 Total wait across 5 retries ≈ **100 + 200 + 400 + 800 + 1,600 = ~3.1s** (before cap and jitter).
+
+### Jitter strategies — the code above uses the weakest one
+
+The ±10% band in the code example barely de-synchronizes clients. The AWS "Exponential Backoff and Jitter" study (in Further Reading) showed **full jitter** wins. Know these three by name:
+
+| Strategy | Formula | Trade-off |
+| --- | --- | --- |
+| **Additive (±10%)** | `backoff + random(0, backoff/10)` | Weakest — clients stay clustered; barely spreads the retry wave |
+| **Full jitter** ⭐ | `random(0, min(cap, base × 2^attempt))` | Best spread; lowest contention. AWS's recommended default |
+| **Decorrelated jitter** | `sleep = min(cap, random(base, prev_sleep × 3))` | Also excellent; keeps some growth memory between attempts |
+
+> The whole point of jitter is to break synchronization, so a *wide* random range beats a narrow one. Full jitter picks a delay anywhere in `[0, current_ceiling]` — maximum spread. Prefer it over the ±10% band shown above.
 
 ---
 
@@ -316,3 +329,4 @@ The DLQ (`failed-requests` Kafka topic) lets an ops team inspect, fix, and repla
 |---|---|
 | June 25, 2026 | Initial creation. Added exponential backoff vs immediate retry comparison, jitter explanation, code example with Java HttpClient, retryable vs non-retryable error classification. Real-world examples (Uber, Stripe, Netflix, Razorpay, AWS). Seven Q&As covering backoff tuning, error classification, idempotency interaction, dead-letter queues. |
 | Jul 1, 2026 | Added backoff formula quick-reference table (attempts 0–9 with wait times), retry budget table (SLA → max_retries → base_wait), DLQ one-liner snippet with explanation. |
+| Jul 19, 2026 | **Factual fixes + gap.** (1) Resolved the 500-retryable contradiction — the terminology table listed 500 as "safe to retry" while the Q&A said don't; standardized on "500 is ambiguous, treat as non-retryable by default." (2) Fixed the jitter comment — the code adds 0 to +10% (additive), not "±10%". (3) Added a jitter-strategies table (additive vs full vs decorrelated) — the file cited the AWS full-jitter study but never named the strategies; full jitter is the recommended default. |

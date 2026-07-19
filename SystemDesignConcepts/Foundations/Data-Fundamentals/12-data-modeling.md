@@ -95,11 +95,11 @@ Now the key rules the office follows, and why:
 **Rule 1 — No mixed bags in a slot (1NF — First Normal Form):**
 Every slot holds exactly one value. If you need to store multiple phone numbers for a person, you don't cram them all in one slot separated by commas — you give phone numbers their own filing cabinet (their own table). Commas in a column = bad smell. Each slot, one value.
 
-**Rule 2 — Everything in a cabinet is about one thing (2NF — Second Normal Form):**
-If a cabinet is for "Tax Filings", every field in the drawer is about that filing. If you find yourself storing the taxpayer's address in the filing cabinet, stop — the address belongs in the "Taxpayer" cabinet, not the "Filing" cabinet. A field that belongs to only part of the key (or could exist without the record) is a signal to split.
+**Rule 2 — No non-key field depends on only PART of a composite key (2NF — Second Normal Form):**
+2NF only applies when the table has a **composite (multi-column) primary key**. It says: every non-key column must depend on the *whole* key, not just one part of it. Example: an `order_items` table keyed on `(order_id, product_id)`. `quantity` depends on both (correct). But `product_name` depends only on `product_id` — *part* of the key — so it's a partial dependency; move it to a `products` table. (If your table has a single-column PK, it's automatically in 2NF — there's no "part" of the key to partially depend on.)
 
-**Rule 3 — Nothing is derived from a non-key field (3NF — Third Normal Form):**
-If you can calculate a field from another field in the same row, don't store it — store the source and calculate on read. Storing `full_name` when you already store `first_name` and `last_name` is redundant. If `last_name` changes, you now have two places to update, and they can fall out of sync.
+**Rule 3 — No non-key field depends on ANOTHER non-key field (3NF — Third Normal Form):**
+Remove transitive dependencies (non-key → non-key) and derived columns. Two cases: (a) transitive — storing `taxpayer_address` in a `filings` table when the address really belongs to the taxpayer (it depends on `taxpayer_id`, a non-key column here, not on the filing); move it to the `Taxpayer` table. (b) derived — storing `full_name` when you already store `first_name` + `last_name`; store the source and compute on read, or `last_name` changes leave two copies out of sync.
 
 **Where the analogy breaks — deliberate denormalisation:**
 Sometimes the office deliberately makes copies. Tax returns include the taxpayer's name and address even though those live in the Taxpayer cabinet. Why? Because tax returns are frozen in time — if the taxpayer moves, you still need to know their address as of the filing year. That's intentional denormalisation: copy the data when the historical snapshot matters more than staying in sync.
@@ -526,6 +526,18 @@ public void validateExpenseItem(ExpenseItemRequest req) {
 
 **For DocuSign's expense report (C2):** SQL. The data is relational (users, reports, items, categories), requires ACID (can't have partial expense submissions), and the queries are join-heavy.
 
+### Modeling relationships in a document DB — embed vs reference
+
+If you do pick a document store, the core decision for one-to-many / many-to-many is **embed vs reference** (there are no joins to fall back on):
+
+| | **Embed** (nest the children inside the parent doc) | **Reference** (store child IDs / a separate collection) |
+| --- | --- | --- |
+| **Read** | One read gets everything (locality) — fast | Multiple reads / app-side joins (`$lookup`) — slower |
+| **Best when** | Children are read *with* the parent, bounded in count, and change together (order + its line items) | The "many" side is unbounded/large, shared across parents, or updated independently (users ↔ groups) |
+| **Danger** | **Unbounded growth** — a doc that grows forever (e.g., all comments embedded in a post) hits the 16 MB limit and rewrites the whole doc on every append | Duplication/consistency drift if you also cache fields; N+1 read fan-out |
+
+> **Rule of thumb:** embed for "contains / owns, bounded, read together"; reference for "relates to, unbounded, or shared." Many real schemas do both (embed a *summary*, reference the full record). Many-to-many is almost always modeled by referencing on both sides (or a link array on the side queried more often).
+
 ---
 
 ## 🏢 Real World — Where Companies Use This
@@ -622,3 +634,4 @@ public void validateExpenseItem(ExpenseItemRequest req) {
 | June 2026 | File created. DocuSign R2 prep — C2 (Expense Report) and C3 (Pagination) both confirmed required data modeling. Covers 3NF, FK cascade rules, indexing, validation layers, SQL vs NoSQL. |
 | June 2026 | Gaps patched: ACID definition + 4-property table added before SQL/NoSQL section. B-tree index explanation + leftmost prefix rule added after indexing code. JPA annotations explained inline (LAZY, orphanRemoval, EnumType.STRING). Many-to-many junction table section added (Part 4). UUID vs BIGINT PK debate added (Part 5). DECIMAL(12,2) glossed in schema. |
 | June 23, 2026 | Added Part 4 — "Schema Evolution: Adding Columns at Scale" — covers add-null → batch-backfill → add-constraint pattern, zero-downtime migrations, lock contention avoidance. Explains expansion-then-contraction migration strategy. Defines "database migration" with first-use gloss. Renumbered subsequent parts (Part 5→Part 8). Existing 200M-row Q&A already covers practical schema evolution answer. File grew 466→539 lines (+16%). |
+| Jul 19, 2026 | **Factual fix + gap.** (1) Corrected the 2NF definition — it described 3NF/general normalization; 2NF is specifically about partial dependency on a *composite* key (a single-column PK is automatically in 2NF). Rewrote 2NF and 3NF with accurate examples. (2) Added an embed-vs-reference subsection for modeling one-to-many/many-to-many in a document store (read locality vs unbounded growth) — completes the relational-vs-document scope. |

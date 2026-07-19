@@ -6,6 +6,31 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can do after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings explained |
+| [📖 What Is an Array?](#what-is-array) | Memory layout, index math, Java specifics |
+| [📖 Terminology](#terminology) | Index, contiguous, in-place, subarray vs subsequence |
+| [🛠️ Java Array Idioms](#java-idioms) | Skeleton, fill, sort, copy, Arrays.* methods |
+| [🔨 Pre-Processing — Phase 1](#pre-processing) | Sorting, prefix sums, freq arrays — before the loop |
+| [🧠 Mental Model](#mental-model) | Index space vs value space — the core mental model |
+| [🎨 Style Habits](#style-habits) | Loop bounds, off-by-one discipline, naming |
+| [🧭 Patterns — 14 Core](#patterns) | All canonical templates with motivation + code |
+| [🌳 Special Topics](#special-topics) | Kadane's, Dutch flag, circular array, sparse |
+| [🔬 Worked Walkthroughs](#walkthroughs) | Problems traced step by step |
+| [⚠️ Gotchas](#gotchas) | Off-by-one, modifying while iterating, int overflow |
+| [🗺️ Practice Plan](#practice-plan) | Tiered progression |
+| [🔗 Cross-References](#cross-refs) | Links to related files |
+| [🔄 Changelog](#changelog) | Doc history |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This (The Goal)
 
 Arrays are the single most-tested data structure in interviews — the "warm-up round" of every onsite. But the patterns are deceptively easy to confuse. By the end of this doc you should:
@@ -18,6 +43,7 @@ Arrays are the single most-tested data structure in interviews — the "warm-up 
 
 ---
 
+<a id="difficulty-tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 Every problem and algorithm is tagged so you can **climb tiers in order**.
@@ -32,6 +58,7 @@ Every problem and algorithm is tagged so you can **climb tiers in order**.
 
 ---
 
+<a id="what-is-array"></a>
 ## 📖 What Is an Array? [Striver V-1]
 
 An **array** is a **contiguous block of memory** holding fixed-size elements of the same type, addressable by an integer **index** starting at 0.
@@ -88,6 +115,7 @@ This is why `matrix.length` gives **row count** and `matrix[0].length` gives **c
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology (Memorize These)
 
 | Term | Meaning |
@@ -127,6 +155,7 @@ This deep dive focuses on **subarrays** — that's what Striver's playlist cover
 
 ---
 
+<a id="java-idioms"></a>
 ## 🛠️ Java Array Skeleton & Idioms
 
 The 10 idioms you'll use in 90%+ of array problems.
@@ -218,6 +247,7 @@ Streams (`Arrays.stream(arr).boxed().collect(Collectors.toList())`) work too but
 
 ---
 
+<a id="pre-processing"></a>
 ## 🔨 Pre-Processing — Phase 1 Before the Algorithm Loop
 
 > **The Phase 1 question for arrays:** *Before I write the main loop, do I need to transform the raw input first?* Choosing the wrong pre-processing (or skipping it when you need it) blocks you from seeing the algorithm at all. This section is the decision you make before you write a single line of the solution.
@@ -292,6 +322,7 @@ Before writing the main loop, answer:
 
 ---
 
+<a id="mental-model"></a>
 ## 🧠 Mental Model — Arrays Have Two Spaces: Index and Value
 
 > **The single biggest unlock for array problems:** an array is two interlocking spaces — the **index space** (positions `0..n-1`) and the **value space** (the data). Most clever array tricks come from **using one space to encode information about the other**.
@@ -374,6 +405,7 @@ Answer those three before writing a single line of code. If you can't, you don't
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 > Some habits apply to **every problem you write** (even non-array ones). Others only matter for specific array patterns. **Master the universal ones now**; skim the context-specific ones and revisit when you hit the pattern.
@@ -541,6 +573,7 @@ Iterate backwards so removed indices don't shift the unread part.
 
 ---
 
+<a id="patterns"></a>
 ## 🧭 Patterns — The 14 Core Shapes
 
 The whole array playlist boils down to **14 recurring patterns**. Pattern-match in under 60 seconds: read problem → identify keyword → pick pattern → write template.
@@ -1496,6 +1529,7 @@ Defer until medium-interview essentials are reflex.
 
 ---
 
+<a id="special-topics"></a>
 ## 🌳 Special Topics
 
 ### 1. Next Permutation — The 4-Step Algorithm [Striver V-11]
@@ -1742,6 +1776,7 @@ Two equations, two unknowns. Solve.
 
 ---
 
+<a id="walkthroughs"></a>
 ## 🔬 Worked Walkthroughs
 
 Ten canonical problems — one per structurally unique shape. Every walkthrough follows the 5-part format: Problem → Brute Force → Intuition Bridge → Steps + Code → Transfers To.
@@ -2342,6 +2377,7 @@ public int longestConsecutive(int[] nums) {
 
 ---
 
+<a id="gotchas"></a>
 ## ⚠️ Gotchas (Silent Bug Hall of Fame)
 
 > *"Could a beginner write code that compiles, runs, doesn't crash, but produces wrong output?"* If yes — it's a silent bug — it goes here.
@@ -2561,6 +2597,7 @@ These need different algorithms. Re-read the **Terminology** table whenever the 
 
 ---
 
+<a id="practice-plan"></a>
 ## 🗺️ Practice Plan — A Progression That Works
 
 Climb tiers in order. Each tier locks in a family of patterns before the next adds new ones.
@@ -2675,6 +2712,7 @@ Climb tiers in order. Each tier locks in a family of patterns before the next ad
 
 ---
 
+<a id="cross-refs"></a>
 ## 🔗 Cross-References
 
 | Topic | File |
@@ -2690,6 +2728,7 @@ Climb tiers in order. Each tier locks in a family of patterns before the next ad
 
 ---
 
+<a id="changelog"></a>
 ## 🔄 Changelog
 
 | Date | Change |
@@ -2698,6 +2737,7 @@ Climb tiers in order. Each tier locks in a family of patterns before the next ad
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 - **Array** = contiguous memory; `arr[i]` is O(1) random access; `arr.length` is a field, not a method

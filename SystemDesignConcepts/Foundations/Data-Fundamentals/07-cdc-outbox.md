@@ -245,9 +245,9 @@ public void processOutbox() {
 
 ### What is Debezium, and why does it fit here?
 
-**Debezium** is an open-source CDC platform — it connects to a database's internal write-ahead log (WAL in Postgres, binlog in MySQL) and streams every INSERT/UPDATE/DELETE as an event to Kafka. It reacts to changes in microseconds, with zero polling overhead.
+**Debezium** is an open-source CDC platform — it connects to a database's internal write-ahead log (WAL in Postgres, binlog in MySQL) and streams every INSERT/UPDATE/DELETE as an event to Kafka. It reacts to changes with very low latency (typically low tens of milliseconds end-to-end through the Kafka Connect pipeline) and, crucially, with **zero polling overhead / no extra query load on the DB**.
 
-**In an interview, if asked:** "Debezium is a CDC tool that reads the database's write-ahead log — the same log the DB uses internally for durability — and streams every row-level change to Kafka in real time. For the outbox pattern, Debezium watches the outbox table and publishes events automatically the moment they're INSERTed. Zero polling, sub-millisecond latency, no extra DB load."
+**In an interview, if asked:** "Debezium is a CDC tool that reads the database's write-ahead log — the same log the DB uses internally for durability — and streams every row-level change to Kafka in near-real time. For the outbox pattern, Debezium watches the outbox table and publishes events automatically the moment they're INSERTed. The real win is no polling and no added DB load; end-to-end latency is typically low tens of milliseconds (not microseconds — it flows through a Connect → Kafka pipeline)."
 
 ```
   DEBEZIUM CDC FLOW
@@ -398,3 +398,4 @@ public void onOrderPlaced(OrderPlacedEvent event) {
 | Date | Change |
 |---|---|
 | June 2026 | File created. DocuSign R2 prep — D3 (Notification Service) and any event-driven system requires reliable event publishing. Covers dual-write problem, outbox table, polling processor, Debezium CDC, at-least-once delivery, idempotent consumer. |
+| Jul 19, 2026 | **Factual fix.** Corrected the Debezium latency claim — "microseconds / sub-millisecond" overstated it; realistic end-to-end latency through the Kafka Connect pipeline is low tens of milliseconds. Reframed the true benefit as zero polling / no added DB load rather than microsecond delivery. |

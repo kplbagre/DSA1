@@ -209,6 +209,14 @@ public class OrderService {
 
 ---
 
+## 🧭 Two Things Interviewers Expect You to Name
+
+**Latency vs throughput — not the same axis.** *Latency* = time for one request (ms). *Throughput* = requests served per second. Scaling **out** raises throughput but does **not** reduce single-request latency — and can even raise **p99** (more nodes = more cross-talk, more chances to hit a slow one, longer tail). "We added servers and it's still slow per request" means your problem was latency, not throughput — scaling out was the wrong lever. Reduce latency with caching, better queries/indexes, co-location, and fewer network hops.
+
+**Scaling has sub-linear, then negative, returns (Amdahl + Universal Scalability Law).** *Amdahl's Law*: the serial fraction of your work caps the max speedup — if 5% is serial, you can never go faster than 20× no matter how many nodes. *Universal Scalability Law (USL)* adds a second penalty: **coherency/coordination cost** (nodes must sync — locks, consensus, cache coherence), which grows with node count and eventually makes adding nodes make things *slower*. This is exactly why "add more pods" hits a wall and why the p99-gets-worse effect above happens. Senior signal: name that horizontal scaling is not free/linear — every added node pays contention (serialization) + coherency (crosstalk) tax.
+
+---
+
 ## ⚠️ Trade-offs
 
 | | |
@@ -274,3 +282,4 @@ public class OrderService {
 | Date | Change |
 |---|---|
 | Jul 10, 2026 | File created. Covers 7 primary scaling levers with bottleneck → lever decision map, read-replica routing + async offload code, real company examples (Amazon, Netflix, Instagram, Swiggy, Flipkart, WhatsApp), and 7 Q&As including 3 Tier 2 probe questions. |
+| Jul 19, 2026 | **Gaps closed.** Added an explicit latency-vs-throughput definition (scaling out raises throughput, not per-request latency, and can worsen p99) and named Amdahl's Law + the Universal Scalability Law (serial fraction caps speedup; coherency/coordination cost eventually makes adding nodes slower) — both commonly probed and the file already gestured at them without naming them. |

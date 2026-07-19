@@ -13,6 +13,30 @@
 
 ---
 
+## 📋 Section Index
+
+| Section | Topic |
+| --- | --- |
+| [🎯 Goal](#goal) | What you can do after reading this |
+| [🚦 Difficulty Tags](#difficulty-tags) | ✅ 🟡 🔴 ratings explained |
+| [🌲 What Is a HashMap?](#what-is-hashmap) | Structure, bucket, load factor, collision |
+| [📖 Terminology](#terminology) | Key, value, bucket, hash function, collision |
+| [🧠 Mental Model](#mental-model) | Phonebook vs. hash table — the core analogy |
+| [🎨 Style Habits](#style-habits) | getOrDefault, computeIfAbsent, merge |
+| [🔨 Setup — Phase 1](#setup) | Skeleton, init patterns, iteration order |
+| [🧭 Patterns — 6 Core](#patterns) | Complement lookup, freq map, prefix sum, grouping… |
+| [🔬 Worked Walkthroughs](#walkthroughs) | Problems traced step by step |
+| [🎯 Pattern Application Gallery](#pattern-gallery) | Quick-reference: problem → pattern mapping |
+| [⚠️ Gotchas](#gotchas) | ==  vs .equals(), null keys, Integer cache |
+| [🗺️ Practice Plan](#practice-plan) | Tiered progression |
+| [🧾 TL;DR](#tldr) | One-page summary for revision day |
+| [🔗 Cross-References](#cross-refs) | Links to related files |
+| [📝 Changelog](#changelog) | Doc history |
+
+
+---
+
+<a id="goal"></a>
 ## 🎯 Why You're Reading This
 
 After this deep dive, you will:
@@ -27,6 +51,7 @@ By the end, LC 1 (Two Sum), LC 49 (Group Anagrams), and LC 560 (Subarray Sum) wi
 
 ---
 
+<a id="difficulty-tags"></a>
 ## 🚦 Difficulty Tagging — Read Before You Pick a Problem
 
 | Tag | Meaning | Action |
@@ -37,6 +62,7 @@ By the end, LC 1 (Two Sum), LC 49 (Group Anagrams), and LC 560 (Subarray Sum) wi
 
 ---
 
+<a id="what-is-hashmap"></a>
 ## 🌲 What Is a HashMap?
 
 A **HashMap** is a data structure that stores **key-value pairs** and answers *"what value is stored for this key?"* in **O(1) average time** (not O(log n) like a sorted array, not O(n) like a list).
@@ -53,6 +79,7 @@ ages.get("Alice");  // 25 — instant lookup
 
 ---
 
+<a id="terminology"></a>
 ## 📖 Terminology Table
 
 | Term | Meaning | Interview context |
@@ -69,6 +96,7 @@ ages.get("Alice");  // 25 — instant lookup
 
 ---
 
+<a id="mental-model"></a>
 ## 🧠 Mental Model — Phonebook vs. Hash Table
 
 **Phonebook analogy:**
@@ -123,6 +151,7 @@ KEY INVARIANT: Sparse buckets = fast lookups. Rehashing maintains sparseness.
 
 ---
 
+<a id="style-habits"></a>
 ## 🎨 Style Habits — Build These From Day 1
 
 > Some habits apply to **every problem you write**. Others only click when you encounter specific patterns. **Master the universal ones now**; skim context-specific and revisit when you hit the pattern.
@@ -432,6 +461,7 @@ keys.sort((a, b) -> freq.get(b) - freq.get(a));
 
 ---
 
+<a id="setup"></a>
 ## 🔨 Setup — Phase 1 Before the HashMap Loop
 
 > **The Phase 1 question for hashmaps:** *Before I write the main loop, which map type do I need, and how do I construct or seed it from the raw input?* Picking the wrong type (HashMap when you need TreeMap) costs you O(log n) per operation silently. Forgetting to seed the map before the loop (e.g. `prefixCount.put(0, 1)`) causes an off-by-one that makes subarrays starting at index 0 invisible.
@@ -507,6 +537,7 @@ Before writing the main loop, answer:
 
 ---
 
+<a id="patterns"></a>
 ## 🧭 Patterns — 6 Core HashMap Techniques
 
 ---
@@ -985,6 +1016,7 @@ Answer: [0, 1, 2] ✅
 
 ---
 
+<a id="walkthroughs"></a>
 ## 🔬 Worked Walkthroughs
 
 ### WW-1 — LC 1 Two Sum
@@ -1600,6 +1632,7 @@ Key 2 evicted ✅  (LRU was 2 when put(3,3) triggered eviction)
 | LC 432 All O(1) Data Structure | Increment/decrement key counts, get max/min key — doubly linked list of count-groups + map | Each node holds a group of keys with the same count |
 | LC 1396 Design Underground System | Accumulate trip times by (startStation, endStation) for average query | `Map<String, int[]>` for (sum, count) per route key |
 
+<a id="pattern-gallery"></a>
 ## 🎯 Pattern Application Gallery
 
 > For each pattern, here are 3-4 additional problems showing how to apply the pattern. Read the insight, understand the structure, then try the problem on LeetCode.
@@ -2018,6 +2051,7 @@ return oddCount <= k && k <= s.length();
 
 ---
 
+<a id="gotchas"></a>
 ## ⚠️ Gotchas — Silent Bug Hall of Fame
 
 ---
@@ -2120,6 +2154,7 @@ for (Map.Entry<Integer, Integer> e : map.entrySet()) {
 
 ---
 
+<a id="practice-plan"></a>
 ## 🗺️ Practice Plan — A Progression That Works
 
 Master HashMap in 4 tiers. **Pace:** 1-2 problems per day. **When stuck:** 25-minute time-box; read editorial if unsolved.
@@ -2180,6 +2215,7 @@ Read editorials; don't attempt cold.
 
 ---
 
+<a id="tldr"></a>
 ## 🧾 TL;DR — One-Page Summary
 
 - **HashMap** = key-value pairs, O(1) lookup on average (hash function, buckets, chaining for collisions).
@@ -2199,6 +2235,7 @@ Read editorials; don't attempt cold.
 
 ---
 
+<a id="cross-refs"></a>
 ## 🔗 Cross-References
 
 - **For hash function details:** See `DSA/Foundation/java-collections-visual.md` (HashMap backing structure)
@@ -2209,6 +2246,7 @@ Read editorials; don't attempt cold.
 
 ---
 
+<a id="changelog"></a>
 ## 📝 Changelog
 
 | Date | Change |

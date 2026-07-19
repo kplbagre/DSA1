@@ -21,7 +21,7 @@
 | **Cursor Token** | opaque, client-facing encoding of the keyset value (usually base64); hides DB internals from clients | `next_cursor: "eyJpZCI6ODM3NDkyMX0="` decodes to `{id: 8374921}` |
 | **Keyset Pagination** | same as cursor pagination; the "key" is one or more indexed columns that define sort order | keyset: `(created_at, id)` — composite cursor for stable ordering when timestamps collide |
 | **Stable Results** | cursor pagination returns consistent pages even if rows are inserted/deleted between requests | row deleted at offset 4999: offset page 5001 skips a row; cursor page picks up at exact key |
-| **Drift / Skip (offset problem)** | concurrent inserts/deletes shift row positions; offset pagination shows duplicates or skips items | user A deletes row 5000; user B fetching page 501 at OFFSET 5000 sees row 5001 twice |
+| **Drift / Skip (offset problem)** | concurrent inserts/deletes shift row positions; offset pagination shows duplicates or skips items | **Insert** before the offset → rows shift later → the last row of page N reappears as the first row of page N+1 (**duplicate**). **Delete** before the offset → rows shift earlier → one row is **skipped**. |
 | **Opaque Cursor** | base64-encoded cursor the client passes back; client cannot parse or manipulate it | `eyJpZCI6ODM3NDkyMX0=` — client treats as opaque string; server decodes internally |
 | **Composite Cursor** | cursor encoding multiple sort columns when primary key alone doesn't guarantee stable order | `{created_at: "2024-01-15T10:30", id: 8374}` — handles ties in created_at |
 
@@ -364,3 +364,4 @@ public class FeedPaginationRedis {
 | Date | Change |
 |---|---|
 | June 25, 2026 | Note created. Covers offset vs cursor vs keyset pagination, encoding strategy, Redis sorted set feed pagination, Spring Data JPA code for both approaches, bidirectional cursors. Six real-world examples. Eight Q&As including two Tier-2 probe questions. |
+| Jul 19, 2026 | **Factual fix.** The Drift/Skip terminology row paired a *delete* with "sees a row twice" — backwards, and it contradicted the file's own correct diagram. Corrected: an **insert** before the offset causes a duplicate; a **delete** before the offset causes a skip. |

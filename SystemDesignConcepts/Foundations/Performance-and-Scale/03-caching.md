@@ -108,6 +108,11 @@ Kapil's phone number changes. The notepad still has the old one. Until the notep
 **Problem 3 — The filing cabinet gets rushed when the notepad expires (Stampede):**
 At 3 PM, 1,000 users simultaneously ask for the same thing. The notepad entry expired at 2:59 PM. All 1,000 requests miss the cache simultaneously and all run to the filing cabinet at once. The filing cabinet collapses under the load. This is the **cache stampede** (also called thundering herd). Fix: only let ONE request go to the DB and refill the cache — the other 999 wait. This is a **mutex lock on cache refill**.
 
+**Know the three distinct failure modes (interviewers separate them):**
+- **Stampede / thundering herd** — many requests miss the *same* key at the same instant (the 3 PM example). Fix: mutex/single-flight lock on refill, or probabilistic early expiry.
+- **Cache avalanche** — many *different* keys all expire at the *same* time (e.g., you warmed 100k keys at startup with an identical 1-hour TTL, so they all die together and every request misses at once). Fix: **TTL jitter** — add a random spread to each TTL (`base_ttl + random(0, jitter)`) so expirations are staggered, never synchronized.
+- **Cache penetration** — requests for keys that *don't exist* (often malicious), so the cache never helps and every request hits the DB. Fix: **negative caching** (cache the "not found" with a short TTL) and/or a **Bloom filter** in front to reject known-absent keys — see `03-caching_advanced.md`.
+
 **The key insight is:** A cache is a bet that reads are more frequent than changes. The moment that bet is wrong — frequently-updated data — a cache becomes a liability, not an asset.
 
 ---
@@ -538,3 +543,4 @@ RANDOM                       → Evict a random key
 |---|---|
 | June 2026 | File created. DocuSign R2 prep — "how do you scale reads?" follow-up. Covers cache-aside, write-through, LRU/LFU/TTL eviction, stampede protection, Redis. |
 | June 2026 | Gap patch: added write-behind, read-through, refresh-ahead strategies with code. Added 5-strategy comparison decision table. Updated Q&A to cover all 5 strategies. |
+| Jul 19, 2026 | **Gap closed.** Added the three distinct cache failure modes — stampede (same key), **avalanche** (many keys expiring together → fix with **TTL jitter**), and **penetration** (nonexistent keys → negative caching / Bloom filter). Avalanche and TTL jitter were previously absent though commonly probed. |

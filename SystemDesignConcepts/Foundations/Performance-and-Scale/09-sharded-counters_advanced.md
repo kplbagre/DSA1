@@ -109,14 +109,19 @@ Exact count: "unique visitors today?"
 
 Approximate count (HyperLogLog):
   Store: compact sketch
-  Memory: ~2 KB
-  Result: "approximately 1,001,230 unique visitors" ±2% ✅
+  Memory: ~12 KB (Redis: 16,384 registers × 6 bits ≈ 12 KB, dense)
+  Result: "approximately 1,001,230 unique visitors" ~0.81% error ✅
 
-How? HyperLogLog uses the observation:
-  If you hash 1 million random values, on average, the longest
-  leading zero sequence is log2(1,000,000) ≈ 20 bits.
-  Shorter longest zero = fewer unique values.
-  Longer longest zero = more unique values.
+How? HyperLogLog uses the leading-zero observation, BUT with a crucial twist:
+  - A hash's longest leading-zero run correlates with how many distinct
+    values you've seen: run of k ≈ ~2^k distinct values.
+  - Using ONE longest-run estimate has huge variance, so HLL splits the
+    stream across 16,384 registers (by the hash's first 14 bits) and each
+    register tracks ITS OWN max leading-zero run.
+  - It then combines all registers with a HARMONIC MEAN (stochastic
+    averaging) to crush the variance down to ~0.81% error.
+  (Estimating from a single longest run = LogLog/Flajolet-Martin; the
+   many-registers + harmonic-mean part is what makes it HyperLogLog.)
 ```
 
 ---
@@ -400,8 +405,8 @@ public class AdaptiveShardingService {
 
 | | |
 |---|---|
-| **You gain** | CRDT: no coordinator, works during partitions. Time-series: detect traffic spikes, better alerting. Adaptive: auto-scales to load. Approximate: 2 KB memory for 1 million unique items. |
-| **You lose** | CRDT: eventual consistency (temporary disagreement). Time-series: storage overhead (multiple buckets). Adaptive: complexity of reshuffling keys. Approximate: accuracy loss (±2%). |
+| **You gain** | CRDT: no coordinator, works during partitions. Time-series: detect traffic spikes, better alerting. Adaptive: auto-scales to load. Approximate: ~12 KB memory for ~1 million unique items (fixed, regardless of cardinality). |
+| **You lose** | CRDT: eventual consistency (temporary disagreement). Time-series: storage overhead (multiple buckets). Adaptive: complexity of reshuffling keys. Approximate: accuracy loss (~0.81% standard error). |
 | **Failure mode** | CRDT merge produces wrong total if logic is buggy. Time-series bucket boundary issues (request spans two buckets). Adaptive shard split leaves keys orphaned if crashes mid-rebalance. HyperLogLog underestimates if hash function is weak. |
 
 ---
@@ -428,7 +433,7 @@ public class AdaptiveShardingService {
 
 ## 🧾 TL;DR — One Interviewer-Ready Line
 
-> "For distributed counters without coordination: CRDT (G-Counter). For time-based analytics: bucket by time (10-second windows). For auto-scaling: adaptive sharding (split hot, merge cold). For cardinality estimation: HyperLogLog (~2 KB for 1M unique items)."
+> "For distributed counters without coordination: CRDT (G-Counter). For time-based analytics: bucket by time (10-second windows). For auto-scaling: adaptive sharding (split hot, merge cold). For cardinality estimation: HyperLogLog (~12 KB for 1M unique items, ~0.81% error)."
 
 ---
 
@@ -455,3 +460,4 @@ public class AdaptiveShardingService {
 |---|---|
 | June 23, 2026 | Companion file created. Covers: CRDT counters (G-Counter, PN-Counter for coordination-free distributed systems), time-series buckets (spike detection), adaptive sharding (auto-split/merge based on load), approximate counting (HyperLogLog). Real-world patterns from Cassandra/Prometheus/DynamoDB. 3 Q&As (all advanced scenarios). Pairs with core `09-sharded-counters.md`. |
 | Jul 3, 2026 | **Math error fix.** Cardinality estimation example: `1 million * 16 bytes = 16 GB` → `16 MB` (was off by 1000×; 1M × 16 B = 16,000,000 B = ~16 MB). |
+| Jul 19, 2026 | **Factual fixes.** (1) HyperLogLog memory corrected from "~2 KB" to "~12 KB" (Redis: 16,384 registers × 6 bits) — it contradicted the core `09` file, which was right. (2) Error rate aligned to the canonical "~0.81%". (3) Rewrote the HLL "how it works" explanation — the single-longest-zero-run version describes LogLog/Flajolet-Martin; added the many-registers + harmonic-mean (stochastic averaging) that actually defines HyperLogLog. |

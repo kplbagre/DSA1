@@ -282,14 +282,15 @@ public class RaftNode {
 
 ## 🧭 When to Use vs When NOT to Use
 
-| Use Raft when | Use Paxos when |
+| Use Raft when | Use Paxos (Multi-Paxos) when |
 |---|---|
-| Building a leader-based replicated system (database, cache, config store) | You need Byzantine fault tolerance (3+ independent authorities, malicious nodes possible) |
-| You want intuitive implementation (clear state machine) | You already have Paxos experts on staff (rare) |
-| Failure tolerance < N/2 (N = total nodes) is acceptable | You need maximum resilience (leader independence) |
-| | You're Google/Meta (have Paxos experts) |
+| Building a leader-based replicated system (database, cache, config store) | You need leaderless proposal flexibility (any node can propose; no single elected leader) |
+| You want intuitive implementation (clear state machine) | You're integrating with existing Paxos infrastructure (Google Chubby, Spanner) |
+| A new system where understandability and maintainability matter | You already have Paxos experts on staff (rare) |
 
-**The common mistake:** Trying to implement Raft or Paxos from scratch. Use battle-tested libraries: etcd (Raft), Consul (Raft), Zookeeper (Zab). Don't roll your own — consensus is hard.
+> ⚠️ **Important — neither Raft nor Paxos is Byzantine-fault-tolerant.** Both tolerate only **crash / fail-stop / network-omission faults** (a node that stops or a message that's lost or delayed) — the exact same fault model. Neither protects against **Byzantine faults** (a malicious or buggy node that lies or sends conflicting messages). Byzantine fault tolerance is a *separate* family of algorithms — **PBFT (Practical BFT), Tendermint, HotStuff** — which need **3f+1** nodes to tolerate `f` traitors (vs 2f+1 for crash tolerance) and are used in blockchains, not typical datacenter consensus. So "use Paxos because you need Byzantine tolerance" is wrong on two counts: classic Paxos is not Byzantine-tolerant, and BFT requires a different algorithm entirely.
+
+**The common mistake:** Trying to implement Raft or Paxos from scratch. Use battle-tested libraries: etcd (Raft), Consul (Raft), ZooKeeper (Zab). Don't roll your own — consensus is hard.
 
 ---
 
@@ -298,9 +299,9 @@ public class RaftNode {
 | | |
 |---|---|
 | **You gain (Raft)** | Simplicity (compared to Paxos); strong leader guarantees consistency; automatic failover; widely implemented |
-| **You lose (Raft)** | Depends on leader being reachable (partition = new election delay); not Byzantine-fault-tolerant |
-| **You gain (Paxos)** | Leader-independent (more resilient to partitions); Byzantine-fault-tolerant variants exist |
-| **You lose (Paxos)** | Complex to understand and implement; slower (multiple rounds); rarely used in practice |
+| **You lose (Raft)** | Depends on leader being reachable (partition = new election delay); crash-fault-tolerant only (not Byzantine — same as Paxos) |
+| **You gain (Paxos)** | Leaderless proposal flexibility; battle-tested at Google (Chubby, Spanner); minimal theoretical assumptions |
+| **You lose (Paxos)** | Complex to understand and implement; classic Multi-Paxos is slower per decision; crash-fault-tolerant only (Byzantine tolerance needs PBFT/HotStuff, a different algorithm family) |
 | **Failure mode (Raft)** | Network partition isolates leader. Followers can't reach leader, elect new leader. Brief window (< 1s) of no progress. |
 | **Failure mode (Paxos)** | Multiple rounds can deadlock if phase 1 is interrupted. Recovery requires manual intervention or higher-level protocol. |
 
@@ -326,7 +327,7 @@ public class RaftNode {
 
 ### Q: "Paxos vs Raft — when should we use Paxos?"
 
-> Raft is used 99% of the time because it's simpler. Paxos is used only if: (1) You need Byzantine fault tolerance (malicious nodes) — Raft isn't Byzantine-safe. (2) You have Paxos experts (rare). (3) Your system must survive complete leader isolation indefinitely (Paxos allows multiple proposers, but slower). For most systems, Raft + replication is sufficient.
+> Raft is used 99% of the time in new systems because it's simpler to understand, implement, and debug. Paxos shows up mainly when: (1) you're integrating with existing Paxos-based infrastructure (Google Chubby, Spanner); (2) you have Paxos expertise on staff (rare); (3) you specifically want leaderless proposal flexibility (any node proposes, no elected leader). **What is NOT a reason: Byzantine fault tolerance.** Classic Paxos and Raft have the *identical* fault model — both tolerate crash/omission faults only, neither tolerates malicious (Byzantine) nodes. If you genuinely need to survive lying nodes (e.g., a permissionless blockchain), you need a BFT algorithm like PBFT, Tendermint, or HotStuff (3f+1 nodes), not Paxos. For most datacenter systems, Raft + replication is sufficient.
 
 ### Q: "In a Raft cluster of 5 nodes, what's the quorum size?"
 
@@ -366,3 +367,4 @@ public class RaftNode {
 | Date | Change |
 |---|---|
 | June 25, 2026 | Initial creation. Added Raft election flow (state machine: follower → candidate → leader), log replication, term numbers preventing split-brain. Code example for RequestVote RPC and AppendEntries replication. Real-world examples (Kafka, etcd, Redis, Consul, CockroachDB). Seven Q&As covering quorum calculation, partition handling, Byzantine-fault tolerance, Raft vs Paxos trade-off. |
+| Jul 19, 2026 | **Factual correction — Byzantine fault tolerance.** Fixed the repeated claim (When-to-Use table, Trade-offs, Paxos-vs-Raft Q&A) that Paxos is Byzantine-fault-tolerant or that you'd pick Paxos "for Byzantine tolerance." Classic Paxos and Raft share the identical crash/omission fault model; neither tolerates malicious nodes. BFT is a separate algorithm family (PBFT/Tendermint/HotStuff, 3f+1 nodes). Rewrote the Paxos selection reasons to the real ones (leaderless flexibility, existing Chubby/Spanner infra) and added a warning callout. |
