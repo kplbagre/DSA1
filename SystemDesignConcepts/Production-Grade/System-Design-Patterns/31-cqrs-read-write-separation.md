@@ -397,7 +397,9 @@ CREATE TABLE orders_view (
 
 ### What is Event Sourcing, and why does it fit here?
 
-Event Sourcing is the pattern of **storing state as immutable events** instead of overwriting records. CQRS uses Event Sourcing to feed the read models. In an interview, if asked: *"Event Sourcing stores every state change as an event (OrderCreated, OrderFulfilled, OrderCancelled). Current state = sum of all events. CQRS projects these events into read models (orders_by_status, customer_stats). If a read model becomes corrupted, replay events to rebuild."*
+Event Sourcing is the pattern of **storing state as immutable events** instead of overwriting records. **CQRS does NOT require Event Sourcing** — this is a common interview misconception. CQRS works with any event-publishing mechanism: a traditional write DB that emits domain events to Kafka, a CDC pipeline (Debezium outbox), or direct dual-write. Event Sourcing is one compatible implementation for the write side (append-only event log as the source of truth), but it is optional.
+
+In an interview, if asked about Event Sourcing with CQRS: *"Event Sourcing stores every state change as an event (OrderCreated, OrderFulfilled, OrderCancelled). Current state = sum of all events. CQRS can project these events into read models (orders_by_status, customer_stats). If a read model becomes corrupted, replay events to rebuild. But you can have CQRS without Event Sourcing — just publish domain events from a regular DB on write and let listeners update read models."*
 
 ---
 
@@ -462,7 +464,7 @@ Event Sourcing is the pattern of **storing state as immutable events** instead o
 
 ## 🔗 Related Concepts
 
-- **`22-event-sourcing.md`** — Event Sourcing is foundational to CQRS
+- **`22-event-sourcing.md`** — Event Sourcing is compatible with CQRS but NOT required; CQRS works with a traditional write DB + CDC or domain events
 - **`19-message-queues-kafka-rabbitmq.md`** — Events published via Kafka/RabbitMQ
 - **`04-idempotency.md`** — Listeners must be idempotent (handle duplicate events)
 
@@ -483,3 +485,4 @@ Event Sourcing is the pattern of **storing state as immutable events** instead o
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 31. Covered CQRS separation of read/write paths, write-DB (normalized) vs read-DB (denormalized), event-driven projection, eventual consistency, idempotent listeners, multi-projection architecture. |
+| Jul 20, 2026 | Fixed HIGH-severity error: "CQRS uses Event Sourcing to feed read models" implied Event Sourcing is required — it is NOT. CQRS works with traditional DB + CDC/domain events. Updated Q&A and Related Concepts cross-reference accordingly. |

@@ -249,7 +249,7 @@ KEY INVARIANT:
 4. **Index is stored** on disk (sharded and replicated).
 5. **Client sends search query** (full-text search or filters).
 6. **Elasticsearch hits inverted index** (fast word lookup).
-7. **Results are scored** by relevance (TF-IDF, BM25).
+7. **Results are scored** by relevance (BM25 — Elasticsearch's default since v5.0; TF-IDF was the predecessor).
 8. **Results sorted and returned** to client.
 
 ```java
@@ -356,7 +356,7 @@ public class LogSearchService {
     // 1. Look up "error" in inverted index → [doc1, doc3, doc5, ...]
     // 2. Look up "timeout" in inverted index → [doc1, doc7, ...]
     // 3. Filter by service="payment-service" → [doc1]
-    // 4. Score doc1 by relevance (TF-IDF)
+    // 4. Score doc1 by relevance (BM25 — default since ES 5.0; not TF-IDF)
     // 5. Sort by timestamp (desc)
     // 6. Return top 10
 
@@ -503,7 +503,7 @@ TF-IDF and BM25 are **relevance scoring algorithms**. TF = term frequency (how o
 
 | | |
 |---|---|
-| **You gain** | Fast full-text search (inverted index O(1) lookups). Relevance scoring (rank by match quality). Complex aggregations (faceted search). Distributed queries (parallel shards). Real-time indexing (index and search immediately). |
+| **You gain** | Fast full-text search (inverted index O(1) lookups). Relevance scoring (rank by match quality). Complex aggregations (faceted search). Distributed queries (parallel shards). Near-real-time indexing (searchable within ~1 second via refresh cycle — NOT immediately). |
 | **You lose** | Upfront indexing cost (build inverted index for every document). Memory overhead (index can be 10-50% of raw data size). Eventual consistency (updates take milliseconds to propagate to all shards). Operational complexity (cluster management, shard balancing, upgrades). Query language learning curve (Elasticsearch Query DSL). |
 | **Failure mode** | Shard becomes corrupted → documents lost (mitigation: replica exists on different node). Inverted index becomes stale → search returns deleted documents (mitigated by soft deletes). Shard imbalance → one node overloaded (use shard routing to balance). Mitigation: replicas prevent data loss, snapshots for backup, monitoring shard sizes. |
 
@@ -563,3 +563,4 @@ TF-IDF and BM25 are **relevance scoring algorithms**. TF = term frequency (how o
 |---|---|
 | June 25, 2026 | Created as Concept 32. Covered inverted index mechanics (word → doc IDs O(1) lookup), sharding (parallel query execution), replication (redundancy), TF-IDF/BM25 scoring, ELK stack integration. |
 | July 1, 2026 | Added refresh interval section (1s default, `?refresh=true`, bulk-load pattern). Strengthened "ES is not a primary DB" as boxed interview anti-pattern. Added 2 ⭐ Tier 1 Q&As (refresh, primary DB). Updated TL;DR. |
+| Jul 20, 2026 | Fixed: step 7 and inline comment said "TF-IDF" as current default — BM25 has been the default since ES 5.0 (2016). Fixed trade-offs table "Real-time indexing (index and search immediately)" → "Near-real-time" to match the NRT section in the same file. |

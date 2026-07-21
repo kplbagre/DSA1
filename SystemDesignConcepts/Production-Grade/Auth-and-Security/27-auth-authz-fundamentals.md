@@ -271,20 +271,27 @@ public class JwtTokenProvider {
         long now = System.currentTimeMillis();
         long expiresAt = now + expirationTime;
 
-        // Step 6 — Sign JWT with private key (RS256)
+        // Step 6 — Sign JWT
+        // NOTE: This example uses HS256 (symmetric HMAC — single shared secret).
+        // HS256 is correct when ONE server both issues and validates tokens.
+        // For distributed microservices (different services validate tokens), use RS256:
+        //   .signWith(rsaPrivateKey) — auth server holds private key
+        //   services verify with rsaPublicKey from JWKS endpoint (no shared secret needed)
         return Jwts.builder()
             .setClaims(claims)
             .setSubject(user.getId().toString())
             .setIssuedAt(new Date(now))
             .setExpiration(new Date(expiresAt))
-            .signWith(SignatureAlgorithm.HS256, secretKey) // sign with private key
+            .signWith(SignatureAlgorithm.HS256, secretKey) // HS256: sign with shared secret
             .compact(); // Step 7 — serialize to string
     }
 
     // Step 10 — Validate JWT signature
     public boolean validateToken(String token) {
         try {
-            // Verify signature using public key (embedded in JWT)
+            // Verify signature using shared secret (HS256)
+            // For RS256: Jwts.parser().setSigningKey(rsaPublicKey).parseClaimsJws(token)
+            // The public key is NOT embedded in the JWT — it is fetched from a JWKS endpoint
             Jwts.parser().setSigningKey(secretKey).parseClaimsJws(token);
             return true;
         } catch (SignatureException e) {
@@ -526,3 +533,4 @@ RS256 is **asymmetric signing** (RSA with SHA-256). Server signs JWT with privat
 | Date | Change |
 |---|---|
 | June 25, 2026 | Created as Concept 27. Covered authentication (password hashing, JWT signing) vs authorization (permission checks, RBAC), two-diagram topology (gateway auth + service authz), bcrypt and RS256 asymmetric signing, code examples with Spring Security. |
+| Jul 20, 2026 | Fixed HS256/RS256 inconsistency: code used HS256 (symmetric) but comments said "RS256 / private key". Added inline note explaining HS256 (single-server) vs RS256 (distributed microservices, JWKS endpoint) distinction. Fixed validateToken comment ("public key embedded in JWT" was wrong on both counts). |

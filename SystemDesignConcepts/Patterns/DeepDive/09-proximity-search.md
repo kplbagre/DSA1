@@ -188,7 +188,7 @@ For objects that move frequently (ride-share drivers, delivery couriers), the st
 1. **Driver reports position** — Driver app sends GPS update every 4 seconds to a location service.
 2. **Update Redis** — `GEOADD drivers:available -122.41 37.77 "driver:abc123"`. This upserts the driver's position into the sorted set. O(log N).
 3. **Driver goes offline** — `ZREM drivers:available "driver:abc123"`. Instantly removed from the searchable set.
-4. **Match query** — When rider requests pickup: `GEORADIUSBYMEMBER drivers:available <pickup_lng> <pickup_lat> 10 km WITHCOORD WITHDIST COUNT 5 ASC`. Returns the 5 nearest available drivers with their coordinates and distances.
+4. **Match query** — When rider requests pickup: `GEORADIUS drivers:available <pickup_lng> <pickup_lat> 10 km WITHCOORD WITHDIST COUNT 5 ASC`. Returns the 5 nearest available drivers with their coordinates and distances. (`GEORADIUSBYMEMBER` takes a stored member name as the center point — not a raw lat/lng coordinate. For a rider's pickup point, use `GEORADIUS` with explicit coordinates.)
 5. **Driver accepted** — Remove driver from `drivers:available` set immediately (prevent double-assignment). Add to `drivers:busy` set.
 
 ```
@@ -393,3 +393,4 @@ KEY INVARIANT:
 | Date | Change |
 |---|---|
 | July 2026 | Note created. Final pattern in the batch of 9 DeepDive notes. |
+| Jul 20, 2026 | Fixed wrong Redis command: `GEORADIUSBYMEMBER` takes a stored member name as center — incorrect for a raw lat/lng pickup point. Corrected to `GEORADIUS` (takes explicit coordinates). Added clarifying comment. |

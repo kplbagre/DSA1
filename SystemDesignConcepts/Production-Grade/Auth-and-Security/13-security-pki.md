@@ -20,8 +20,8 @@ DocuSign's core product is legally binding digital signatures. If they ask D1 ("
 **Simple analogy:** A medieval king seals important letters with his unique wax seal (private key). Anyone can verify the letter came from him by checking the seal matches his known coat of arms (public key). No one else has his signet ring — so only he could have sealed it (non-repudiation).
 
 **Core principle:** PKI uses two keys (private and public):
-- **Private key** (kept secret): signs documents and encrypts data. Proves your identity.
-- **Public key** (shared openly): verifies signatures and decrypts data. Anyone can use it to confirm YOU sent the message.
+- **Private key** (kept secret): signs documents and decrypts messages (messages encrypted to you by others using your public key). Proves your identity.
+- **Public key** (shared openly): verifies signatures and encrypts messages to the key owner. Anyone can use it to confirm YOU sent the message.
 
 A **Certificate Authority** (trusted third party) vouches for you: "I confirm this public key belongs to Alice." This chain of trust enables HTTPS, digital signatures, and secure APIs.
 
@@ -531,3 +531,4 @@ public void checkEnvelopeCompletion(Long envelopeId) {
 | Date | Change |
 |---|---|
 | June 2026 | File created. DocuSign R2 prep — D1 question likely, DocuSign's own product is e-signatures. Covers symmetric/asymmetric encryption, digital signature flow, SHA-256, CA chain, non-repudiation, audit trail, multi-party signing. |
+| Jul 20, 2026 | Fixed mental-model section lines: "private key encrypts / public key decrypts" — reversed the standard encryption convention. Corrected to: private key signs + decrypts; public key verifies + encrypts. Terminology table (which was already correct) now matches the mental-model section. |

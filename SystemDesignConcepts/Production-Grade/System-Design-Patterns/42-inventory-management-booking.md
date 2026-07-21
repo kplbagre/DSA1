@@ -383,7 +383,7 @@ public class RedisInventoryService {
 ## 🔗 Related Concepts
 
 - **`../../Foundations/Concurrency-and-Consistency/01-optimistic-pessimistic-locking.md`** — SELECT FOR UPDATE is pessimistic locking applied to inventory rows; optimistic locking with version columns is the alternative for lower-contention items
-- **`../../Foundations/Concurrency-and-Consistency/41-isolation-levels-dirty-reads.md`** — inventory decrements require SERIALIZABLE or REPEATABLE_READ isolation to prevent phantom reads and non-repeatable read anomalies in the reservation path
+- **`../../Foundations/Concurrency-and-Consistency/41-isolation-levels-dirty-reads.md`** — `SELECT FOR UPDATE` under READ COMMITTED isolation is sufficient for inventory decrements; it acquires a row-level exclusive lock that serializes concurrent access to that specific row. SERIALIZABLE adds significant overhead and is not required here.
 - **`../../Foundations/Concurrency-and-Consistency/04-idempotency.md`** — reservation API calls must be idempotent; retries from mobile clients or load balancers must not double-reserve
 - **`31-cqrs-read-write-separation.md`** — separating the read path (availability display) from the write path (reservation) is essential at the scale of Ticketmaster or Airbnb
 
@@ -404,3 +404,4 @@ public class RedisInventoryService {
 | Date | Change |
 |---|---|
 | June 25, 2026 | File created. Covers overselling problem, reservation pattern (AVAILABLE → SOFT_RESERVED → CONFIRMED/RELEASED), SELECT FOR UPDATE (pessimistic DB), Redis DECR (atomic counter), TTL expiry job, idempotency keys, overbooking strategy, why message queues don't solve overselling. Java code: both SELECT FOR UPDATE and Redis DECR strategies with full reservation lifecycle. 8 Q&As (5 Tier 1 + 3 Tier 2). Companies: Airbnb, BookMyShow/Ticketmaster, Amazon, Uber Eats/DoorDash, Walmart, Airlines. |
+| Jul 20, 2026 | Fixed cross-reference: "SERIALIZABLE or REPEATABLE_READ required" — overstated. SELECT FOR UPDATE under READ COMMITTED is sufficient; it acquires a row-level exclusive lock regardless of isolation level. SERIALIZABLE is not needed here. |

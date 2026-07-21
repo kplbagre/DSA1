@@ -72,16 +72,22 @@ PERCENTAGE ROLLOUT — how it works
 rollout_percentage = 10
 
 For each request:
-  bucket = hash(user_id) % 100   ← deterministic: same user always gets same bucket
+  bucket = hash(user_id + flag_key) % 100   ← include flag_key so each flag gets independent buckets
   if bucket < rollout_percentage:
       → NEW code path (this user is in the 10%)
   else:
       → OLD code path
 
-Why hash(user_id) not random():
+Why hash(user_id + flag_key) not hash(user_id) alone:
+  hash(user_id) alone → every flag routes THE SAME users to the top-N% bucket.
+  Flag A at 10% and Flag B at 10% would expose the exact same 10% of users to both,
+  creating correlated rollout groups that bias any per-flag analysis.
+  Including flag_key makes bucket assignment statistically independent per flag.
+
+Why hash not random():
   random() gives a different result on every request
   → user sees new UI on one page load, old UI on next → inconsistent experience
-  hash(user_id) is deterministic: same user is always in or always out
+  hash(user_id + flag_key) is deterministic: same user always gets same bucket per flag
 
 KEY INVARIANT:
    A flag evaluator NEVER makes a network call on the hot path.
@@ -129,9 +135,10 @@ Enable the new code path for N% of users. Ramp the percentage as confidence grow
 // WRONG — Math.abs(Integer.MIN_VALUE) overflows and stays negative:
 // int bucket = Math.abs(userId.hashCode()) % 100;  ← do not use
 
-// CORRECT — mask the sign bit, result is always 0–99:
-int bucket = (userId.hashCode() & Integer.MAX_VALUE) % 100;
-if (bucket < featureFlags.getRolloutPct("new_recommendations")) {
+// CORRECT — include flag name in hash (independent buckets per flag) + mask sign bit:
+String flagKey = "new_recommendations";
+int bucket = ((userId + flagKey).hashCode() & Integer.MAX_VALUE) % 100;
+if (bucket < featureFlags.getRolloutPct(flagKey)) {
     return newRecommendationEngine.rank(items);
 } else {
     return legacyRankingEngine.rank(items);
@@ -255,3 +262,4 @@ Fix: flag config is ALWAYS cached in local memory. The evaluator reads from cach
 |---|---|
 | Jul 11, 2026 | **Note created.** Batch 1 of Operational-Scenarios gap closure. Feature flag pattern — critical for cross-cutting rollout scenarios and "how do you release safely" interview questions. |
 | Jul 11, 2026 | **Bug fix — hashCode overflow in percentage rollout.** `Math.abs(userId.hashCode()) % 100` is wrong: `Math.abs(Integer.MIN_VALUE)` overflows and returns a negative number, producing an invalid bucket. Fixed to `(userId.hashCode() & Integer.MAX_VALUE) % 100` — masks the sign bit, always returns 0–99. |
+| Jul 20, 2026 | Fixed bucketing independence: hash(user_id) alone routes the same users to the top-N% bucket for EVERY flag. Changed to hash(user_id + flag_key) so bucket assignment is statistically independent per flag — prevents correlated rollout groups across flags. |

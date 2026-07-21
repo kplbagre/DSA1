@@ -48,14 +48,14 @@ Operational-Scenarios/
 │   ├── schema-changes-zero-downtime.md      ← ✅ written
 │   └── api-versioning-and-sunset.md         ← ✅ written
 ├── Scaling/
-│   ├── scaling-an-existing-system.md        ← planned
-│   └── pre-event-capacity-planning.md       ← planned
+│   ├── scaling-an-existing-system.md        ← ✅ written
+│   └── pre-event-capacity-planning.md       ← ✅ written
 ├── Production-Ops/
 │   ├── production-data-fixes.md             ← ✅ written
 │   ├── incident-diagnosis-framework.md      ← ✅ written
 │   └── security-hardening-live-systems.md   ← ✅ written
 └── Cross-Cutting/
-    └── adding-concern-to-existing-systems.md ← planned
+    └── adding-concern-to-existing-systems.md ← ✅ written
 ```
 
 ---
@@ -214,3 +214,4 @@ For **every step that crosses a system boundary** (writes to a DB, makes an API 
 | Jul 11, 2026 | **Quality checklist updated.** Added System Boundary Test — 3-question mandatory check for every step that crosses a system boundary (DB write, API call, message). Triggered by discovery that "writes to both DBs" language in multiple notes enabled a direct-DB-write misinterpretation that bypasses the new service's logic entirely. |
 | Jul 11, 2026 | **Known Mistake Classes section added.** Full audit of all Batch 1+2 notes produced 8 recurring mistake classes: mechanism under-specification, false universality, math without reality check, missing prerequisites, failure residue, threading/async edge cases, comparison window errors, incomplete change surface. All future notes must be checked against these before committing. |
 | Jul 11, 2026 | **Batch 3 complete — Production-Ops notes written.** Three notes: `incident-diagnosis-framework.md` (5-phase incident response: stabilize before diagnosing, 4 signals MELT), `production-data-fixes.md` (kill source → audit → backup → dry-run → batch fix → verify, cascading downstream effects), `security-hardening-live-systems.md` (expand-enforce pattern for auth/secrets/rate-limiting/audit logging). All 8 mistake classes applied. Folder structure updated. |
+| Jul 21, 2026 | **Batch 4 complete — Scaling + Cross-Cutting notes written.** Three notes: `scaling-an-existing-system.md` (measure-first, connection pooler prerequisite, thundering herd, replication lag, async offload), `pre-event-capacity-planning.md` (6-phase Black Friday playbook: baseline → forecast → load test → provision → kill switches → game day), `adding-concern-to-existing-systems.md` (expand→observe→enforce pattern, injection point selection, async consumer DLQ). All 8 mistake classes applied. All notes use correct relative paths to `../../Patterns/DeepDive/`. Folder structure updated. |

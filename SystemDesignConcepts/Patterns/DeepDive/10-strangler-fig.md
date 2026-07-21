@@ -54,15 +54,15 @@ ALL traffic
     └─────────────────┘
 
 ─────────────────────────────────────────────────────
-PHASE 2: Shadow / Canary (route a slice, compare)
+PHASE 2: Shadow Mode (route a slice, compare — responses NOT shown to user)
 ─────────────────────────────────────────────────────
 ALL traffic
      │
      ├──── 95% ────▶ MONOLITH  (still source of truth)
      │
-     └──── 5%  ────▶ NEW SERVICE  (canary — real traffic,
+     └──── 5%  ────▶ NEW SERVICE  (shadow mode — real traffic forked,
                                    responses compared but
-                                   NOT shown to user yet)
+                                   NEVER shown to user)
 
 ─────────────────────────────────────────────────────
 PHASE 3: Traffic Ramp (new earns majority)
@@ -245,3 +245,4 @@ Team is excited to remove the old code. They decommission before 100% traffic is
 |---|---|
 | Jul 11, 2026 | **Note created.** Triggered by live interview — notification service migration question exposed gap in migration pattern prep. |
 | Jul 11, 2026 | **Bug fix — two gaps found during audit.** (1) Phase 1 added backfill race condition explanation and correct dual-write start sequence. (2) Things That Go Wrong #2 clarified that "dual write" in microservice extraction means calling the new service's write API, not writing directly to the new DB. |
+| Jul 20, 2026 | Fixed naming confusion: Phase 2 diagram labeled the forked-traffic slice as "canary" but the behavior (responses NOT shown to user, responses compared/discarded) is shadow mode by definition. Canary is Phase 3 where new service responses ARE shown to users. Updated diagram labels to "shadow mode". |

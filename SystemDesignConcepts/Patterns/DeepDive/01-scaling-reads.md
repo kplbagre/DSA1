@@ -186,7 +186,7 @@ T=500ms: Replica catches up → comment visible ✅
                     Scale: add replicas linearly to multiply read capacity
 ```
 
-**Horizontal scaling:** Each replica added doubles your read capacity (roughly). You can run 5, 10, 20 replicas if needed. Read replicas are the primary scaling mechanism for relational workloads at companies like Instagram, Pinterest, Shopify.
+**Horizontal scaling:** Each replica added provides roughly one additional unit of read capacity (linear/additive — 5 replicas ≈ 5× the read throughput of 1, not 2⁵). You can run 5, 10, 20 replicas if needed. Read replicas are the primary scaling mechanism for relational workloads at companies like Instagram, Pinterest, Shopify.
 
 ---
 
@@ -198,7 +198,7 @@ When your read query pattern fundamentally doesn't match your write schema, add 
 
 **When to use:**
 - Full-text search is required (Elasticsearch — relational DBs can't compete on inverted index performance)
-- Time-series data with range queries (Cassandra, InfluxDB — columnar storage is 10x more efficient)
+- Time-series data with range queries (Cassandra — wide-column + LSM-tree, fast sequential writes within a partition key; InfluxDB — TSM engine purpose-built for time-series; both are 10x+ more efficient than row-oriented databases for this workload)
 - Simple key-value access at very high throughput (DynamoDB — O(1) lookups, no joins needed)
 - Need multiple different query patterns on the same data simultaneously
 
@@ -465,3 +465,4 @@ KEY INVARIANT:
 |---|---|
 | July 2026 | Note created. Pilot pattern for DeepDive + Reference split. |
 | July 2026 | Added Step 0 (index/profile first) to decision sequence. Added 🧠 mental model anchors per strategy. Added cache versioning, request coalescing, probabilistic early refresh to thundering herd section. |
+| Jul 20, 2026 | Fixed two errors: (1) "Each replica doubles read capacity" → linear/additive — each replica adds ~1 unit, 5 replicas ≈ 5×, not 2⁵×. (2) "Cassandra — columnar storage" → Cassandra is wide-column + LSM-tree (not columnar/analytical); InfluxDB's TSM engine is the time-series-columnar one. |

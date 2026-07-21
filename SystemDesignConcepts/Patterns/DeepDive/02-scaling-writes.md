@@ -105,7 +105,7 @@ Instead of one DB write per event, accumulate N events in memory and flush as a 
 **Impact:**
 ```
 Without batching: 10,000 events/sec = 10,000 DB round-trips/sec (expensive)
-With batching (batch=500): 10,000 events/sec = 20 DB round-trips/sec (50x reduction)
+With batching (batch=500): 10,000 events/sec = 20 DB round-trips/sec (500x reduction)
 
 Each round-trip: ~5ms (network) + ~1ms (query parse) + disk I/O
 Batching amortizes the fixed cost across 500 rows
@@ -391,3 +391,4 @@ KEY INVARIANT:
 |---|---|
 | July 2026 | Note created. Batch 1 of 8 remaining patterns. |
 | July 2026 | Added 🧠 mental model anchors per strategy. Added vertical partitioning + load shedding to Step 1. Added hot key splitting to Strategy 3. Added fan-out hierarchical aggregation Q&A. |
+| Jul 20, 2026 | Fixed arithmetic error in batching key numbers box: "50x reduction" contradicted the mental model anchor (500x) and the math (10,000 ÷ 500 = 20 = 500x, not 50x). |

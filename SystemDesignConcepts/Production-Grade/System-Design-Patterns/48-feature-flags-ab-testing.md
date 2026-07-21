@@ -259,8 +259,9 @@ public class FlagEvaluator {
             }
         }
         // Step 3 — percentage rollout via deterministic hash (bucketing)
-        // abs() prevents negative modulo results from negative hashCode values
-        int bucket = Math.abs((userId + flagKey).hashCode()) % 100;
+        // IMPORTANT: Math.abs(Integer.MIN_VALUE) == Integer.MIN_VALUE (still negative in Java)
+        // Use bitwise mask instead: (hashCode & 0x7FFFFFFF) guarantees non-negative
+        int bucket = ((userId + flagKey).hashCode() & 0x7FFFFFFF) % 100;
         // Walk sorted allocations: first allocation whose upperBound exceeds bucket wins
         for (VariantAllocation allocation : rule.getVariantAllocations()) {
             if (bucket < allocation.getUpperBound()) {
@@ -361,7 +362,7 @@ public String evaluateExperiment(String experimentId, String flagKey, String use
     // Include experimentId in hash input so user-to-variant mapping resets cleanly per experiment
     // Without experimentId: changing allocations mid-experiment silently corrupts historical data
     String hashInput = userId + experimentId + flagKey;
-    int bucket = Math.abs(hashInput.hashCode()) % 100;
+    int bucket = (hashInput.hashCode() & 0x7FFFFFFF) % 100;
     FlagRule rule = flagCache.get(flagKey);
     if (rule == null || !rule.isEnabled()) {
         return rule != null ? rule.getDefaultVariant() : "off";
@@ -551,3 +552,4 @@ eventSource.start();
 | Date | Change |
 |---|---|
 | Jul 1, 2026 | Added FlagRule JSON schema (with `owner` and `expiresAt` fields); added zombie flag CI check with `@FeatureFlag` annotation processor that fails the build when expiry date has passed; added SSE-based kill-switch propagation code to Q5 (EventSource client with onMessage/onError handlers, plus SSE-vs-WebSocket rationale). |
+| Jul 20, 2026 | Fixed latent bucketing bug: `Math.abs(hashCode) % 100` is incorrect because `Math.abs(Integer.MIN_VALUE) == Integer.MIN_VALUE` (still negative). Changed to `(hashCode & 0x7FFFFFFF) % 100` in both bucketing sites. |
