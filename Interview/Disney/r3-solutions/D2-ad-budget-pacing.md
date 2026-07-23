@@ -195,70 +195,91 @@ BREAKING POINT: Stage 1 breaks at ~1,000 impressions/sec.
 STAGE 2 — Redis Gate + Kafka Async (≤ 10M impressions/min on any one campaign)
 ══════════════════════════════════════════════════════════════════════
 
-                 ┌─────────────────────────────────────────────┐
-                 │         Budget Controller                    │
-                 │         (runs every 60 seconds)             │
-                 │                                             │
-                 │  For each active campaign:                  │
-                 │  remaining_budget = daily_budget            │
-                 │                    - actual_spend (Cassandra)│
-                 │  remaining_minutes = minutes until midnight │
-                 │  minute_allowance_micros =                  │
-                 │    remaining_budget_micros / remaining_min  │
-                 │                                             │
-                 │  Pipelined Redis writes:                    │
-                 │  SET budget_limit:{id}:{min}                │
-                 │      {minute_allowance_micros} EX 120       │
-                 └─────────────────────────────────────────────┘
-                                    │ (writes per-min limits)
-                                    ▼
-Ad Request                 ┌─────────────────┐
-    │                      │  Redis Cluster  │
-    │                      │                 │
-    ▼                      │ budget_limit:   │
-┌───────────────────┐      │  {id}:{min}     │
-│  Ad Server        │      │   (allowance)   │
-│                   │      │                 │
-│  1. In-Memory     │      │ budget_spent:   │
-│     Campaign      │──────│  {id}:{min}     │
-│     Index (JVM)   │ INCR │   (counter)     │
-│     (refreshed    │      └─────────────────┘
-│      every 30s)   │           │
-│                   │           │ counter × cpm_micros
-│  2. Gate check:   │◀──────────┘ ≥ limit? → skip campaign
-│     INCR counter  │
-│     compare spend │
-└───────────────────┘
-    │ allowed
-    ▼
-Serve Ad
-    │
-    ├──▶ Kafka Topic: "ad-impressions"   (async, fire-and-forget)
-    │    partitioned by campaignId
-    │         │
-    │         ▼
-    │    ┌──────────────────────────────────────────┐
-    │    │  Flink Consumer Group                    │
-    │    │  - Tumbling 1-minute windows             │
-    │    │  - SUM(cpgCostMicros) per campaignId     │
-    │    │  - COUNT(impressions) per campaignId     │
-    │    │  - Writes aggregated rows to Cassandra   │
-    │    └──────────────────────────────────────────┘
-    │                   │
-    │                   ▼
-    │    ┌──────────────────────────────────────────┐
-    │    │  Cassandra: campaign_impressions          │
-    │    │  Partition: (campaign_id, date)           │
-    │    │  Cluster:   minute_bucket (epoch/60)      │
-    │    │  Source of truth for billing              │
-    │    └──────────────────────────────────────────┘
-    │
-    └──▶ Return response to ad server (async Kafka write does not block)
+Step legend:  ① → ② → ③  = Budget Controller path (runs every 60s, background)
+              ④ → ⑤ → ⑥ → ⑦ → ⑧ → ⑨ = Ad serving path (per impression, hot path)
+
+                 ┌──────────────────────────────────────────────────┐
+                 │  ① Budget Controller  (every 60 seconds)         │
+                 │                                                  │
+                 │  reads actual_spend from Cassandra:              │
+                 │    SELECT SUM(total_spend_micros) WHERE          │
+                 │      campaign_id=:id AND date=:today             │
+                 │                                                  │
+                 │  ② computes smooth pacing allowance:             │
+                 │    remaining_budget = daily_budget - actual_spend │
+                 │    remaining_minutes = minutes until midnight    │
+                 │    minute_allowance = remaining_budget           │
+                 │                      / remaining_minutes         │
+                 └──────────────────────────────────────────────────┘
+                          │
+                          │ ③ pipelined Redis SET (10K campaigns, <200ms)
+                          ▼
+④ Ad Request      ┌──────────────────────────────┐
+    │             │       Redis Cluster           │
+    │             │                              │
+    ▼             │  budget_limit:{id}:{min}      │◀── ③ Budget Controller writes
+┌────────────┐    │    value: 10,000,000 micros  │        allowance here
+│ Ad Server  │    │    TTL: 120s                 │
+│            │    │                              │
+│ ⑤ pick     │    │  budget_spent:{id}:{min}     │
+│   campaign │─⑥─▶│    value: 42,317 (counter)  │
+│   from     │INCR│    TTL: 120s                 │
+│   in-mem   │    └──────────────────────────────┘
+│   index    │              │
+│            │◀─────────────┘
+│ ⑦ gate     │  return new counter value
+│   check:   │
+│   counter  │  if counter × cpm_micros ≥ limit → SKIP campaign
+│   × cpm    │  if counter × cpm_micros  < limit → ALLOW
+│   ≥ limit? │
+└────────────┘
+      │ ⑧ ALLOW
+      ▼
+  Serve Ad to user
+      │
+      │ ⑨ fire-and-forget (does NOT block the response)
+      ├──▶ publish to Kafka: "ad-impressions"
+      │         partitioned by campaignId
+      │              │
+      │              ▼
+      │    ┌─────────────────────────────────────────────────────────────┐
+      │    │  BILLING CONSUMER — two options (pick one in interview)     │
+      │    │                                                             │
+      │    │  Option A — Simple Kafka Consumer Group (recommended)      │
+      │    │    Plain Java service, Kafka consumer group                 │
+      │    │    ConcurrentHashMap<campaignId, LongAdder> accumulator     │
+      │    │    Every 60s: flush accumulators → Cassandra UPSERT         │
+      │    │    Pro: no extra infra, easy to reason about                │
+      │    │    Con: exactly-once semantics need careful offset commit    │
+      │    │                                                             │
+      │    │  Option B — Flink (if interviewer pushes on exactly-once)  │
+      │    │    Separate Flink cluster consuming same Kafka topic        │
+      │    │    Tumbling 1-min windows, built-in checkpointing           │
+      │    │    Guarantees exactly-once even if Flink crashes mid-window │
+      │    │    Pro: exactly-once out of the box                         │
+      │    │    Con: another cluster to operate; overkill for this use   │
+      │    │                                                             │
+      │    │  Both options write ONE row per (campaign, minute):         │
+      │    │    SUM(cpgCostMicros) + COUNT(impressions) → Cassandra      │
+      │    └─────────────────────────────────────────────────────────────┘
+      │                   │
+      │                   ▼
+      │    ┌──────────────────────────────────────────┐
+      │    │  Cassandra: campaign_impressions          │
+      │    │  Partition: (campaign_id, date)           │◀── ① Budget Controller
+      │    │  Cluster:   minute_bucket (epoch/60)      │       reads from here
+      │    │  Source of truth for billing              │
+      │    │  ~167 writes/sec (10K campaigns/60s)      │
+      │    └──────────────────────────────────────────┘
+      │
+      └──▶ ⑩ return response to user
+               (steps ⑨ and ⑩ happen in parallel — Kafka publish is async)
 
 KEY INVARIANT:
-   Redis = fast pacing gate (AP, ~0.1ms, approx)
-   Kafka → Flink → Cassandra = slow billing truth (eventual, exact)
-   Never block ad serving on the billing path.
+   Hot path (per impression): steps ④ → ⑤ → ⑥ → ⑦ → ⑧ → ⑩  ~1ms total
+   Slow path (billing):       steps ⑨ → Kafka → Consumer → Cassandra  ~60s lag
+   Background loop:           steps ① → ② → ③  every 60 seconds
+   Redis = fast AP gate. Cassandra = slow exact billing truth. Never mix the two.
 
 BREAKING POINT: Stage 2 breaks at ~10M impressions/min on a single campaign.
   A viral ESPN Super Bowl campaign generates 167K INCR ops/sec on one Redis key.
@@ -697,13 +718,13 @@ This is why AP is the correct CAP choice: the reconciliation process is designed
 | **Trade-off Clarity** | ✅ | Three named trade-offs with quantified reasoning: (1) AP over CP — 5% over-delivery (~$720) vs. $400K+ live ad break loss. (2) Kafka async — 0ms ad serve impact vs. 5-20ms synchronous Cassandra path. (3) LongAdder batching — 1,000× Redis load reduction vs. 10s pacing counter lag. Each trade-off names the specific number that forces the decision. |
 | **Scalability** | ✅ | Three-stage evolution with quantified breaking points: Stage 1 → Stage 2 at ~1K impressions/sec (Cassandra write latency blows RTB); Stage 2 → Stage 3 at ~10M impressions/min on one campaign (Redis keyslot CPU saturation at 167K INCR ops/sec). Stage 3 handles any scale via LongAdder + sharded counters. |
 | **Reliability** | ✅ | Kafka 7-day retention enables full billing replay if Flink falls behind. Budget Controller TTL 120s ensures stale limits expire — ad servers fail-open rather than running on stale data indefinitely. Cassandra immutable append-only — billing record cannot be corrupted by a retried Flink write (UPSERT is idempotent). End-of-day reconciliation is the contractual recovery path. |
-| **Communication Clarity** | ✅ | Two-layer problem stated upfront (pacing gate = AP + fast; billing = eventual + exact) — non-technical interviewer can follow the architecture without distributed systems background. CAP theorem presented as a business decision ("blocking live sports beats over-delivery") not just a technical preference. Budget Controller → Redis → Ad Server → Kafka → Flink → Cassandra is a linear story. |
+| **Communication Clarity** | ✅ | Two-layer problem stated upfront (pacing gate = AP + fast; billing = eventual + exact) — non-technical interviewer can follow the architecture without distributed systems background. CAP theorem presented as a business decision ("blocking live sports beats over-delivery") not just a technical preference. Budget Controller → Redis → Ad Server → Kafka → Billing Consumer → Cassandra is a linear story. |
 
 ---
 
 ## Section 15 — 🧾 TL;DR Answer Summary
 
-> "Ad budget pacing is a two-layer problem: a fast AP pacing gate (Redis INCR + per-minute allowance from Budget Controller) and a slow exact billing record (Kafka → Flink → Cassandra). The gate checks `spent_impressions × cpm_micros_per_impression ≥ minute_budget_micros` — note the CPM-to-per-impression conversion or you'll block after 1 impression. At 1.17M impressions/sec, Cassandra cannot absorb synchronous writes — Kafka is fire-and-forget on the hot path. For viral campaigns (ESPN Super Bowl at 10M impressions/min), Redis becomes a hot key — LongAdder batches 10-second counts in JVM and INCRBY-flushes to sharded counters, reducing Redis ops from 1.17M/sec to ~1K/sec. The explicit CAP choice is AP: 5% over-delivery on a $14,400 campaign costs $720 in make-good; blocking a live sports ad break costs $400K+ in lost revenue."
+> "Ad budget pacing is a two-layer problem: a fast AP pacing gate (Redis INCR + per-minute allowance from Budget Controller) and a slow exact billing record (Kafka → Billing Consumer → Cassandra). The gate checks `spent_impressions × cpm_micros_per_impression ≥ minute_budget_micros` — note the CPM-to-per-impression conversion or you'll block after 1 impression. At 1.17M impressions/sec, Cassandra cannot absorb synchronous writes — Kafka is fire-and-forget on the hot path. For viral campaigns (ESPN Super Bowl at 10M impressions/min), Redis becomes a hot key — LongAdder batches 10-second counts in JVM and INCRBY-flushes to sharded counters, reducing Redis ops from 1.17M/sec to ~1K/sec. The explicit CAP choice is AP: 5% over-delivery on a $14,400 campaign costs $720 in make-good; blocking a live sports ad break costs $400K+ in lost revenue."
 
 ---
 

@@ -98,6 +98,29 @@ Gaps identified from DocuSign system design question research — confirmed aske
 
 ---
 
+## Phase 2.7 — Added from Disney R3 Prep (Jul 2026)
+
+Gaps identified while writing `Interview/Disney/r3-solutions/D2-ad-budget-pacing.md`. These are UNIVERSAL patterns; Disney prep just surfaced them first.
+
+> Source: `Interview/Disney/r3-solutions/D2-ad-budget-pacing.md` — billing consumer layer
+
+| # | Concept | What's missing | Priority |
+|---|---|---|---|
+| 1 | **Stream Processing — Kafka Consumer Group as Aggregator** | Note #19 covers Kafka transport (topics, partitions, offsets, consumer groups). It does NOT cover using a consumer group to aggregate events in-memory and batch-write results to a DB. Pattern: `ConcurrentHashMap<key, LongAdder>` accumulator → flush every 60s → Cassandra UPSERT. This is the "Billing Consumer" pattern used in every high-volume event-counting system (ad impressions, ride completions, payment events). | ⭐ High — comes up in any design with high-write billing/analytics |
+| 2 | **Flink vs Simple Consumer Group — when to use which** | When does stream aggregation need a full Flink cluster vs a plain Java consumer service? Decision criteria: (a) exactly-once required (Flink checkpointing) vs at-least-once acceptable (consumer group with idempotent UPSERT), (b) complex windowing or joins needed (Flink) vs simple 1-level aggregation (consumer group), (c) operational overhead acceptable. | Medium — interviewer follow-up question on D2 |
+
+**What to write:**
+Add a subsection to note `19-message-queues-kafka-rabbitmq.md` under a new heading:
+`## 🔧 Kafka Consumer Group as Aggregator (Billing / Analytics Pattern)`
+
+Cover:
+- The ConcurrentHashMap + LongAdder accumulator loop
+- Offset commit AFTER Cassandra write (at-least-once + idempotent UPSERT = safe)
+- When this is enough vs when you need Flink
+- Worked example: 1.17M impressions/sec → consumer group → ~167 Cassandra writes/sec
+
+---
+
 ## Phase 3 — Bonus Concepts (add only if Phase 1-2 are done)
 
 These come up in HLD rounds more than PS, but worth having:
