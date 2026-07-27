@@ -346,6 +346,289 @@ public class ConfigStore {
 
 ---
 
+## 🧭 Coordination Pattern 5 — ExecutorService (Thread Pool)
+
+An **ExecutorService** (a managed pool of reusable worker threads — instead of creating a new `Thread` per task, you submit tasks to the pool and the pool reuses threads) is the standard way to run concurrent work in Java. Creating a new `Thread` per task is expensive and uncontrolled; the pool bounds resource usage.
+
+```java
+// Two creation patterns you'll use in LLD interviews:
+
+// Fixed pool — N threads, excess tasks queue internally
+ExecutorService pool = Executors.newFixedThreadPool(4);
+
+// Single thread — one thread, tasks execute sequentially
+// Use for the "dispatcher thread" pattern (see Job Scheduler)
+ExecutorService dispatcher = Executors.newSingleThreadExecutor();
+```
+
+### Key API
+
+```java
+// submit(Runnable) — fire and forget; returns Future<?> for cancellation
+pool.submit(() -> processJob(job));
+
+// submit(Callable<T>) — fire and get result; blocks on future.get()
+Future<String> result = pool.submit(() -> computeResult());
+String value = result.get();   // blocks until done; throws on exception
+
+// Graceful shutdown: stop accepting new tasks, wait for in-progress to finish
+pool.shutdown();
+
+// Forceful shutdown: interrupt all running threads, drain queue
+pool.shutdownNow();
+```
+
+### 🎨 Visual — Dispatcher Thread + Worker Pool (Job Scheduler Pattern)
+
+```
+  submit(job1, priority=1)  ──▶  PriorityBlockingQueue
+  submit(job2, priority=5)  ──▶  [job1, job2, ...]
+  submit(job3, priority=2)  ──▶
+
+                             single dispatcher thread
+                             calls queue.take() in a loop
+                                         │
+                             ┌───────────▼──────────────────────┐
+                             │        ExecutorService           │
+                             │   (fixed pool of N workers)      │
+                             │                                  │
+                             │  Worker 1: executing job1        │
+                             │  Worker 2: executing job3        │
+                             │  Worker 3: idle                  │
+                             └──────────────────────────────────┘
+
+KEY INVARIANT:
+   One dispatcher serializes the priority queue — always handing the
+   highest-priority available job to the pool. Workers never pull
+   from the queue directly, so priority ordering is preserved.
+```
+
+**Daemon threads:** set `thread.setDaemon(true)` on background threads (like a dispatcher) so the JVM can exit without waiting for them to finish. A non-daemon thread keeps the JVM alive.
+
+```java
+Thread dispatcher = new Thread(this::dispatchLoop, "job-dispatcher");
+// Without setDaemon(true), JVM won't exit until dispatchLoop() returns
+dispatcher.setDaemon(true);
+dispatcher.start();
+```
+
+---
+
+## 🧭 Coordination Pattern 6 — AtomicReference + CAS
+
+`volatile` gives visibility (every thread sees the latest write) but NOT atomicity for compound actions. If you need "check-then-write" to be a single uninterruptible operation, use `AtomicReference.compareAndSet()` (CAS — Compare-And-Swap).
+
+**The problem volatile cannot solve:**
+
+```java
+// ❌ BROKEN — volatile doesn't help here
+// Two threads call cancel() and dispatch() simultaneously
+private volatile JobStatus status = JobStatus.PENDING;
+
+// Thread A (cancel): reads PENDING → writes CANCELLED
+// Thread B (dispatch): reads PENDING → writes RUNNING
+// Both succeed → job is CANCELLED AND RUNNING at the same time
+public void cancel() {
+    if (status == JobStatus.PENDING) {   // Thread A checks: PENDING ✓
+        status = JobStatus.CANCELLED;    // Thread B also already checked: PENDING ✓
+    }                                    // both writes succeed — corrupted state
+}
+```
+
+**The fix — AtomicReference CAS:**
+
+```java
+// ✅ FIX — AtomicReference makes check + write one atomic operation
+private final AtomicReference<JobStatus> status =
+    new AtomicReference<>(JobStatus.PENDING);
+
+// Returns true only if status was PENDING at the exact moment of the swap
+// Returns false if another thread already changed it
+public boolean cancel() {
+    return status.compareAndSet(JobStatus.PENDING, JobStatus.CANCELLED);
+}
+
+public boolean startRunning() {
+    return status.compareAndSet(JobStatus.PENDING, JobStatus.RUNNING);
+}
+```
+
+### 🎨 Visual — CAS Race Resolution
+
+```
+  Memory: [PENDING]
+
+  Thread A: cancel()                    Thread B: dispatch()
+  casStatus(PENDING → CANCELLED)        casStatus(PENDING → RUNNING)
+         │                                       │
+         └─────────────┬─────────────────────────┘
+                       │ both arrive simultaneously
+                       │
+               CPU arbitrates: one wins, one loses
+                       │
+         ┌─────────────┴──────────────┐
+         │ Thread A wins              │ Thread B loses
+         │ Memory: [CANCELLED]        │ reads [CANCELLED] ≠ PENDING
+         │ returns true               │ returns false → no-op
+         └────────────────────────────┘
+
+KEY INVARIANT:
+   Exactly one CAS winner per transition.
+   The loser sees false and takes no action.
+   No lock needed — the CPU's atomic exchange instruction handles it.
+```
+
+**When to use AtomicReference vs synchronized:**
+
+| Scenario | Choose |
+|---|---|
+| Single-field state machine (PENDING → RUNNING) | `AtomicReference` + CAS |
+| Multiple fields must change together atomically | `synchronized` block |
+| Simple counter increment | `AtomicInteger.incrementAndGet()` |
+| Complex invariant across 3+ fields | `synchronized` or `ReentrantLock` |
+
+---
+
+## 🧭 Coordination Pattern 7 — CopyOnWriteArrayList
+
+A **CopyOnWriteArrayList** (a thread-safe list where every write operation — add, remove, set — creates a brand-new copy of the underlying array, so readers always iterate a stable snapshot) is the right choice when a list is read (iterated) far more often than it is written.
+
+**The problem with `ArrayList + synchronized`:**
+
+```java
+// ❌ BROKEN — ConcurrentModificationException
+// Thread A (publish): iterating the subscriber list
+// Thread B (subscribe): adding a new subscriber while A iterates
+List<Subscriber> subs = Collections.synchronizedList(new ArrayList<>());
+
+// If you forget the synchronized(subs) wrapper on iteration, CME is thrown
+for (Subscriber sub : subs) {   // ← ConcurrentModificationException if B adds during this
+    sub.onMessage(message);
+}
+```
+
+```java
+// ✅ FIX — CopyOnWriteArrayList: iteration always sees a stable snapshot
+List<Subscriber> subs = new CopyOnWriteArrayList<>();
+
+// Thread A: iterates safely — sees [S1, S2, S3] snapshot from when iteration started
+for (Subscriber sub : subs) {
+    sub.onMessage(message);
+}
+
+// Thread B: subs.add(S4) creates new array [S1, S2, S3, S4] atomically
+// Thread A's iteration is unaffected — it reads the old snapshot
+// S4 receives the NEXT message, not the current one
+```
+
+### 🎨 Visual — Snapshot Semantics
+
+```
+  Time 0:  array reference → [S1, S2, S3]
+
+  Thread A starts iterating:
+    snapshot = current array → [S1, S2, S3]   ← locked in at iteration start
+
+  Thread B calls add(S4):
+    new array = copy([S1, S2, S3]) + S4 = [S1, S2, S3, S4]
+    atomically swaps array reference
+
+  Thread A continues iterating [S1, S2, S3]:
+    S1.onMessage() → S2.onMessage() → S3.onMessage()
+    NO ConcurrentModificationException
+
+  Time 1: array reference → [S1, S2, S3, S4]
+    Next publish() sees [S1, S2, S3, S4] — S4 receives future messages
+
+KEY INVARIANT:
+   Write = new array copy (O(n) cost, rare).
+   Read/iterate = lock-free snapshot (O(1) cost, frequent).
+   Subscriber added during publish misses the current message — correct semantics.
+```
+
+**When to use vs when NOT to:**
+
+| Use `CopyOnWriteArrayList` when | Use `ArrayList + synchronized` when |
+|---|---|
+| Writes are rare (subscribe at startup) | Writes are frequent (constantly changing list) |
+| Reads are very frequent (publish per event) | Read/write ratio is balanced |
+| Iteration must be lock-free | O(n) write cost is unacceptable |
+
+---
+
+## 🧭 Coordination Pattern 8 — CountDownLatch / CyclicBarrier
+
+### CountDownLatch — wait for N tasks to finish
+
+A **CountDownLatch** (a one-shot gate where a thread waits at `await()` until N other threads have each called `countDown()` once — like a starter pistol that fires only after all runners are in position) is used for "fan-out then wait" scenarios.
+
+```java
+// Wait for 3 services to initialize before accepting traffic
+CountDownLatch readyLatch = new CountDownLatch(3);
+
+// Each service thread calls this when ready
+public void initService(String name) {
+    // ... initialization work ...
+    readyLatch.countDown();   // counter: 3 → 2 → 1 → 0
+}
+
+// Main thread blocks here until all 3 services are ready
+public void start() throws InterruptedException {
+    readyLatch.await();   // blocks until counter reaches 0
+    // now safe to accept traffic
+}
+```
+
+**Key property:** `CountDownLatch` is one-shot — once the counter reaches 0, `await()` returns immediately for all future callers. You cannot reset it.
+
+### CyclicBarrier — all threads wait for each other at a checkpoint
+
+A **CyclicBarrier** (a reusable meeting point where N threads each call `await()` and all are blocked until all N have arrived — like a group of hikers waiting at each waypoint before moving together) is used for parallel phases where all threads must synchronize before the next phase.
+
+```java
+// 4 worker threads must all finish Phase 1 before any starts Phase 2
+CyclicBarrier barrier = new CyclicBarrier(4);
+
+// Each worker thread:
+public void runWorker(int workerId) throws Exception {
+    doPhase1Work(workerId);
+    barrier.await();   // blocks until all 4 workers reach this line
+    doPhase2Work(workerId);   // all 4 start Phase 2 at the same time
+}
+```
+
+**Key property:** `CyclicBarrier` is reusable — after all N threads pass a barrier, it resets automatically for the next phase.
+
+### 🎨 Visual — Latch vs Barrier
+
+```
+  COUNTDOWNLATCH (one-shot)          CYCLICBARRIER (reusable)
+
+  Main   W1   W2   W3                W1    W2    W3    W4
+  ──── ────  ────  ────               ────  ────  ────  ────
+  await()                            phase1 phase1 phase1 phase1
+  │     init  init  init                │     │     │     │
+  │     │     │     │                   │     │     │     │
+  │   count count count              barrier.await() ×4
+  │   Down() Down() Down()              │     │     │     │
+  │     ▼     ▼     ▼                   └─────┴─────┴─────┘
+  ▼   counter reaches 0                       │ all arrived
+  unblocks                              all released together
+                                       phase2 phase2 phase2 phase2
+
+KEY INVARIANT:
+   Latch: M waiters, N workers; workers count down independently.
+   Barrier: all N threads are both workers AND waiters — they sync with each other.
+```
+
+| Use `CountDownLatch` when | Use `CyclicBarrier` when |
+|---|---|
+| One thread waits for N workers | N threads wait for each other |
+| One-shot (init, startup) | Repeating phases (parallel map-reduce) |
+| Workers don't need to sync with each other | All participants must reach checkpoint together |
+
+---
+
 ## 🧾 Interview Answer Templates
 
 ### "How do you handle concurrent seat booking?"
@@ -360,13 +643,31 @@ public class ConfigStore {
 
 > *"Classic read-modify-write race. Both read 1, both decrement to 0, both assign 0 — but two spots were allocated. Fix: `AtomicInteger` with `decrementAndGet()` — if it goes negative, increment back and return failure. Or synchronize the entire `parkVehicle()` method. I prefer the `AtomicInteger` approach for a single counter because it's lock-free and higher throughput."*
 
+### "How does your cancel() prevent a job from being both cancelled and executed?"
+
+> *"Both cancel() and the dispatcher compete to transition the job from PENDING to their target state. I use `AtomicReference<JobStatus>.compareAndSet(PENDING, target)`. CAS is atomic — the CPU handles the read-compare-write as one uninterruptible instruction. Exactly one caller wins; the other sees false and takes no action. No lock is needed because there's only one field transitioning and no multi-field invariant to maintain."*
+
+### "Why CopyOnWriteArrayList for subscribers instead of synchronized?"
+
+> *"publish() iterates the subscriber list on every event — potentially thousands of times per second. If I use ArrayList + synchronized, every publish() call acquires the lock, creating contention under high event rate. CopyOnWriteArrayList makes iteration completely lock-free — publish() reads a stable snapshot with no lock. The tradeoff is that subscribe() copies the array on write, which is O(n). Since subscribes happen once at startup but publish() runs constantly, the read-heavy tradeoff is correct."*
+
 ---
 
-## 🧾 TL;DR — The Two Rules That Cover 80% of Interview Concurrency Questions
+## 🧾 TL;DR — The Rules That Cover 90% of Interview Concurrency Questions
 
 > **Rule 1 — Identify shared mutable state first.** Ask: "what fields does more than one thread read AND write?" Those fields are the danger zones. Everything else is safe.
 >
 > **Rule 2 — Lock the minimum scope that covers the danger zone.** A global `synchronized` on every method is correct but kills throughput. Per-object locking (one lock per seat, not one for the whole booking service) scales much better. Atomics for single values, synchronized for compound actions.
+>
+> **Rule 3 — Match the tool to the access pattern.**
+> - Single-value state machine → `AtomicReference` + CAS
+> - Read-heavy list (publish/subscribe) → `CopyOnWriteArrayList`
+> - Producer-consumer → `BlockingQueue`
+> - Thread pool + task queue → `ExecutorService`
+> - Wait for N tasks to finish → `CountDownLatch`
+> - N threads sync at a checkpoint → `CyclicBarrier`
+> - Resource pool limit → `Semaphore`
+> - Read-heavy map → `ConcurrentHashMap`
 
 ---
 
@@ -375,3 +676,4 @@ public class ConfigStore {
 | Date | Change |
 |---|---|
 | June 2026 | File created. Covers race conditions, visibility, deadlock, wait/notify, BlockingQueue, Semaphore, ReadWriteLock — the depth that java-building-blocks-for-lld.md intentionally omits. |
+| Jul 2026 | **Part 2 added** — 4 new coordination patterns: ExecutorService/thread pool (dispatcher+worker pattern), AtomicReference+CAS (single-field state machine), CopyOnWriteArrayList (snapshot semantics for pub-sub), CountDownLatch/CyclicBarrier (multi-phase coordination). Triggered by Job Scheduler and Pub-Sub notes using these primitives without coverage in this file. TL;DR Rule 3 (match tool to access pattern) added. 2 new interview answer templates added (cancel() CAS race, CopyOnWriteArrayList vs synchronized). |

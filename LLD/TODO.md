@@ -42,6 +42,8 @@ Two modes — Kapil picks per session:
 | 10 | Problem | Vending Machine | `Problems/vending-machine/` | [ ] Not started | Medium |
 | 11 | Problem | LRU Cache | `Problems/lru-cache/` | 📖 Canonical — not self-attempted | High — technical LLD |
 | 12 | Problem | Rate Limiter (LLD) | `Problems/rate-limiter/` | 📖 Canonical — not self-attempted | ⭐ Critical — technical LLD |
+| 13 | Problem | Job Scheduler | `Problems/job-scheduler/` | 📖 Canonical — not self-attempted | High — TrueFoundry LLD (ML job scheduling) |
+| 14 | Problem | Pub-Sub / EventBus | `Problems/pubsub/` | 📖 Canonical — not self-attempted | High — TrueFoundry LLD (event-driven architecture) |
 
 ---
 
@@ -118,4 +120,5 @@ These are not in the interleaved study order — they're prerequisite reading. A
 | June 2026 | Updated: marked 01-factory-strategy, parking-lot, observer, state as ✅ Done. Tictactoe added as bonus done. BookMyShow marked as 🔜 NEXT. Practice workflow section added — two modes: "You write first" vs "I write first" (preferred). BookMyShow resources-ready checklist added. resources.md added as a standard reference. |
 | June 2026 | **Command (03) and Builder (04) marked Done.** 6 foundation files created from hellointerview gap analysis: oop-concepts, design-principles, concurrency-deep-dive, singleton. Foundation Files section added to TODO. |
 | Jul 9, 2026 | **3 canonical notes created** (single-MD format — all classes inline): BookMyShow, Rate Limiter, LRU Cache. Status is 📖 Canonical (not self-attempted). All Java in one MD file per problem — separate .java files removed. |
+| Jul 27, 2026 | **2 canonical notes created** — Job Scheduler (`Problems/job-scheduler/`) and Pub-Sub EventBus (`Problems/pubsub/`). TrueFoundry LLD prep. Job Scheduler: PriorityBlockingQueue + dispatcher thread + ExecutorService + AtomicReference CAS for cancel safety. Pub-Sub: ConcurrentHashMap + CopyOnWriteArrayList + sync/async dispatch modes. |
 | Jul 11, 2026 | **Interview/ folder + ebay-mts1-lld.md created.** Company-specific battle file section added to TODO. Composite pattern gap noted for Phase 2. |
