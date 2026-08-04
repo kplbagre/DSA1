@@ -11,6 +11,54 @@
 
 ---
 
+## 📋 TABLE OF CONTENTS
+
+**🔍 Category 1 — Debugging & Production Incidents**
+- [Q1 — Walk me through debugging a production issue you've never seen](#q1-walk-me-through-how-you-debug-a-production-issue-youve-never-seen-before)
+- [Q2 — A bug that was extremely hard to reproduce](#q2-describe-a-time-you-found-a-bug-that-was-extremely-hard-to-reproduce)
+- [Q3 — How do you prevent a production incident from repeating?](#q3-how-do-you-make-sure-a-production-incident-doesnt-repeat)
+
+**⚙️ Category 2 — Concurrency and Multithreading**
+- [Q4 — Walk me through your threading model](#q4-how-does-your-system-handle-concurrency-walk-me-through-the-threading-model)
+- [Q5 — What's a race condition? Have you dealt with one?](#q5-whats-a-race-condition-have-you-dealt-with-one)
+- [Q6 — Callable vs Runnable vs CompletableFuture](#q6-what-is-the-difference-between-callable-vs-runnable-and-when-do-you-use-completablefuture)
+
+**🏗️ Category 3 — System Design Concepts**
+- [Q7 — Design a system that needs to be fast AND correct for inventory](#q7-how-would-you-design-a-system-that-needs-to-be-both-fast-and-correct-for-inventory)
+- [Q8 — How do you design for failure?](#q8-how-do-you-design-for-failure)
+- [Q9 — Distributed system consistency](#q9-how-do-you-handle-distributed-system-consistency)
+
+**✅ Category 4 — Code Quality, Design Patterns, Technical Debt**
+- [Q10 — Code review approach](#q10-how-do-you-approach-code-review-what-do-you-look-for)
+- [Q11 — Managing technical debt](#q11-how-do-you-manage-technical-debt)
+- [Q12 — Design pattern applied in production](#q12-walk-me-through-a-design-pattern-youve-applied-in-production)
+
+**📊 Category 5 — Observability and Production Mindset**
+- [Q13 — How do you make a system observable?](#q13-how-do-you-make-a-system-observable)
+- [Q14 — What metrics do you watch for system health?](#q14-what-metrics-do-you-watch-to-know-your-system-is-healthy)
+- [Q23 — How does your application emit logs? (system + application)](#q23-how-does-your-application-emit-logs-walk-me-through-both-system-logs-and-application-logs)
+- [Q24 — What dashboards do you use and how do they get data?](#q24-what-kind-of-dashboards-do-you-use-and-how-do-they-get-their-data)
+
+**🔌 Category 6 — API Design and Contracts**
+- [Q15 — API design that won't break consumers](#q15-how-do-you-design-an-api-that-wont-break-consumers-when-you-add-fields)
+- [Q16 — Backward compatibility in event-driven systems](#q16-whats-your-approach-to-backward-compatibility-in-event-driven-systems)
+
+**☕ Category 7 — Java-Specific Depth**
+- [Q17 — synchronized vs ReentrantLock vs ConcurrentHashMap](#q17-what-is-the-difference-between-synchronized-reentrantlock-and-concurrenthashmap)
+- [Q18 — volatile and when to use it](#q18-explain-volatile-and-when-to-use-it)
+
+**⚖️ Category 8 — Technical Trade-offs**
+- [Q19 — A technical trade-off you made and why](#q19-describe-a-technical-trade-off-you-made-and-why)
+- [Q20 — CCM config flag vs. just making a change](#q20-how-do-you-decide-between-adding-a-ccm-config-flag-vs-just-making-a-change)
+
+**📨 Category 9 — Kafka Consumer Design**
+- [Q21 — Kafka consumer pipeline for reliability](#q21-how-do-you-design-a-kafka-consumer-pipeline-to-be-reliable-in-production)
+
+**🧪 Category 10 — Testing Strategy**
+- [Q22 — Testing concurrent / distributed code — what slips through?](#q22-how-do-you-test-code-that-has-concurrent-or-distributed-behavior-what-slips-through)
+
+---
+
 ## CATEGORY 1 — Debugging & Production Incidents
 
 ### Q1: Walk me through how you debug a production issue you've never seen before.

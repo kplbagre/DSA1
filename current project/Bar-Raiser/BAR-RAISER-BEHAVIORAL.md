@@ -25,6 +25,58 @@
 
 ---
 
+## 📋 TABLE OF CONTENTS
+
+**🏠 Category 1 — Ownership**
+- [Q1 — Took ownership of something not strictly your responsibility](#q1-tell-me-about-a-time-you-took-ownership-of-something-that-wasnt-strictly-your-responsibility)
+- [Q2 — Cross-team project you drove end-to-end](#q2-describe-a-project-you-drove-end-to-end-where-you-had-to-coordinate-across-multiple-teams)
+
+**💬 Category 2 — Disagreement / Conflict**
+- [Q3 — Disagreed with a teammate or tech lead](#q3-tell-me-about-a-time-you-disagreed-with-a-teammate-or-tech-lead-on-a-technical-approach)
+- [Q4 — Pushed back on product or management](#q4-describe-a-time-you-had-to-push-back-on-a-request-from-product-or-management)
+
+**❌ Category 3 — Failure and Learning**
+- [Q5 — A technical mistake you made](#q5-tell-me-about-a-technical-mistake-you-made-what-happened-and-what-did-you-learn)
+- [Q6 — Investigation that led to a wrong conclusion](#q6-describe-a-time-your-investigation-led-you-to-a-conclusion-that-turned-out-to-be-wrong)
+
+**❓ Category 4 — Ambiguity**
+- [Q7 — Decision without complete information](#q7-tell-me-about-a-time-you-had-to-make-a-decision-without-complete-information)
+- [Q8 — Working when requirements are unclear or changing](#q8-how-do-you-work-when-requirements-are-unclear-or-changing)
+
+**🤝 Category 5 — Influence Without Authority**
+- [Q9 — Influenced a decision you didn't have authority to make](#q9-tell-me-about-a-time-you-influenced-a-decision-you-didnt-have-authority-to-make)
+- [Q10 — Got buy-in from someone resistant to change](#q10-describe-a-time-you-had-to-get-buy-in-from-someone-who-was-resistant-to-a-change)
+
+**👥 Category 6 — Customer Impact**
+- [Q11 — Work that had direct impact on customers](#q11-tell-me-about-a-time-your-work-had-a-direct-impact-on-customers)
+- [Q12 — Raised the quality bar on your team](#q12-tell-me-about-a-time-you-raised-the-quality-bar-on-your-team)
+
+**🎯 Category 7 — Prioritization**
+- [Q13 — Prioritized between multiple important things](#q13-tell-me-about-a-time-you-had-to-prioritize-between-multiple-important-things)
+- [Q14 — When is technical debt worth fixing now vs. later?](#q14-how-do-you-decide-when-a-piece-of-technical-debt-is-worth-fixing-now-vs-later)
+
+**📈 Category 8 — Data-Driven**
+- [Q15 — Changed your approach based on data or feedback](#q15-tell-me-about-a-time-you-changed-your-approach-based-on-data-or-feedback)
+
+**🔥 Category 9 — Situational Judgment / Pressure Scenarios**
+- [S1 — Testing finds feature incomplete just before delivery](#s1--testing-finds-the-feature-is-incomplete-or-buggy-just-before-delivery)
+- [S2 — Critical bug found just before big deployment](#s2--you-discover-a-critical-bug-in-your-own-code-just-before-a-big-deployment)
+- [S3 — New requirement days before deployment](#s3--days-before-deployment-business-brings-a-significant-new-requirement)
+- [S4 — Manager brings higher-priority task mid-implementation](#s4--manager-brings-a-higher-priority-task-while-youre-mid-implementation)
+- [S5 — Asked to cut testing to hit a deadline](#s5--asked-to-cut-testing-or-skip-code-review-to-hit-a-deadline)
+- [S6 — Mid-sprint, estimate was badly off](#s6--mid-sprint-you-realize-your-estimate-was-badly-off--task-is-2x-the-work)
+- [S7 — Post-deploy metrics degraded — roll back or watch?](#s7--post-deploy-metrics-look-degraded-but-not-catastrophically--roll-back-or-watch)
+- [S8 — Blocked by another team's late dependency](#s8--youre-blocked-dependency-from-another-team-is-late-your-work-cant-proceed)
+- [S9 — Leading a project, teammate consistently falling behind](#s9--youre-leading-a-project-and-a-teammate-is-consistently-falling-behind)
+- [S10 — Teammate's code quality repeatedly below bar](#s10--a-teammates-code-quality-is-repeatedly-below-bar--same-issues-in-every-pr)
+- [S11 — On-call at 2am, production down, no idea why](#s11--youre-on-call-at-2am-production-is-down-you-have-no-idea-why)
+- [S12 — Manager gives critical feedback you didn't expect](#s12--manager-gives-you-critical-feedback-you-didnt-expect)
+- [S13 — Two stakeholders want conflicting things from your feature](#s13--two-stakeholders-want-conflicting-things-from-your-featureapi)
+- [S14 — Spot a problem outside your domain — raise it or not?](#s14--you-spot-a-significant-problem-clearly-outside-your-domain--raise-it-or-not)
+- [S15 — Asked to take on something much larger than before](#s15--youre-asked-to-take-on-something-significantly-larger-than-youve-done-before)
+
+---
+
 ## HOW BAR RAISERS PROBE — Know This Before Reading Answers
 
 After your first answer, they will ask:
