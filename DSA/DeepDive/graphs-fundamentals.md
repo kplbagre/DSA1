@@ -4443,39 +4443,128 @@ public int kruskalMST(int V, int[][] edges) {
 <a id="dsu"></a>
 ## 🔗 Disjoint Set Union (DSU / Union-Find) [Striver G-46 through G-53] 🔴 *Advanced*
 
-> **What it is:** a data structure that efficiently tracks **set membership** and supports two operations:
-> - `find(x)` — return the representative of the set containing `x`
-> - `union(x, y)` — merge the sets containing `x` and `y`
+### 🧠 What is DSU, from scratch?
+
+**The problem it solves:**
+
+In a graph, the most common question is: "Are node A and node B connected — can you travel from A to B?"
+
+For a fully-built graph, BFS or DFS answers this in O(V+E). But imagine the graph is being **built one edge at a time**, and after every added edge you need to answer "are these two nodes now in the same component?" Re-running BFS/DFS from scratch each time would be O((V+E) × Q) for Q queries — far too slow.
+
+DSU (Disjoint Set Union — also called **Union-Find**) is specifically designed for this pattern:
+- You start with N nodes and NO edges — each node is its own disconnected **component** (a connected subgraph, i.e., a group of nodes reachable from one another).
+- You add edges one by one (`union`).
+- After any edge addition, you can ask "are X and Y connected?" (`find`) in nearly O(1).
+
+**The core idea — partition into disjoint sets:**
+
+DSU maintains a **partition** (a complete grouping with no overlaps) of all nodes into **disjoint sets** (non-overlapping groups — "disjoint" means no node belongs to two groups simultaneously), where each group = one connected component. Two nodes are connected if and only if they belong to the same set.
+
+Every set has a **representative** (a chosen "spokesperson" node) — the **root** of the group. Two nodes are in the same component if and only if they have the same representative.
+
+**How it stores this — the `parent[]` array:**
+
+DSU represents each set as a **tree** (nodes connected in a hierarchy). Every node has a parent pointer. The root of each tree is its own parent (self-loop: `parent[root] = root`). All nodes in the same tree = same set = same component.
+
+```
+parent[i] = i         → i is a root (its own representative)
+parent[i] = j (j≠i)  → i's parent is j; follow the chain up to find the root
+```
+
+The two operations:
+
+- **`find(x)`** — follow `parent` pointers up from x until you reach a node whose parent is itself. That root = the representative of x's component.
+- **`union(x, y)`** — call `find(x)` and `find(y)`. If they return different roots, make one root point to the other — now both subtrees share one root = one component.
+
+**What is `rank`? (This is the part that trips everyone up.)**
+
+When merging two trees with `union`, you pick one root to be the new parent of the other. If you always attach a **tall tree under a short one**, the combined tree grows tall quickly → future `find` calls walk a long path → slow.
+
+`rank[i]` = an **upper bound on the HEIGHT** (maximum depth) of the tree rooted at node `i`.
+
+> **`rank` is TREE HEIGHT — it has nothing to do with the node's value or ID.**
+>
+> `rank[2] = 1` means "the tree rooted at node 2 has height at most 1."
+> It does NOT mean "node 2 is worth 2" or "node 3 has rank 3."
+
+**Union by rank rule:** always attach the shorter tree (lower rank root) under the taller tree (higher rank root). If equal ranks, pick either — and bump the winner's rank by 1 because the combined tree is now one level taller.
+
+**Critical: rank only matters when the node IS a root.** Once a node stops being a root (its `parent` was changed to point elsewhere), its rank is dead weight — it is **never read again** in the union-by-rank logic. This is why `rank[3]` can stay `0` even after node 3 gets merged under node 2.
+
+---
 
 ### 🎨 Visual — DSU as a Forest of Up-Pointing Trees
 
 ```
-Each set is a tree. The root represents the set.
-parent[root] = root (self-loop semantically).
+Each set is a tree. The root of the tree = representative of the set.
+parent[root] = root (the root is its own parent — a self-loop as a sentinel).
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUICK RANK REFERENCE — read once, then trace below:
 
-INITIAL — 5 singleton sets:
+  rank[i] = UPPER BOUND ON HEIGHT of the tree rooted at i.
+  rank[i] starts at 0 for every node (a single node has height 0).
+  rank[i] increases ONLY when two trees of equal rank merge.
+  rank[i] ONLY MATTERS when i IS a root.
+  The moment a node stops being a root, its rank is dead weight —
+  it will never be read again in the union-by-rank logic.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+INITIAL — 5 singleton sets, 0 edges:
 
   parent: [0, 1, 2, 3, 4]                  (0)  (1)  (2)  (3)  (4)
   rank:   [0, 0, 0, 0, 0]                   ↑    ↑    ↑    ↑    ↑
                                             └────each is its own root
 
 
-AFTER union(0, 1) — attach lower-rank under higher-rank.
-Both have rank 0, so we pick a root and bump its rank:
+─────────────────────────────────────────────────────────────────
+AFTER union(0, 1):
+  Step 1: find(0) → root=0, rank[0]=0
+  Step 2: find(1) → root=1, rank[1]=0
+  Step 3: equal ranks → pick 0 as new root, attach 1 under 0
+  Step 4: parent[1] = 0
+  Step 5: rank[0]++ → 1   (tree at 0 now has height 1: root=0, child=1)
+          rank[1] stays 0  ← 1 is no longer a root; its rank is irrelevant
 
   parent: [0, 0, 2, 3, 4]                       (0)   (2)  (3)  (4)
-  rank:   [1, 0, 0, 0, 0]                       /
-                                              (1)
+  rank:   [1, 0, 0, 0, 0]                       ↑
+                                               / ← height 1
+                                             (1)
 
+
+─────────────────────────────────────────────────────────────────
 AFTER union(2, 3):
+  Step 1: find(2) → root=2, rank[2]=0
+  Step 2: find(3) → root=3, rank[3]=0
+  Step 3: equal ranks → pick 2 as new root, attach 3 under 2
+  Step 4: parent[3] = 2
+  Step 5: rank[2]++ → 1   (tree at 2 now has height 1: root=2, child=3)
+          rank[3] stays 0  ← 3 is no longer a root; its rank is irrelevant
 
   parent: [0, 0, 2, 2, 4]                       (0)   (2)  (4)
-  rank:   [1, 0, 1, 0, 0]                       /     /
-                                              (1)   (3)
+  rank:   [1, 0, 1, 0, 0]                       /     ↑
+                                             (1)     / ← height 1
+                                                   (3)
 
-AFTER union(1, 3) — find(1)=0, find(3)=2. Both have rank 1.
-Attach 2 under 0, bump rank of 0:
+  ◀ WHY rank[2] = 1 and NOT 3:
+    rank is TREE HEIGHT, not the node's ID or value.
+    Before the union: tree at 2 had height 0 (just node 2 alone).
+    After the union:  tree at 2 has height 1 (root=2 with child=3 below it).
+    rank[3] = 0 doesn't mean "the number 3"; it means node 3's subtree
+    has height 0 — it's a leaf. But since 3 is no longer a root, it
+    will never influence any future union decision anyway.
+
+
+─────────────────────────────────────────────────────────────────
+AFTER union(1, 3):
+  Step 1: find(1) → parent[1]=0, parent[0]=0 → root=0, rank[0]=1
+  Step 2: find(3) → parent[3]=2, parent[2]=2 → root=2, rank[2]=1
+  Step 3: equal ranks (both 1) → pick 0 as new root, attach 2 under 0
+  Step 4: parent[2] = 0   ← the ENTIRE subtree under 2 (which includes 3)
+                              is now under 0. Node 3 didn't move in the
+                              parent[] array — only parent[2] changed.
+  Step 5: rank[0]++ → 2   (tree at 0 now has height 2: 0→2→3 is longest path)
+          rank[2] stays 1  ← 2 is no longer the root; its rank is not read again
 
   parent: [0, 0, 0, 2, 4]                       (0)            (4)
   rank:   [2, 0, 1, 0, 0]                      / \
@@ -4483,7 +4572,14 @@ Attach 2 under 0, bump rank of 0:
                                                   │
                                                  (3)
 
-  find(3) walks: 3 → 2 → 0     (depth 2)
+  find(3) walks: parent[3]=2 → parent[2]=0 → parent[0]=0 → root=0
+                 depth = 2, matches rank[0] = 2 ✓
+
+KEY INVARIANT:
+  rank is TREE HEIGHT, not node value.
+  rank[i] only matters (and is only valid to read) while i is a root.
+  Once a node loses root status, its rank is frozen dead weight.
+  Ranks increase ONLY on ties → this keeps max tree height at O(log N).
 ```
 
 ### 🎨 Visual — Path Compression in Action
@@ -6207,6 +6303,7 @@ private void dfs(int u, List<List<Integer>> adj, boolean[] visited) {
 
 | Date | Change |
 | --- | --- |
+| Aug 2026 | **DSU section — from-scratch theoretical intro + rank confusion fix.** Replaced the terse DSU blockquote with a full from-zero theoretical section covering: the connectivity problem DSU solves vs BFS/DFS, the partition-into-disjoint-sets mental model, how `parent[]` represents a forest of trees, what `find` and `union` do conceptually, and — critically — that `rank` = UPPER BOUND ON TREE HEIGHT (not node ID, not sum of merged nodes). Added "QUICK RANK REFERENCE" header inside the visual. Added step-by-step traces for `union(0,1)`, `union(2,3)`, and `union(1,3)` with explicit reasoning about why `rank[2]=1` (tree height after merge) not `3` (node value), and why `rank[3]` stays `0` but is irrelevant once node 3 loses root status. |
 | July 2026 | **Structural restructure (3 passes).** Pass A: deleted stale 17-day "Where to Go Next" section (74 lines). Pass B: (1) swapped Building-the-Graph before Connected Components for logical order; (2) added Grid as 3rd representation type with direction-array code and moved "grid IS a graph" visual; (3) added Grid BFS 4-line diff and Grid DFS 4-line diff side-by-side blocks inside BFS/DFS sections; (4) moved Style Habits from end-of-file to immediately after DFS section; (5) renamed Grid Templates section header. Pass C: merged Common Bugs section into Gotchas (deleted 10-entry duplicate, added unique Gotcha 13 — DFS without visited); added clickable section index at top of file. Net change: −74 lines stale content, +313 lines structured additions. |
 | May 2026 | Initial version. Curriculum aligned to Striver's Graph Series (56 videos, G-1 through G-56). Tiered practice plan (5 tiers) with explicit difficulty tags. Code rewritten in project style. Decision frameworks (5-question funnel + keyword signals) added as this doc's pedagogical contribution. |
 | May 2026 | **Visual reference pass.** Added 9 ASCII diagram blocks: graph types reference (undirected/directed/weighted/cyclic/DAG/tree/connected/disconnected/complete, self-loop, parallel edges); adjacency list vs matrix side-by-side; connected-components diagram; BFS level-by-level trace; DFS recursion-stack trace + BFS-vs-DFS comparison; undirected cycle detection (parent edge vs back edge); bipartite vs odd-cycle counter-example; directed cycle white/gray/black coloring; Kahn's topological sort step-by-step animation; Dijkstra's relaxation trace (with stale-entry handling); Prim vs Kruskal on the same graph; DSU forest visualization (initial → unions → path compression flattening). |
