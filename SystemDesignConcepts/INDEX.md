@@ -1,6 +1,6 @@
 # SystemDesignConcepts — Master Index
 
-> **60 tracked concept notes · 4 advanced companions · all ✅ Done**
+> **61 tracked concept notes · 4 advanced companions · all ✅ Done**
 >
 > This file is the single source of truth for what exists. Use `Ctrl+F` / `Cmd+F` to find by keyword.
 > For "where do I start," see `START-HERE.md` (coming next).
@@ -71,6 +71,7 @@
 | 56 | [Availability (nines table, serial dependency math, parallel redundancy formula, active-passive vs active-active, sync vs async replication, liveness/readiness probes)](./Core-Architecture/Resilience-and-Fault-Tolerance/56-availability.md) | Core · Resilience | — |
 | 57 | [Single Point of Failure — SPOF (6 SPOF categories, identification methodology, redundancy patterns, external dependency fallback, chaos engineering)](./Core-Architecture/Resilience-and-Fault-Tolerance/57-spof.md) | Core · Resilience | — |
 | 58 | [Stateful vs Stateless (sticky sessions · Redis session store · JWT comparison, pod failure impact, hybrid Netflix model, JWT revocation problem)](./Core-Architecture/Distributed-Systems/58-stateful-stateless.md) | Core · Distributed | — |
+| 60 | [Kafka Internals (log compaction, throughput architecture, retention-as-TTL, topic design, Tableflow → Iceberg)](./Core-Architecture/Service-Communication/60-kafka-internals.md) | Core · Communication | — |
 
 ---
 
@@ -85,3 +86,4 @@
 | Jul 9, 2026 | 1 new concept file: `53-webhooks.md` (HMAC-SHA256 verification, idempotency key, replay prevention, async processing, DocuSign Connect context). Pub/Sub Pattern section added to `19-message-queues-kafka-rabbitmq.md`. Total: 55 tracked notes. |
 | Jul 9, 2026 | 1 new foundation file: `54-redis-internals.md` (single-threaded event loop, five atomic weapons: DECR / SET NX EX / Lua / EXPIRE / ZADD, RDB vs AOF with fsync modes, eviction policies, problem→weapon mapping for 8 prepared problems). Total: 56 tracked notes. |
 | Jul 10, 2026 | 4 new gap-closure notes created from AlgoMaster analysis: `55-scalability.md` (7 scaling levers, bottleneck→lever map), `56-availability.md` (nines table, serial/parallel math, active-passive/active-active, sync/async replication), `57-spof.md` (6 SPOF categories, identification methodology, external dependency fallback), `58-stateful-stateless.md` (sticky sessions vs Redis session vs JWT, pod failure impact, JWT revocation). Total: 60 tracked notes. |
+| Aug 2026 | 1 new Confluent-prep note: `60-kafka-internals.md` (log compaction mechanics, at-least-one guarantee, tombstone lifecycle, throughput architecture — sequential I/O + page cache + zero-copy, retention-as-TTL, topic/partition design, Tableflow → Iceberg materialization). Note #59 exists on disk but is not yet registered. Total: 61 tracked notes. |
