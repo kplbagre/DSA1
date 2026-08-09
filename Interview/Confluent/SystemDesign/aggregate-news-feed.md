@@ -102,6 +102,45 @@
 | **Subscription** | A user-to-source relationship — client-held state that drives feed query; append-only (delete is a soft-delete) |
 | **FeedEntry** | A denormalized article record pre-ranked for a user's feed — ephemeral; either cached in Redis or computed on read |
 
+### 🎨 Visual — Entity Relationships
+
+```
+┌──────────────────┐          ┌─────────────────────────┐
+│     sources      │ 1 ─────N │        articles         │
+│──────────────────│          │─────────────────────────│
+│ id  PK           │          │ id  PK                  │
+│ name             │          │ source_id  FK ──────────┘
+│ feed_url  UNIQUE │          │ url_hash  UNIQUE (dedup) │
+│ crawl_interval   │          │ content_hash (SimHash)   │
+│ last_crawled_at  │          │ title                    │
+│ http_etag        │          │ published_at             │
+│ status           │          │ ingested_at              │
+└────────┬─────────┘          └─────────────────────────┘
+         │
+         │ 1
+         N
+┌────────▼─────────┐
+│  subscriptions   │
+│──────────────────│
+│ id  PK           │
+│ user_id  FK      │
+│ source_id  FK    │
+│ subscribed_at    │
+│ is_active        │ ← soft-delete; TRUE-only UNIQUE index
+└──────────────────┘
+
+NOTE: RawArticle and FeedEntry are NOT persisted as rows.
+  RawArticle  → lives only in Kafka raw-articles topic (ephemeral)
+  FeedEntry   → computed on read from articles + subscriptions
+               (or pre-materialized in Redis cache / user_feed table at Stage 3)
+
+KEY INVARIANT:
+  The feed query crosses all three persisted tables:
+  subscriptions → source_id → articles.
+  There is NO direct FK from subscriptions to articles.
+  The join is always: subscriptions.source_id = articles.source_id.
+```
+
 ---
 
 ## 🔢 Section 4 — Scale Estimation
@@ -150,6 +189,7 @@
 | "Personalized ranking" | Add per-user signal store (Cassandra), offline ML model training (Spark/Flink), online scoring service | Recency ranking is a Postgres `ORDER BY`; personalization is a separate ML system — explicitly call it out of scope and add to a future-phases note |
 | "Publishers push via webhook" | Replace crawler fleet with an HTTPS receiver service; still use Kafka as buffer; dedup logic unchanged | Push reduces crawler complexity but introduces webhook reliability concern — publishers must retry on our receiver downtime |
 | "Multi-region (EU, US, AP)" | Per-region crawler fleet (local to publisher geography); per-region Iceberg table; global article registry in DynamoDB for cross-region dedup | Cross-region dedup requires a global source of truth; within-region feed reads stay local |
+| **"Publisher retracts an article after we ingested it"** | Simple path (most news aggregators): treat ingested articles as immutable — publisher retractions are not propagated; silently ignore 404/410 responses on recrawl. If required: add `status VARCHAR(32) DEFAULT 'active'` column to `articles`; crawler sets `status = 'retracted'` when recrawl returns 404/410 on `canonical_url`; feed query adds `WHERE articles.status = 'active'`. Add partial index `(source_id, published_at DESC) WHERE status = 'active'` to keep feed query fast. For downstream Kafka consumers: emit a tombstone (null-value message, key = `article_id`) to the articles compacted topic — consumers detect deletion and remove from their materialized views. | Two choices: (1) immutable-articles (simple, acceptable for most news feeds — retractions are rare); (2) propagated retractions (needed for legal/DMCA compliance). The Kafka tombstone pattern maps directly to Kafka log compaction: a null-value message = tombstone = "this key no longer exists." |
 
 ---
 

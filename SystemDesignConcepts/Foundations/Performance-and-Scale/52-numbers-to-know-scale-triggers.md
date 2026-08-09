@@ -400,6 +400,21 @@ Step 2 — Estimate RPS (requests per second)
          (86,400 = seconds in a day)
          Quick approximation: 1M DAU ≈ 12 RPS
 
+         ── Time-unit conversion cheat sheet ──────────────────────────
+         per day   → per sec : ÷ 86,400  (≈ ÷ 100,000 for quick math)
+         per hour  → per sec : ÷  3,600  (≈ ÷   4,000 for quick math)
+         per month → per sec : ÷ 2,592,000 (≈ ÷ 3,000,000)
+
+         ── Anchor numbers — say these from memory ─────────────────────
+           1M  / day  ≈      12 / sec
+          10M  / day  ≈     120 / sec
+         100M  / day  ≈   1,200 / sec
+           1B  / day  ≈  12,000 / sec  (12K/sec)
+          10B  / day  ≈ 120,000 / sec  (120K/sec)
+
+         Reverse (per sec → per day): × 86,400  ≈  × 100,000
+         Example: 1,000/sec → ~86M/day → round to 100M/day
+
 Step 3 — Estimate write volume
          Writes/day = DAU × writes_per_user_per_day
          Storage/day = Writes/day × avg_object_size

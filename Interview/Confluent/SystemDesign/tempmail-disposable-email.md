@@ -97,6 +97,43 @@ Then immediately Section 2. Never draw a box before the scope is set.
 | **BloomFilter** | Client-held by SMTP ingress — probabilistic index of active addresses; never persisted as a row; lives in Redis |
 | **SMTPSession** | Ephemeral — the in-flight connection state while receiving an email; not stored, discarded after processing |
 
+### 🎨 Visual — Entity Relationships
+
+```
+┌──────────────────────────────────────────────┐
+│                  addresses                   │
+│──────────────────────────────────────────────│
+│ id  PK                                       │
+│ address  UNIQUE  (e.g. f4k2s9@tempmail.io)   │
+│ expires_at  ← indexed; TTL sweeper scans here│
+│ created_at                                   │
+│ created_ip  ← indexed for per-IP rate limit  │
+└────────────────────┬─────────────────────────┘
+                     │ 1
+                     │ ON DELETE CASCADE ← correctness guarantee
+                     N
+┌────────────────────▼─────────────────────────┐
+│                   messages                   │
+│──────────────────────────────────────────────│
+│ id  PK                                       │
+│ address_id  FK                               │
+│ from_address                                 │
+│ subject                                      │
+│ body_text / body_html                        │
+│ received_at  ← indexed (address_id, DESC)    │
+└──────────────────────────────────────────────┘
+
+NOTE: BloomFilter and SMTPSession are NOT persisted as rows.
+  BloomFilter  → bit array in Redis (250KB); rebuilt every 10 min
+  SMTPSession  → in-memory connection state; discarded after DATA ack
+
+KEY INVARIANT:
+  DELETE FROM addresses WHERE expires_at < NOW()
+  Postgres CASCADE fires → ALL messages for that address deleted atomically.
+  No orphaned messages can exist. No application-level cleanup loop needed.
+  The CASCADE IS the TTL atomicity guarantee.
+```
+
 ---
 
 ## 🔢 Section 4 — Scale Estimation (Type 2)
