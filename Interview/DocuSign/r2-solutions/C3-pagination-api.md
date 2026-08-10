@@ -18,6 +18,27 @@ Before reading the solution, make sure you can explain the bolded items below fr
 
 ---
 
+## 🎯 What Is This System?
+
+**In plain English:** A pagination API hands the caller one small page of a very long list at a time, plus a bookmark that records where they stopped. The caller keeps asking for the next page until the list runs out — never loading a million records at once.
+
+**Real-world examples:**
+
+| System / Company | What they built |
+|---|---|
+| **Stripe** | `starting_after` cursor pagination on every list API — the industry reference implementation |
+| **Slack** | Opaque `next_cursor` returned by `conversations.history` and every other paged method |
+| **GitHub** | Link-header pagination (`rel="next"`) across the REST API; cursor connections in GraphQL |
+| **Twitter / X** | Timeline paging by snowflake tweet ID, never by page number |
+| **DocuSign eSignature API** | `GET /v2.1/accounts/{id}/envelopes` pages envelope lists for admin portals and eDiscovery exports |
+| **Elasticsearch** | `search_after` (keyset) replaced deep `from`/`size` offsets, which OOM'd the coordinating node |
+
+**Core user journey:** A client calls `GET /v1/items`, renders 50 rows, then passes the returned `next_cursor` back on the next call — repeating until `has_more` is false, without ever seeing a duplicated or skipped row.
+
+**Why it's hard to build at scale:** `LIMIT 50 OFFSET 500000` forces the database to read and throw away 500,000 rows before returning anything (P99 > 5s), and a single row inserted between two page requests shifts every later row by one position — so the client silently sees one record twice and never sees another.
+
+---
+
 ## 🧠 How to Use This File
 
 **This file is an instantiation of DELIVERY-RECIPE** (`Interview/DocuSign/DELIVERY-RECIPE.md`). Every section below maps to one step of the 6-step interview delivery framework. The framework is backed by cognitive psychology — under stress, your working memory shrinks 40–50%, so you need ONE rhythm you can execute automatically.
@@ -232,6 +253,8 @@ The `cursor` parameter is optional — omitting it means "first page." This is i
 
 `has_more: true` is a subtle UX gift. Without it, the client has to make one final empty request to know pagination is done. With it, the client renders a "Load more" button or stops the auto-pager immediately — one fewer round trip per session, multiplied by 100K sessions/hour.
 
+`400 Bad Request` has exactly two named triggers on this endpoint: the cursor's HMAC signature does not verify (tampered or signed with a retired key), or `limit` is not a positive integer (`limit=abc`, `limit=0`, `limit=-5`). Both are client errors that no retry will fix. Note what is *not* a 400: a structurally valid cursor whose position no longer exists — that's the 410 below.
+
 The `410 Gone` response is what most candidates miss. If the cursor encodes a timestamp from 3 hours ago and rows have been deleted in between, the database position the cursor points to may no longer exist. `404 Not Found` is wrong (the endpoint exists). `400 Bad Request` is wrong (the cursor was valid when issued). `410 Gone` says "this cursor existed and is now expired" — the client should restart from page 1, not retry.
 
 The `limit` server cap at 50 (even if client requests 100) protects the database from unbounded scans. The cap is enforced silently — the client gets ≤ 50 rows and a valid `next_cursor`. The interviewer will ask: "What if the client hardcodes `limit=100` and your server returns 50 — won't that confuse them?" Answer: the `next_cursor` is always correct regardless of how many rows you return; the client should never depend on getting exactly `limit` rows back.
@@ -339,8 +362,14 @@ BREAKING POINT 2: New doc inserted between page 1 and page 2 requests → every 
     ↓
 [Client]
 
-BREAKING POINT 1: Timestamp ties — two docs with identical created_at millisecond →
-                  cursor boundary is ambiguous → duplicates or skips at page edges.
+BREAKING POINT 1: Timestamp ties. A bulk envelope import writes ~500 rows inside the
+                  same millisecond, so >1% of a 50-row page can share one created_at
+                  value. The cursor stores only that timestamp, so the page boundary
+                  is ambiguous: rows tied with the boundary are either returned twice
+                  (client renders a duplicate envelope) or skipped entirely. Observable
+                  symptom: item counts drift between the list view and total_count, and
+                  eDiscovery exports come back short by a handful of rows — silent
+                  data loss, no error, no alert.
 BREAKING POINT 2: Plain base64 cursor → client can forge cursor payload and jump to
                   any position in the dataset (data scraping / DoS risk).
 ```
@@ -465,27 +494,36 @@ Because we need tamper-proof cursors (prevent client attacks) but also want effi
 ```java
 // Encoding (server → client)
 public String encodeCursor(Item lastItem) {
-    String data = "{\"last_id\":\"" + lastItem.getId() + 
-                  "\",\"last_created_at\":" + lastItem.getCreatedAt() + "}";
-    String signature = hmacSha256(data, SECRET_KEY);
-    return base64Encode(data + "." + signature);
+    String data = "{\"last_id\":\"" + lastItem.getId()
+                + "\",\"last_created_at\":" + lastItem.getCreatedAt() + "}";
+    String signature = hmacSha256Hex(data, SECRET_KEY);
+    return base64UrlEncode(data + "." + signature);
 }
 
 // Decoding (client → server)
 public CursorData decodeCursor(String cursor) throws InvalidCursorException {
-    byte[] decoded = base64Decode(cursor);
+    // base64Decode returns bytes — decode to a String before splitting
+    String decoded = new String(base64UrlDecode(cursor), StandardCharsets.UTF_8);
     String[] parts = decoded.split("\\.");
-    if (parts.length != 2) throw new InvalidCursorException("Invalid format");
-    
+    if (parts.length != 2) {
+        throw new InvalidCursorException("Invalid format");
+    }
+
     String data = parts[0];
     String signature = parts[1];
-    String expectedSignature = hmacSha256(data, SECRET_KEY);
-    
-    if (!signature.equals(expectedSignature)) {
+    String expectedSignature = hmacSha256Hex(data, SECRET_KEY);
+
+    // Constant-time compare — String.equals() short-circuits on the first
+    // differing byte, which leaks signature bytes to a timing attacker
+    boolean signatureValid = MessageDigest.isEqual(
+        signature.getBytes(StandardCharsets.UTF_8),
+        expectedSignature.getBytes(StandardCharsets.UTF_8));
+    if (!signatureValid) {
         throw new InvalidCursorException("Invalid signature (tampered)");
     }
-    
-    return parseJSON(data);  // { last_id, last_created_at }
+
+    // Returns { last_id, last_created_at }
+    return parseJSON(data);
 }
 ```
 
@@ -587,27 +625,39 @@ The design acknowledges that pagination is a snapshot at a point in time. If dat
 ```sql
 CREATE TABLE items (
     id              UUID PRIMARY KEY,
+    tenant_id       UUID NOT NULL,
     name            VARCHAR(255) NOT NULL,
-    created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMP NOT NULL DEFAULT NOW(),
-    deleted_at      TIMESTAMP,  -- soft delete
-    
-    -- Composite index for cursor pagination
-    INDEX idx_items_created_at_id ON (created_at DESC, id DESC)
+    -- immutable sort key: set once at insert, never updated
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- soft delete: NULL means the row is live
+    deleted_at      TIMESTAMPTZ
 );
+
+-- Composite cursor index. Postgres has no inline INDEX clause inside
+-- CREATE TABLE (that is MySQL syntax) — indexes are separate statements.
+-- Partial (WHERE deleted_at IS NULL) so soft-deleted rows are not in the
+-- index at all: no wasted scanning at deep cursor positions.
+CREATE INDEX idx_items_active_created_id
+    ON items (tenant_id, created_at DESC, id DESC)
+    WHERE deleted_at IS NULL;
 ```
 
 ### Key Schema Decisions:
 - **created_at immutable:** Used as primary sort key; never changes. Ensures stable cursor ordering.
-- **Composite index (created_at, id):** Enables efficient cursor queries. First filter by created_at range (indexed), then by id (secondary sort).
-- **deleted_at (soft delete):** Pagination ignores soft-deleted items (WHERE deleted_at IS NULL in queries). Allows recovery.
-- **id as tie-breaker:** If two items have same created_at (rare but possible), id breaks ties deterministically.
+- **created_at is `NOT NULL` — this is load-bearing, not cosmetic:** a NULLable sort column breaks keyset pagination outright. `WHERE created_at < ?` is `UNKNOWN` (never true) for NULL rows, so every NULL-timestamp row is silently invisible to pagination; adding `NULLS LAST` fixes the `ORDER BY` but not the comparison predicate, so you would need a three-branch cursor (`created_at IS NULL AND id < ?`) plus a matching `(created_at DESC NULLS LAST, id DESC)` index. Making the column `NOT NULL` deletes that entire class of bug.
+- **Composite index (tenant_id, created_at, id):** `tenant_id` leads because every query is tenant-scoped (multi-tenant B2B) — it keeps one customer's deep pagination inside its own index range. Then `created_at` range-scans, then `id` breaks ties.
+- **Partial index on `deleted_at IS NULL`:** pagination only ever reads live rows. Keeping deleted rows out of the index prevents the deep-page degradation described in Section 12 (scanning hundreds of tombstones to fill one 50-row page).
+- **id as tie-breaker:** If two items share the same `created_at` (bulk imports routinely produce hundreds in the same millisecond), `id` breaks ties deterministically — without it, page boundaries duplicate or skip rows.
+- **SQL vs NoSQL choice:** PostgreSQL. Keyset pagination needs an *ordered* index over a compound sort key and range predicates on it — a B-tree does this natively in O(log N). A pure KV store (DynamoDB, Cassandra) can paginate only within a single partition key using its own opaque `LastEvaluatedKey`, which means cross-tenant or cross-partition ordering (e.g. "all envelopes for this account newest-first") requires a fan-out scatter-gather and a merge in the application. At 1M rows and 278 req/sec, one Postgres primary with read replicas is both simpler and faster.
 
 ### Index Design Rationale:
 
 ```sql
 -- Without index: WHERE created_at < ? ORDER BY created_at DESC LIMIT 50
--- Full table scan: O(N) = 1M rows scanned = 100-200ms (timeout risk)
+-- Sequential scan of 1M rows (~200ms) PLUS a top-N sort over every matching
+-- row, because there is no ordered access path — that sort is what pushes it
+-- into the 1-2 second range, and to 5+ seconds under concurrent load
 
 -- With index:  
 -- PostgreSQL uses index to:
@@ -644,7 +694,7 @@ CREATE TABLE items (
 - **Chose:** Signed base64 cursor (tamper-proof yet readable)
 - **Gain:** Client can't forge cursors or jump to arbitrary positions. Signatures prevent tampering.
 - **Lose:** Cursor encoding/decoding overhead (HMAC signature adds 32 bytes per cursor).
-- **Failure mode if wrong:** If we chose plain base64 (no signature), client could forge: `eyJsYXN0X2lkIjoiOTk5OTk5OTkifQ==` and jump to arbitrary items. Security risk (DoS via crafted cursors). Signed cursors prevent this. **Business impact:** A malicious tenant crafts cursors that jump to other tenants' envelope IDs (internal auto-increment IDs leak the namespace boundary) — for DocuSign this means a lower-tier customer can enumerate a competitor's contract metadata (a serious data-privacy breach) or flood the database with deep-page scans that degrade performance for all customers simultaneously.
+- **Failure mode if wrong:** If we chose plain base64 (no signature), the client can rewrite any field the server trusts from the cursor. **Technical:** the cursor is server-supplied input that the query planner consumes directly — an attacker rewrites `last_created_at` to `0` to force the deepest possible index position on every request, and a scripted loop of those requests saturates the Postgres buffer cache and connection pool. **Business impact:** For DocuSign, the severe case is a cursor that carries *any* filter alongside the sort key. If `tenant_id` or `account_id` is ever encoded in the cursor rather than derived from the JWT, a forged cursor becomes a textbook IDOR (Insecure Direct Object Reference — changing an identifier in a request to read someone else's record): one customer pages into another customer's envelope list, which is a reportable data-privacy incident under SOC 2 and GDPR, not just a performance bug. **The rule this trade-off encodes:** tenant scoping comes from the authenticated token, never from the cursor — and the cursor is HMAC-signed so even the sort position cannot be forged.
 
 ---
 
@@ -688,7 +738,7 @@ CREATE TABLE items (
 > Great question. Key rotation requires a multi-stage process: (1) Add new key to the signing rotation set, (2) Start signing cursors with NEW key, (3) Accept both OLD and NEW signatures on decode, (4) After a grace period (e.g., 7 days), retire OLD key. This way, old cursors remain valid during rotation, and new cursors use the new key. Alternatively, include key version in cursor: HMAC({data}.v2) using key v2. On decode, read version; use correct key. In an interview: "Key rotation is critical for security. I'd support multiple keys during a grace period, allowing old cursors to remain valid while new ones use the new key."
 
 **Q: "At 100K pagination requests/hour, the compound index on (created_at, id) becomes very hot (heavily accessed). Does this cause bottlenecks?"**
-> Index hotspots can cause contention in the database. At 100K req/hour ÷ 3600 = ~28 req/sec, we're accessing the same index region (recent items with created_at ≈ now) repeatedly. Two solutions: (1) Sharding by created_at bucket (monthly partitions) — each partition has its own index; pagination queries hit only the relevant partition. (2) Read replicas — all pagination reads go to replicas; primary handles writes. Partitioning is cleaner for pagination. In an interview: "Index hotspots at scale require partitioning. Partitioning by created_at (e.g., monthly) ensures pagination queries hit only relevant partitions, avoiding contention."
+> Index hotspots can cause contention in the database. At 100K sessions/hour × 10 pages ÷ 3,600 = ~278 req/sec (Section 4), we're accessing the same index region (recent items with created_at ≈ now) repeatedly. Two solutions: (1) Sharding by created_at bucket (monthly partitions) — each partition has its own index; pagination queries hit only the relevant partition. (2) Read replicas — all pagination reads go to replicas; primary handles writes. Partitioning is cleaner for pagination. In an interview: "Index hotspots at scale require partitioning. Partitioning by created_at (e.g., monthly) ensures pagination queries hit only relevant partitions, avoiding contention."
 
 **Q: "Your API design in Section 8 originally included a `total_count` field in the response. But at 100M rows, how do you return that count without a full table scan on every request?"**
 
@@ -801,7 +851,7 @@ CREATE TABLE items (
 | Usability | ✅ | Simple API: GET /envelopes?cursor={opaque_token}&limit=50. Response: {items, next_cursor, has_more}. Clients never parse cursor internals (opaque). For DocuSign: an enterprise admin paging through 100K+ envelopes sees a stable, consistent list — no duplicates, no skipped items, regardless of concurrent envelope creates during pagination. |
 | Extensibility | ✅ | Cursor design is schema-agnostic — adding new item fields (recipient_count, expiry_date) doesn't break pagination (cursor only encodes sort key: created_at + id). Adding a new sort strategy (sort by updated_at) = new compound index + cursor field, no API contract change. |
 | SOLID principles | ✅ | Single Responsibility: CursorCodec (encode/decode/sign), PaginationQueryBuilder (WHERE clause), PaginationService (orchestrate). Open/Closed: adding sort strategies = new CursorStrategy implementation, no changes to existing classes. Dependency Inversion: PaginationService depends on ItemRepository interface — testable without live DB. |
-| Scalability | ✅ | Compound index on (created_at DESC, id DESC) keeps every page fetch at O(50) rows scanned regardless of table size — at 1M, 10M, or 100M envelopes, P99 < 200ms is maintained (Section 4: 100K requests/hour peak = 28 req/sec, well within Postgres capacity). For DocuSign: eDiscovery export of 500K envelopes completes in consistent batches without degrading as the export progresses deeper into history. |
+| Scalability | ✅ | Compound index on (created_at DESC, id DESC) keeps every page fetch at O(50) rows scanned regardless of table size — at 1M, 10M, or 100M envelopes, P99 < 200ms is maintained (Section 4: 100K pagination sessions/hour × 10 pages = 278 req/sec, well within a single Postgres primary's capacity). For DocuSign: eDiscovery export of 500K envelopes completes in consistent batches without degrading as the export progresses deeper into history. |
 | Data model correctness | ✅ | Compound index on (created_at DESC, id DESC) is stable because created_at is immutable (envelopes never change their creation time). Soft deletes preserve data integrity — deleted envelopes are filtered (WHERE status = 'ACTIVE') at the query layer, not physically removed, so cursor positions remain valid across deletes. |
 | Performance | ✅ | P99 < 200ms for any page fetch via compound index. HMAC signature adds 32 bytes per cursor (negligible). Signed cursor prevents DoS attacks where clients craft deep-page cursors to force full table scans — unsigned cursors at page 500K (OFFSET 500000) would time out at > 5 seconds; signed cursors keep it at O(50) index rows regardless of cursor position. |
 
@@ -822,6 +872,7 @@ The TL;DR fixes the core idea in your head. Under stress, you'll default to this
 
 | Date | Change |
 |---|---|
+| Aug 2026 | **Audit pass — Section -1 added + 6 accuracy fixes.** (1) **Section -1 "What Is This System?" added** (was the only file in the folder missing it) — plain-English description, 6 real-world examples (Stripe `starting_after`, Slack `next_cursor`, GitHub Link header, X snowflake IDs, DocuSign `/v2.1/envelopes`, Elasticsearch `search_after`), user journey, deep-offset + row-shift failure mode. (2) **Arithmetic fix:** Section 12 index-hotspot probe and Section 14 Scalability cell both said "100K req/hour = 28 req/sec", contradicting Section 4's 278 req/sec (100K *sessions* × 10 pages ÷ 3,600) — both corrected. (3) **Section 7 Java cursor codec fixed:** `base64Decode` returned `byte[]` and then called `.split()` on it (would not compile); unbraced single-statement `if`; end-of-line comment; `String.equals()` on the HMAC replaced with `MessageDigest.isEqual` (constant-time — `equals` short-circuits and leaks signature bytes to a timing attacker). (4) **Section 9 DDL fixed:** inline `INDEX ... ON (...)` inside `CREATE TABLE` is MySQL syntax and does not run on Postgres — split into a `CREATE INDEX`; made it partial (`WHERE deleted_at IS NULL`) and tenant-leading; added the **NULLable sort column** gap (`WHERE created_at < ?` is UNKNOWN for NULLs → rows silently invisible; `NULLS LAST` fixes ORDER BY but not the predicate) and the missing **SQL vs NoSQL** decision. (5) **Trade-off 3 business impact corrected** — old text claimed a forged cursor lets a tenant read another tenant's envelope IDs, which is false when `tenant_id` comes from the JWT; rewritten as the accurate risk (cursor is planner input → forced deepest-index DoS; IDOR only if a filter is ever encoded in the cursor) with the rule stated explicitly. (6) **Named the 400 trigger** on `GET /v1/items` (HMAC verify failure, non-positive `limit`) and **quantified Stage 2's breaking point** (bulk import → ~500 rows/ms tie → silent short exports). |
 | Jul 5, 2026 | **Section 6 restructured: single final-state diagram → 3-stage progressive HLD.** Stage 1 (Offset/LIMIT): O(N) scan; row-shift duplicates on concurrent inserts → SLA breach at 1M+ records. Stage 2 (Timestamp cursor, no compound index): eliminates O(N) scan but timestamp ties cause duplicates/skips at page edges; plain base64 forgeable. Stage 3 (Production): composite cursor `(created_at, id)` + compound index `(created_at DESC, id DESC)` = O(50) rows per page regardless of table size; HMAC-signed base64 prevents forgery; eventual consistency explicitly documented in API contract. Three inline decision tables: (1) pagination strategy — LIMIT/OFFSET ❌ / timestamp cursor ⚠️ / composite cursor ✅; (2) cursor security — plain base64 ❌ / DB row ID cursor ⚠️ / HMAC-signed base64 ✅; (3) consistency model — no handling ❌ / strict MVCC snapshot ⚠️ / eventual consistency ✅. Data flow updated to Stage 3 precision (HMAC validation step, composite ORDER BY). |
 | Jul 4, 2026 | **3 new Q&As added to Section 12.** (1) **Long-running compliance pagination** — date-bounded snapshot pagination for compliance exports (stable, no cursor expiry); persistent cursors in DB (`cursor_checkpoints` table, 30-day expiry) for resumable large exports; recommendation by use case. (2) **Mutable sort key problem** — sorting by `last_modified_at` breaks pagination when documents are modified mid-session; immutable `id` tiebreaker prevents duplicates but not skips; snapshot pagination for small datasets; document inconsistency acceptable for UI browsing. (3) **Deep pagination degradation at depth 1,000+** — partial index on active records (`WHERE deleted_at IS NULL`) prevents index range saturation; page-depth limit (e.g. max page 500) for live API; async bulk export to S3 (stream + presigned URL) for full dataset access. |
 | June 23, 2026 | **File created.** Type B — Product Architecture. Based on: 1Point3Acres thread ("Tech Phone Screen: Pagination API and Data Model Design"), DocuSign engineering blog on API pagination. Concept notes: `11-api-design.md` (pagination strategies), `12-data-modeling.md` (indexing). Fully integrated with DELIVERY-RECIPE framework: 🧠 preamble + 60-minute time budget, 💾 Memory Anchors (6 core + 3 bonus), explicit timing callouts in sections 2/4/6/7/10/11/12, "say this out loud" dialogue framing, interview psychology context (working memory constraints, stress failure modes). Deep dives: cursor vs offset trade-offs, SQL strategy for 1M+ records, index design (compound key necessity), handling concurrent mutations. Section 5 variation table covers 6 axes (random vs sequential access, backward pagination, persistent cursors, dynamic ordering, cursor expiry, sticky cursors). Section 8 (API) and Section 9 (Data Model) are primary deliverables (Type B emphasis). Index design is critical (Dive 3): O(N) without index vs O(50) with compound index. Pre-write checklist enforced: Identity Card, clarifying questions with WHY, API endpoints with cursor encoding details, SQL queries showing keyset pagination, composite index justification, 3 deep dives on riskiest components, trade-offs with failure modes, 3-tier probes (surface/deep/cross-concept). Common Mistakes (5 entries) emphasize offset scalability, index necessity, HMAC signing, cursor resilience, immutable sort keys. Result: Interview delivery-ready, zero refinement needed. |

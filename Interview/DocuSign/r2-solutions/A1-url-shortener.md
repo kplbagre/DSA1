@@ -231,7 +231,7 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 | If the interviewer says... | Your architecture changes to... | The reasoning |
 |---|---|---|
-| "1B URLs/day instead of 1M" | Write sharding: hash(original_url) mod 10 → route to shard 0-9; each shard generates short codes independently | At 1B/day = ~11,500 writes/sec, a single Postgres instance maxes out around 5K writes/sec. Sharding distributes the load. |
+| "1B URLs/day instead of 1M" | Write sharding: `hash(short_code) mod 16` → 16 shards; each shard generates codes independently (no cross-shard coordination, because codes are random) | At 1B/day = ~11,600 writes/sec avg, ~34,800 at 3× peak. A single Postgres primary sustains ~1K writes/sec of this shape (Section 4), so peak needs ~35 shards' worth of capacity — 16 shards × 2 primaries each, or 32+ shards. Shard on `short_code`, not `original_url`: the redirect (99% of traffic) knows only the code, so hashing on the URL would force a fan-out read across every shard on every redirect. |
 | "Custom short codes (vanity URLs)" | Add user namespace: `bit.ly/{username}/{custom_code}`; enforce uniqueness per user OR globally depending on requirement | Custom codes require reservation/collision checking — adds a lookup before each shorten. Global uniqueness adds a distributed lock (Redis SET NX). |
 | "URL expiration (TTL)" | Add TTL column; background job scans for expired entries daily; soft-delete (mark deleted, don't remove immediately) or hard-delete | Hard-delete while serving reads is risky (concurrent delete/redirect race). Soft-delete + asynchronous cleanup is safer. |
 | "Analytics required" | Separate analytics pipeline: each redirect increments a counter service (Redis, HyperLogLog for cardinality, or Kafka → aggregation) | Analytics writes are 100:1 ratio to shorten writes. Storing clicks in the main DB would 100× write load. Use eventual consistency (Kafka) instead. |
@@ -268,9 +268,9 @@ Validation check: three FRs, three endpoints. Clean.
 
 **`POST /v1/shorten`** is the write path — simple surface, interesting internals. `400 Bad Request` fires for a malformed URL (`long_url: "not a url"` or an unreachable scheme). `429 Too Many Requests` fires when the caller exceeds the rate limit (we do not allow unlimited URL creation — abuse vector). There is no `409` here: custom short codes are out of scope in our assumed design, and with `SecureRandom` generation, the ON CONFLICT retry loop handles collisions internally — the caller never sees a collision; they get a `201` or a `500` if all 3 attempts collide (astronomically unlikely). The interviewer will probe: "What if the same long URL is submitted 1,000 times?" Answer: with random codes, each submission creates a new short code (they are independent). If you want idempotency (same URL → same code), you'd use hash-based generation and return the existing code on duplicate — that design decision is named in the idempotency note below the table.
 
-**`GET /{short_code}`** is not a REST endpoint in the traditional sense — it's a protocol-level redirect. The browser receives `302 Location: https://original.url` and follows it immediately; no JSON, no body. The `302 vs 301` choice is the interviewer probe: "If you use 301, what breaks?" Answer: the browser caches the redirect and bypasses your server on every subsequent click — click analytics are lost. You can never update the destination URL without the browser ignoring the update (cache is permanent). `302` means every click reaches your service, giving you analytics but no edge caching. Most URL shorteners use `302` for analytics; the trade-off is latency (one extra hop to your server on every click). CDN can cache the 302 response itself (with `Cache-Control: max-age=300`) to reduce server load without losing analytics.
+**`GET /{short_code}`** is not a REST endpoint in the traditional sense — it's a protocol-level redirect. The browser receives `302 Location: https://original.url` and follows it immediately; no JSON, no body. The `302 vs 301` choice is the interviewer probe: "If you use 301, what breaks?" Answer: the browser caches the redirect and bypasses your server on every subsequent click — click analytics are lost. You can never update the destination URL without the browser ignoring the update (cache is permanent). `302` means every click reaches your service, giving you analytics but no edge caching. Most URL shorteners use `302` for analytics; the trade-off is latency (one extra hop to your server on every click). CDN can cache the 302 response itself (with `Cache-Control: max-age=300`) to reduce server load without losing analytics. `404 Not Found` has exactly one trigger here: the code is absent from **both** Redis and Postgres, meaning it was never issued — a typo, or someone hand-guessing codes. Name the code you deliberately did *not* use: an expired link would be `410 Gone`, not `404`, so the client can tell "never existed" apart from "existed and is over" — but expiry is out of scope in this design, so `410` never fires.
 
-**`GET /api/v1/info/{short_code}`** is the analytics read endpoint. The `/api/v1/` prefix separates the redirect namespace (`/{code}`) from the metadata namespace. Without it, you can't have both `GET /abc123` (redirect) and `GET /abc123` (metadata) — same path, ambiguous intent. Most URL shorteners solve this with a subdomain: redirects on `t.co` and metadata on `analytics.twitter.com`. Path-prefix separation is simpler and works for MVP.
+**`GET /api/v1/info/{short_code}`** is the analytics read endpoint. Its `404` fires on the same single condition as the redirect's — unknown code — which is deliberate: the two endpoints must agree, because a code that redirects but has no metadata (or vice versa) means Redis and Postgres have diverged. The `/api/v1/` prefix separates the redirect namespace (`/{code}`) from the metadata namespace. Without it, you can't have both `GET /abc123` (redirect) and `GET /abc123` (metadata) — same path, ambiguous intent. Most URL shorteners solve this with a subdomain: redirects on `t.co` and metadata on `analytics.twitter.com`. Path-prefix separation is simpler and works for MVP.
 
 ---
 
@@ -303,7 +303,7 @@ Validation check: three FRs, three endpoints. Clean.
 
  ┌────────────┐  POST /shorten  ┌────────────────────────────────┐
  │   Client   │───────────────▶│          API Server             │
- └────────────┘                 │  1. UUID v4 → base62 short_code │
+ └────────────┘                 │  1. random base62 short_code    │
                                 │  2. INSERT into Postgres        │
                                 │  3. Return short_code           │
                                 └────────────┬───────────────────┘
@@ -332,7 +332,7 @@ BREAKING POINT:
 |---|---|---|---|
 | Auto-increment (Postgres `SERIAL`) | Zero extra infra; trivial | Sequential codes are guessable — enumeration attack exposes every shortened URL; single DB bottleneck at high write volume | ❌ Security gap + future bottleneck |
 | Redis `INCR` (central counter) | Atomic, no collision, short codes | Single Redis node bottleneck; sequential → still guessable | ⚠️ Fine at 33/sec; code enumeration risk remains |
-| UUID v4 → base62 encode | Stateless — any server generates independently; fully random — no enumeration risk; 6^62 permutations = collision-free in practice | Slightly longer codes (~8 chars vs 5) | ✅ Best — stateless, random, scales to any write volume |
+| Cryptographically random base62 code (6 chars) | Stateless — any server generates independently; fully random — no enumeration risk; 62^6 = 56.8 billion code space, with duplicate-PK retry closing the collision gap | Needs a retry loop on collision; must widen to 7 chars as the table grows (see Deep Dive 1) | ✅ Best — stateless, random, scales to any write volume |
 
 > 📖 Full: `SystemDesignConcepts/Production-Grade/System-Design-Patterns/11-api-design.md`
 
@@ -349,7 +349,7 @@ BREAKING POINT:
 
  ┌────────────┐  POST /shorten  ┌────────────────────────────────┐
  │   Client   │───────────────▶│          API Server (Write)     │
- └────────────┘                 │  1. UUID v4 → base62 short_code │
+ └────────────┘                 │  1. random base62 short_code    │
                                 │  2. INSERT into Postgres        │
                                 │  3. SET Redis short_code→url    │
                                 │     TTL 3600s (1 hour)          │
@@ -398,12 +398,22 @@ KEY INVARIANT:
    bypassing the server on all future clicks from the same user.
 
 BREAKING POINT 2→3 (future stage):
-   Single Redis node memory. At 1M URLs × 200 bytes/entry = 200MB (fine).
-   At 10× scale (10M URLs) = 2GB — approaching single-node Redis limit.
-   Observable: Redis evicts hot keys under memory pressure; cache hit rate
-   drops; Postgres read load spikes back toward saturation. Stage 3 needed
-   because a single Redis instance cannot hold 10M URL mappings and serve
-   3,300+ reads/sec without memory pressure causing evictions.
+   Single Redis node memory — but be careful with this number, because
+   "Redis runs out at 2GB" is wrong and an interviewer will say so. A single
+   Redis node happily holds 64GB+. The real ceiling is the WORKING SET vs the
+   provisioned instance:
+     - 300 bytes/entry all-in (key + URL value + Redis object overhead)
+     - A 16GB cache instance therefore holds ~53M entries
+     - We add 1M URLs/day, so the whole catalog exceeds 53M entries at ~53 days
+   Past that, the cache can no longer hold every URL and must rely on the
+   1-hour TTL to keep only the active subset resident. That is fine while the
+   hot set stays under 53M keys; it breaks when it doesn't.
+   Observable: `evicted_keys` in INFO starts climbing above zero, cache hit
+   rate slides from 95% toward 80%, and Postgres read load quadruples from
+   165 to ~660 reads/sec — P99 redirect crosses the 50ms SLA.
+   Stage 3 (Redis Cluster, sharded by short_code) is needed because the fix is
+   more aggregate memory and more read throughput than one node provides —
+   NOT because one node "hits a 2GB limit."
 ```
 
 **WHICH caching strategy?**
@@ -429,7 +439,7 @@ BREAKING POINT 2→3 (future stage):
 
 ### Data Flow Walkthrough (say this out loud)
 
-1. **Shorten request:** Client POST /shorten { long_url }. API server generates UUID v4 (a randomly generated 128-bit number — any server produces one independently with no central authority), encodes as base62 (6-8 chars). INSERTs mapping into Postgres (short_code PK). Populates Redis with 1-hour TTL. Returns short_code. (~10-20ms total)
+1. **Shorten request:** Client POST /shorten { long_url }. API server generates a 6-character random base62 code (drawn from a CSPRNG — a cryptographically secure random source, so codes are unguessable and any server produces them independently with no central authority). INSERTs mapping into Postgres (short_code PK). Populates Redis with 1-hour TTL. Returns short_code. (~10-20ms total)
 
 2. **Redirect request:** Client GET /{code}. API server checks Redis first (cache hit: ~1-5ms). On miss, queries Postgres (~10-20ms), populates Redis, returns HTTP 302 Location header → browser follows redirect automatically. 302 is intentional — preserves analytics and future invalidation capability.
 
@@ -463,13 +473,17 @@ The entire system depends on short codes being globally unique. A collision = tw
 | Option | Pros | Cons |
 |---|---|---|
 | **Sequential counter (Redis INCR)** (Redis INCR atomically adds 1 to a named counter — every caller gets the next unique integer, like a global ticket dispenser; no two servers ever get the same number even under heavy concurrency) | Deterministic, no collision risk, short codes are sequential (1, 2, 3...) | Bottleneck: single Redis instance, max ~500K increments/sec. At 33 shorten/sec it's fine, but doesn't scale to very high throughput. Also, sequential codes are guessable (security risk). |
-| **UUID v4 → base62 encode** | No collision risk (2^122 space is effectively infinite). Stateless (no central counter). Codes are random (not guessable). | Slightly longer codes (UUID 36 bytes → base62 ~22 chars; could compress to ~13 chars with URL-safe base64). Requires conversion logic. |
+| **Full UUID v4 → base62 encode** | No collision risk (2^122 space is effectively infinite). Stateless (no central counter). Codes are random (not guessable). | ~21 base62 characters — `bit.ly/3Kf9QmZp2LxV7nRtB4wYc` is not a short link. Defeats the product requirement. |
+| **6 random base62 chars from a CSPRNG** | Stateless (no central counter). Unguessable (36 bits). Short — 6 characters. Scales to any write volume. | 36 bits is not collision-proof: at 365M rows, 0.64% of inserts collide, so a duplicate-key retry loop is mandatory. Must widen to 7 chars past ~1% code-space usage. |
 | **Zookeeper/Snowflake-style distributed ID** | Scalable, unique, not guessable. Handles multi-region. | Complex; requires coordination service. Overkill for 33 writes/sec. |
 
-**Decision: UUID v4 → base62 encoding**
-Because at this scale, a single Redis INCR is fast enough, but UUID is simpler (no external state), stateless, and naturally random. The slight code length increase (6 chars UUID vs 8 chars base62) is acceptable.
+**Decision: cryptographically random base62 code, 6 characters, with duplicate-key retry**
 
-**In an interview, if asked:** "UUID v4 gives me collision-free generation without a central state. I encode it as base62 to create pronounceable, URL-safe short codes. At 33 writes/sec, Redis INCR is overkill, and UUID scales to any future load without changes."
+Be precise about what this is, because "UUID v4" and "6 random base62 characters" are not the same thing and conflating them is a trap. A full UUID v4 carries 122 bits of entropy and is collision-free for any realistic volume — but base62-encoded it is ~21 characters, which defeats the entire point of a *short* link. What we actually ship is 6 characters drawn from a CSPRNG: 62^6 = 56.8 billion codes, **36 bits of entropy, not 122**. That is enough to be unguessable, but it is *not* enough to ignore collisions — so the design pairs it with a unique primary key and a retry loop.
+
+Because at this scale, a single Redis INCR is fast enough, but random generation is simpler (no external state), stateless, and unguessable by construction. The cost is 6 characters instead of the 5 a sequential counter would need at the same volume.
+
+**In an interview, if asked:** "I generate 6 random base62 characters from a CSPRNG rather than encoding a full UUID — a base62 UUID is 21 characters, which isn't a short link. 6 characters gives me 56.8 billion codes and 36 bits of unguessability. 36 bits is not collision-proof, so the short_code is the primary key and I retry on duplicate-key violation. At 33 writes/sec, Redis INCR is overkill, and random generation scales to any future write volume without coordination."
 
 **Implementation sketch:**
 
@@ -480,9 +494,10 @@ private static final String BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef
 private static final SecureRandom RANDOM = new SecureRandom();
 
 // Generate a 6-character random base62 code.
-// 62^6 = 56.8 billion unique codes.
-// Birthday paradox: collision risk rises after ~sqrt(56.8B) ≈ 238K codes.
-// Mitigation: INSERT with ON CONFLICT — retry with a new code if collision.
+// 62^6 = 56.8 billion unique codes; 36 bits of entropy.
+// Because short_code is the PRIMARY KEY, we do not need "no collision ever" —
+// we only need the per-insert collision probability to be low enough that a
+// bounded retry loop wins. That probability is (rows already stored / 56.8B).
 public String generateShortCode() {
     StringBuilder sb = new StringBuilder(6);
     for (int i = 0; i < 6; i++) {
@@ -499,12 +514,17 @@ public String shortenUrl(String longUrl) {
             urlRepository.insert(code, longUrl);  // throws on duplicate PK
             return code;
         } catch (DuplicateKeyException e) {
-            // Collision — try again. Expected rate: < 1 in 56B at current scale.
+            // Collision — try again with a fresh code.
+            // After 1 year (365M rows) the per-attempt collision rate is
+            // 365M / 56.8B = 0.64%, i.e. ~1 in 156 inserts retries once.
+            // Three attempts all colliding: 0.0064^3 = 2.6e-7 — safe.
         }
     }
     throw new RuntimeException("Short code generation failed after 3 attempts");
 }
 ```
+
+> **When 6 characters stops being enough — know this number.** The retry loop is safe only while the table is small relative to 56.8B. At 1M URLs/day the table holds 365M rows after year 1 (0.64% retry rate) and 1.8B rows after year 5 (3.2% retry rate — one insert in 31 now retries, and CPU spent on wasted INSERT attempts becomes visible). The rule of thumb: **widen the code once stored rows exceed ~1% of the code space.** Going from 6 to 7 characters multiplies the space by 62 (56.8B → 3.5 trillion), which buys decades. Say this proactively — "6 characters is right for this scale and here is the trigger to widen it" — rather than presenting 6 as permanent.
 
 > **Note on idempotency:** The above is *random* — same long URL submitted twice gets two different codes. If the requirement is "same URL → same code" (idempotent), switch to hash-based: `SHA-256(longUrl)` → take first 6 base62 chars. Trade-off: hash-based leaks URL fingerprints if codes are guessable; random is safer. State your choice and why in the interview — don't mix the two approaches.
 
@@ -606,7 +626,7 @@ CREATE TABLE urls (
 ```
 
 ### Key Schema Decisions:
-- **VARCHAR(8) for short_code:** Base62-encoded UUID is max ~13 chars, but we use first 6-8. Future-proof for 68B unique codes.
+- **VARCHAR(8) for short_code:** we issue 6 chars today (62^6 = 56.8B codes); the column is sized to 8 so we can widen to 7 or 8 chars without a schema migration when stored rows pass ~1% of the code space.
 - **TEXT for original_url:** URLs can exceed VARCHAR(255).
 - **created_at:** Timestamps for accounting, archiving, rate-limiting per IP.
 - **No user_id:** Simplifies anonymity. If required later, add user_id + index.
@@ -624,11 +644,11 @@ CREATE TABLE urls (
 
 ---
 
-### Trade-off 1: UUID-Based vs Central Counter (Redis INCR) for ID Generation
+### Trade-off 1: Random Code Generation vs Central Counter (Redis INCR) for ID Generation
 
-- **Chose:** UUID v4 (stateless)
-- **Gain:** No central bottleneck; scales infinitely; each API server generates IDs independently
-- **Lose:** Slightly longer encoding (UUID 36 bytes → base62 ~13 chars vs INCR 8 bytes → ~5 chars). Tiny memory cost per URL.
+- **Chose:** 6 random base62 characters from a CSPRNG (stateless)
+- **Gain:** No central bottleneck; scales to any write volume; each API server generates codes independently; codes are unguessable, so there is no enumeration attack
+- **Lose:** One extra character versus a counter (a sequential counter needs only 5 base62 chars to address 365M URLs; random needs 6 to keep the collision rate under 1%), plus a retry loop on duplicate-key violation that a counter would never need
 - **Failure mode if wrong:** If we chose Redis INCR and traffic spiked to 1K shorten/sec, Redis INCR becomes the bottleneck. Single-threaded Redis max ~500K ops/sec, but network RTT adds latency. Shorten response time spikes to 50-100ms. With UUID, we're unaffected by traffic spikes. **Business impact:** Users experience multi-second delays or timeouts when trying to create shortened links during high-traffic periods — for DocuSign this means bulk envelope link generation (e.g., sending hundreds of signing links to customers at once) fails or stalls, triggering support tickets and delaying contract cycles.
 
 ### Trade-off 2: Cache-Aside (1-hour TTL) vs Cache-Warming vs No Cache
@@ -656,7 +676,7 @@ CREATE TABLE urls (
 **After the trade-offs, say this out loud:**
 
 > "Let me pause and map this back to the DocuSign evaluation dimensions:
-> - **Scalability:** Base62-encoded UUID generation scales infinitely without central bottleneck; Redis cache absorbs 3,300 reads/sec peak at P99 < 50ms
+> - **Scalability:** stateless random base62 code generation scales without a central bottleneck; Redis cache absorbs 3,300 reads/sec peak at P99 < 50ms
 > - **Availability:** Postgres replication (master-slave) handles read replicas; cache misses gracefully degrade (slower but still functional). 99.99% target achieved via active-active API server pool
 > - **Security:** Original URLs are encrypted at rest (Postgres full-disk encryption); in transit (HTTPS). Short codes are random (not sequential), preventing enumeration attacks
 > - **Observability:** Request ID (UUID) injected at API entry; logged in Postgres for audit trail. Cache hit/miss rates monitored; redirect latency tracked per percentile
@@ -682,7 +702,7 @@ CREATE TABLE urls (
 > Base62 includes digits (0-9) and both upper/lowercase letters (A-Z, a-z), so it uses all alphanumeric characters. This gives the highest encoding density — 6 chars in base62 covers ~68B permutations vs base36 (36 chars) covering ~2B. Base64 includes special chars (+, /) that require URL encoding; base62 is URL-safe natively. In an interview: "I pick base62 to maximize code density and avoid special-character encoding overhead."
 
 **Q: "What happens if two users try to shorten the same long URL — do they get the same short code?"**
-> Yes, they should. This saves storage and reduces collisions. The API should check: does this long_url already have a short_code? If yes, return it (idempotent). If no, generate a new one. This is a simple SELECT before INSERT pattern, with a unique constraint on original_url to prevent race conditions. In an interview: "I'd add a unique index on original_url to enforce single-mapping per URL. If two requests race, the DB's unique constraint prevents duplicates."
+> In the design I've described, no — they get two independent codes, because generation is random and I never look up the URL first. That is a deliberate choice, not an oversight, and the reason is that separate codes give separate analytics: a marketing team shortening the same landing page for an email campaign and a Twitter campaign *wants* two codes so it can tell the two channels apart. Deduplicating would silently merge those metrics. If the requirement flips to "same URL must always yield the same code," I switch generation from random to deterministic — `SHA-256(long_url)` truncated to 6 base62 chars — and add a unique index on a `url_hash` column so racing inserts collapse to one row and the loser returns the winner's existing code. The thing not to do is mix the two: random generation plus a SELECT-before-INSERT dedup check is the worst of both, because it pays a read on every write and still can't guarantee uniqueness under concurrency. In an interview: "Random codes mean no dedup, which preserves per-campaign analytics. Hash-based codes mean free idempotency but lose that. I'd pick based on whether the product needs per-link attribution."
 
 **Q: "How do you handle URL expiration — do you delete rows, or just mark them deleted?"**
 > Mark deleted (soft delete) with an expiry_at timestamp. Don't delete rows while they're being queried (race condition between DELETE and SELECT). Instead, set expiry_at, add a filter WHERE expiry_at IS NULL to queries, and run a background cleanup job nightly. In an interview: "I use soft deletes to avoid race conditions. A cron job deletes expired rows at off-peak hours."
@@ -704,7 +724,7 @@ CREATE TABLE urls (
 
 ### Deep Probe (Tier 2 — additional)
 
-**Q: "You switch from UUID to a Redis INCR counter for ID generation to get shorter codes. Now 100 Write Service instances each call Redis on every shorten request. How do you reduce Redis load without losing uniqueness?"**
+**Q: "You switch from random codes to a Redis INCR counter for ID generation to get shorter codes. Now 100 Write Service instances each call Redis on every shorten request. How do you reduce Redis load without losing uniqueness?"**
 > Counter batching. Instead of each Write Service instance calling Redis INCR one-at-a-time, each instance requests a batch of IDs upfront — e.g., INCRBY counter 1000 returns 7000. That instance now owns IDs 6001–7000 and generates codes locally from that range without contacting Redis for each URL. When the batch is exhausted, it requests a new batch. Redis call frequency drops from 33/sec (one per shorten) to 33/1000 = 0.033/sec per instance — essentially zero load on Redis. The risk: if a Write Service crashes mid-batch, some IDs in the batch are never used (gap in the sequence). This is fine — uniqueness only requires that no two URLs share the same ID, not that IDs are contiguous. Uniqueness is still guaranteed because Redis INCRBY is atomic — no two instances ever receive overlapping ranges. In an interview: "Batching trades sequence continuity (acceptable loss) for a 1000× reduction in Redis coordination traffic."
 
 **Q: "Your sequential counter generates predictable short codes — abc123 is followed by abc124. Is this a security problem?"**
@@ -723,9 +743,9 @@ CREATE TABLE urls (
 
 ---
 
-- **Mistake 1:** Using a sequential counter (auto-increment) for short codes → **Why wrong:** Sequential codes are guessable. An attacker can enumerate all shortened URLs by incrementing a counter. **Say instead:** "I use a random UUID v4 + base62 encoding so codes are unpredictable. An attacker can't enumerate or guess other users' URLs."
+- **Mistake 1:** Using a sequential counter (auto-increment) for short codes → **Why wrong:** Sequential codes are guessable. An attacker can enumerate all shortened URLs by incrementing a counter. **Say instead:** "I use 6 cryptographically random base62 characters so codes are unpredictable. An attacker can't enumerate or guess other users' URLs."
 
-- **Mistake 2:** Not thinking about collision detection → **Why wrong:** If two UUIDs collide (astronomically rare but possible), the system corrupts data (two URLs sharing a code). You sound like you didn't reason about the probabilistic aspect. **Say instead:** "UUID v4 collision probability is 2^-122 for 2^122 permutations. Practically impossible. If I wanted zero-collision guarantees, I'd use a central counter (Redis INCR), trading scalability for certainty."
+- **Mistake 2:** Saying "I generate a random code, and collisions are astronomically unlikely, so I don't handle them" — usually by quoting UUID's 2^122 entropy → **Why wrong:** you are not shipping a UUID, you are shipping **6 base62 characters = 36 bits**. Those are different by 86 bits. At 365M stored rows the per-insert collision probability is 365M / 56.8B = 0.64% — roughly 1 insert in 156, which happens thousands of times a day, not once per universe. An interviewer who does this arithmetic while you're talking will conclude you copied a number without checking which design it applies to. **Say instead:** "6 random base62 characters is 36 bits, not 122 — collisions are common enough to design for, not rare enough to ignore. `short_code` is the primary key, so a collision surfaces as a duplicate-key violation and I retry with a fresh code; three attempts drives the failure probability to 2.6e-7. If I needed a hard zero-collision guarantee instead of a probabilistic one, I'd use a central counter and give up statelessness."
 
 - **Mistake 3:** Ignoring the read-heavy nature of the problem (100:1 read:write) → **Why wrong:** Without caching, the DB hits 3,300 reads/sec and bottlenecks. You'll sound like you didn't calculate scale. **Say instead:** "Redirects are 100:1 more frequent than shortens. I prioritize read latency via caching (Redis) and read replicas."
 
@@ -742,9 +762,9 @@ CREATE TABLE urls (
 | Testability | ✅ | URL lookup (Postgres query) is a pure function — test: given short_code, expect original_url, no live DB needed. Cache (Redis) replaced with in-memory map in unit tests. Rate limiter (token bucket) is also a pure function — test by advancing a fake clock. |
 | Usability | ✅ | POST /shorten → 201 + short_code; GET /{code} → 302 Location redirect (not 301 — 302 preserves analytics and future invalidation). Error responses: 400 (malformed URL), 404 (code not found), 429 (rate limit: 10 shortens/min per IP). Response time: P99 < 50ms on redirect (cached), < 100ms on miss. |
 | Extensibility | ✅ | Analytics pipeline (Kafka) is fully decoupled — adding click-through tracking, geo-analytics, or referrer tracking = adding a new Kafka consumer, zero changes to shorten/redirect core. New analytics dimensions require no API changes. |
-| Security | ✅ | UUID v4 base62 encoding produces 62^6 = 56 billion permutations — sequential enumeration is computationally infeasible. For DocuSign: a guessable short code would expose other tenants' envelope signing links (PII + legal document URLs). Rate limiting (429 at 10 req/min per IP) prevents bulk enumeration. HTTPS in transit + Postgres encryption at rest. |
+| Security | ✅ | 6 CSPRNG-drawn base62 characters give 62^6 = 56.8 billion permutations — sequential enumeration is computationally infeasible. For DocuSign: a guessable short code would expose other tenants' envelope signing links (PII + legal document URLs). Rate limiting (429 at 10 req/min per IP) prevents bulk enumeration. HTTPS in transit + Postgres encryption at rest. |
 | Availability | ✅ | Redis cache-aside provides graceful degradation: if Redis is down, all 3,300 redirects/sec fall back to Postgres (~5,000 reads/sec max capacity) — service degrades in latency but remains functional. Postgres multi-AZ replication ensures no single write node SPOF. 99.99% target via active-active API server pool. |
-| Scalability | ✅ | At 33 shorten/sec and 3,300 redirect/sec peak (Section 4: 100:1 read-to-write ratio), UUID v4 stateless generation requires no central counter; Redis cache absorbs 95% of redirects (165 cache misses/sec hit Postgres — well within its 5,000 reads/sec capacity). For DocuSign: signing ceremony invitation links (the 'Click here to sign' URL in every DocuSign email) follow this exact pattern — one link creation generates clicks from all co-signers and forwarded parties. |
+| Scalability | ✅ | At 33 shorten/sec and 3,300 redirect/sec peak (Section 4: 100:1 read-to-write ratio), stateless random code generation requires no central counter; Redis cache absorbs 95% of redirects (165 cache misses/sec hit Postgres — well within its 5,000 reads/sec capacity). For DocuSign: signing ceremony invitation links (the 'Click here to sign' URL in every DocuSign email) follow this exact pattern — one link creation generates clicks from all co-signers and forwarded parties. |
 | Observability & Traceability | ✅ | Every redirect logs (short_code, original_url, timestamp, client_ip, X-Request-ID) — for DocuSign: if a signing link is forwarded to an unauthorized party and clicked, the access log proves who accessed it and when (chain-of-custody). Alerts: Redis cache hit rate < 90% → Redis eviction pressure. P99 redirect latency > 50ms → DB saturation. |
 
 ---
@@ -753,7 +773,7 @@ CREATE TABLE urls (
 
 **If you had 60 seconds to summarize the entire answer, say this:**
 
-> "I'd design a URL shortener with stateless API servers generating UUID v4 short codes (base62-encoded, 6-8 chars). A Redis cache with 1-hour TTL absorbs redirects (3,300 reads/sec peak); the DB stores the mapping. Shortens are write-optimized (simple INSERT); redirects are read-optimized (cache + read replicas). The key trade-off is stateless generation (UUID) vs centralized counter (Redis INCR) — I chose UUID to avoid bottlenecks. The core insight: at this scale (1M shortens/day, 100:1 read:write ratio), caching is non-negotiable; the DB can handle writes, but reads require cache or we exceed 50ms SLA. In a DocuSign interview, I map this to all 7 evaluation dimensions — each component (API, cache, DB, replicas) addresses one or more."
+> "I'd design a URL shortener with stateless API servers generating 6-character random base62 short codes (56.8 billion code space, duplicate-key retry on collision). A Redis cache with 1-hour TTL absorbs redirects (3,300 reads/sec peak); the DB stores the mapping. Shortens are write-optimized (simple INSERT); redirects are read-optimized (cache + read replicas). The key trade-off is stateless random generation vs a centralized counter (Redis INCR) — I chose random to avoid the bottleneck and to make codes unguessable. The core insight: at this scale (1M shortens/day, 100:1 read:write ratio), caching is non-negotiable; the DB can handle writes, but reads require cache or we exceed 50ms SLA. In a DocuSign interview, I map this to all 7 evaluation dimensions — each component (API, cache, DB, replicas) addresses one or more."
 
 **Why read this before your interview?**
 The TL;DR fixes the core idea in your head. Under stress, you'll default to this mental model. When the interviewer asks unexpected questions, you'll reason from this core idea (caching + stateless generation), not from memorized details.
@@ -764,6 +784,7 @@ The TL;DR fixes the core idea in your head. Under stress, you'll default to this
 
 | Date | Change |
 |---|---|
+| Aug 2026 | **Audit pass — code-generation story made internally consistent; five math/accuracy errors fixed.** The file said "UUID v4 → base62" throughout, but the implementation sketch actually generates **6 random base62 characters** — those differ by 86 bits of entropy, so every claim resting on UUID's 2^122 space was wrong for the code we ship. Fixed: (1) `6^62 permutations` typo → `62^6 = 56.8 billion`; the Stage 1 table row relabelled to "6 random base62 chars", and Deep Dive 1's options table gained a row showing why a *full* base62-encoded UUID (~21 chars) is disqualified outright. (2) **Collision math corrected** — the code comment claimed "< 1 in 56B"; the true per-insert rate is `rows_stored / 62^6` = 0.64% at 365M rows (~1 insert in 156). Added the widening trigger: move to 7 chars once stored rows pass ~1% of the code space. (3) **Mistake 2 inverted** — it previously *advised* quoting "2^-122 collision probability", which is itself the error; it now names quoting UUID entropy for a 36-bit code as the mistake. (4) **Section 5 write-ceiling inconsistency** — the 1B/day row said Postgres maxes at 5K writes/sec while Section 4 and the Data Store table both say ~1K; reconciled to 1K and shard count recomputed (16+, not 10). Shard key also changed from `original_url` to `short_code`, because hashing on the URL forces a fan-out read across every shard on the redirect path. (5) **Stage 2→3 Redis breaking point rewritten** — "2GB approaches single-node Redis limit" is false (a node holds 64GB+) and is easy interviewer bait; replaced with a working-set calculation (300 B/entry → ~53M entries per 16GB instance → exceeded at ~53 days) plus the real observable (`evicted_keys` > 0, hit rate 95%→80%, Postgres reads 165→660/sec). (6) **Tier 1 probe contradiction fixed** — the "same long URL twice" answer said "yes, same code", contradicting both the random-generation design and the Endpoint Stories; it now answers from the chosen design and names the per-campaign-analytics reason for not deduplicating. (7) **Named triggers added for both `404`s** in Endpoint Stories, including why an expired link would be `410 Gone` rather than `404`. |
 | June 23, 2026 | **File created.** Type A — System Design. Based on: DocuSign PDF (confirmed question type), System Design Primer, ByteByteGo URL Shortener chapter. Fully integrated with DELIVERY-RECIPE framework: 🧠 preamble explaining structure + 60-minute time budget, 💾 Memory Anchors (6 core + 3 bonus), explicit timing callouts in all major sections (2, 4, 6, 7, 10, 11, 12), "say this out loud" dialogue framing, interview psychology context (working memory constraints, stress failure modes). Deep dives cover riskiest components: UUID vs INCR trade-off, cache-aside strategy, schema design. Pre-write checklist enforced: Section 0 Identity Card filled, Section 5 variation table covers 6 axes, Section 10 trade-offs include failure modes, Section 12 has all 3 probe tiers. Common Mistakes section (5 entries) emphasizes collision risk, cache necessity, failure modes. Result: Interview delivery-ready, zero refinement needed. |
 | Jul 4, 2026 | **Diagram rewrite + 3 new Q&As.** Replaced flat `[Box]──→[Box]` ASCII diagram with proper box-drawing character diagram covering all three flows: Shorten (POST /shorten → UUID → Postgres + Redis), Redirect (GET /{code} → Redis cache-aside → 302), Analytics (async Kafka → ClickHouse). Added key invariant callout (read path is 100× write path). New Q&As in Section 12: (1) **Counter batching with Redis INCRBY** — INCRBY 1000 for local batch, reduces Redis calls from 33/sec to 0.033/sec, gaps in sequence acceptable; (2) **Sequential counter enumeration attack** — two risks (enumeration, competitor intelligence), mitigations: FPE block cipher, UUID v4, rate limiting + monitoring; (3) **Multi-region deployment with globally unique codes** — GeoDNS + regional stacks, UUID v4 requires no coordination, disjoint counter ranges per region, Snowflake IDs, async replication for redirect consistency. |
 | Jul 4, 2026 | **Section 6 restructured into 2-stage progressive HLD. Bug fix: 301→302.** Stage 1 (DB-only baseline) — establishes that 33 shorten/sec is fine on Postgres but 3,300 redirect reads/sec saturates it. Stage 2 (Redis cache-aside, production) — Redis absorbs 95%+ of reads, Postgres sees only ~165/sec (cache misses); Analytics Kafka pipeline decoupled. Three decision tables added: ID generation (auto-increment vs Redis INCR vs UUID v4 — UUID ✅), caching strategy (no cache vs cache-aside vs read-through — cache-aside ✅), redirect type (301 vs 302 — 302 ✅). **Bug fixed:** original data flow walkthrough incorrectly stated "HTTP 301 Location header" and Section 8 API table showed 301; the design intent throughout was 302 (301 breaks analytics). All three locations corrected to 302. Verdict alignment verified: all Section 6 table verdicts match Section 7 deep dive choices (UUID v4 ✅, cache-aside ✅). |

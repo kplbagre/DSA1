@@ -189,6 +189,26 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ---
 
+## Section 3.5 — 🗂️ Core Entities (~2 minutes)
+
+> **Say this out loud:** "Before I sketch the architecture, let me name the key data objects the system manages."
+
+| Entity | What it represents |
+|---|---|
+| **Video** | The logical asset a creator uploaded — title, owner, duration, and lifecycle status (`UPLOADING → TRANSCODING → READY → DELETED`); transactional, and the source of truth every other entity hangs off |
+| **UploadSession** | One in-flight resumable multipart upload — which parts have landed, the chunk size, the provider-side upload handle; ephemeral, self-expiring after 7 days whether the upload completed or was abandoned |
+| **Rendition** | One transcoded output of a Video at a single quality tier (360p / 720p / 1080p) — derived and fully rebuildable from the raw upload, so it never needs to be backed up |
+| **Segment** | One 6-second chunk of a Rendition (`720p/seg042.ts`) — immutable once written, which is the property that makes a 1-year edge TTL safe |
+| **Manifest** | The playlist that tells a player which Renditions exist and which Segments make up each one (`master.m3u8` + one playlist per rendition) — derived, tiny, and mutable (adding a 4K rendition appends a line), so it must carry a short TTL |
+| **ViewEvent** | One playback-start / quality-switch / stall record — append-only analytics stream, written on the delivery path but never read by it |
+
+**Key relationships:**
+- A `Video` has one `UploadSession` (during ingest) and many `Renditions` (after transcoding)
+- A `Rendition` has many `Segments`; a `Manifest` is the index over them — the only entity a player fetches by name
+- The hot path (playback) touches only `Manifest` and `Segment`, and both are served from the CDN edge — the `Video` record is read once, at the metadata call
+
+---
+
 ## Section 4 — 🔢 Scale Estimation (Minutes 5–8)
 
 ```
@@ -205,11 +225,18 @@ Content volume:
   - 1 year: 300 TB × 365 = ~110 PB — S3 at scale, tiered storage required
 
 Transcoding capacity:
-  - 100K uploads/day = ~1.16/sec
-  - Transcoding time: 1 minute of video takes ~30 CPU-seconds to transcode
-  - 60-minute video = 1,800 CPU-seconds = 30 CPU-minutes per video
-  - At 100K videos/day with 5-minute SLO: need ~600 parallel transcode workers
-  - In practice: use auto-scaling transcode workers, target 50% utilization → steady state ~300 workers
+  - 100K uploads/day = ~1.16 uploads/sec
+  - Transcoding cost: 1 minute of video takes ~30 CPU-seconds per rendition
+  - 60-minute video × 3 renditions = 60 × 30 × 3 = 5,400 CPU-seconds = 1.5 CPU-hours per video
+  - Aggregate: 100K videos × 1.5 CPU-hours = 150,000 CPU-hours/day
+  - Spread over 24h: 150,000 / 24 = ~6,250 vCPUs busy continuously at 100% utilization
+  - Target 50% utilization for burst headroom → ~12,500 vCPUs
+      = ~780 workers steady state at 16 vCPU each (scale to ~1,500 at the daily upload peak)
+  - SLO check (this is the number interviewers actually probe):
+      one 60-min video needs 1.5 CPU-hours = 90 CPU-minutes finished in 5 wall-clock minutes
+      → 90 / 5 = 18 vCPUs must work on that SINGLE video concurrently
+      → 3 renditions in parallel × 6 vCPUs of FFmpeg threads each = 18 vCPUs. That meets it.
+      → rendition-parallelism ALONE (1 vCPU per rendition) takes 30 wall-clock minutes and MISSES the SLO
 
 CDN bandwidth:
   - 1M concurrent viewers × 4 Mbps = 4 Tbps peak
@@ -219,12 +246,13 @@ CDN bandwidth:
 
 Storage math:
   - Hot content (< 30 days): 110 PB/year × (30/365) ≈ 9 PB on S3 Standard
-  - Warm content (30–180 days): ~55 PB on S3 Infrequent Access
-  - Cold content (> 180 days): remainder on S3 Glacier
+  - Warm content (30–180 days = 150 days): 110 PB × (150/365) ≈ 45 PB on S3 Infrequent Access
+  - Cold content (> 180 days): the remaining ~56 PB of each year on S3 Glacier
 
 Key conclusions:
   - "At 4 Tbps peak egress, CDN is not optional — it is the architecture."
-  - "At 100K uploads/day with 5-minute transcoding SLO, we need ~300 parallel workers — auto-scaling job queue."
+  - "At 100K uploads/day with a 5-minute transcoding SLO, we need ~780 16-vCPU workers steady state,
+     AND 18 vCPUs concentrated on each individual video — an auto-scaling job queue, not a fixed fleet."
   - "Storage grows to 110 PB/year — tiered storage (S3 Standard → Infrequent Access → Glacier) by recency."
 ```
 
@@ -270,7 +298,7 @@ Validation check: the transcoding pipeline (SQS → Worker → S3) has no REST e
 | POST | `/v1/uploads/{id}/complete` | JWT Bearer | `[{part_number, etag}]` | `{video_id, status: "processing"}` | 202, 400 |
 | GET | `/v1/videos/{id}` | Public | — | `{video_id, title, status, manifest_url, thumbnail_url}` | 200, 404 |
 | GET | `/v1/videos/{id}/manifest` | Public | — | `302` redirect to CDN `master.m3u8` URL | 302, 404 |
-| DELETE | `/v1/videos/{id}` | JWT Bearer (owner) | — | `{video_id, deleted: true}` | 200, 404 |
+| DELETE | `/v1/videos/{id}` | JWT Bearer (owner) | — | `{video_id, deleted: true}` | 200, 403, 404 |
 
 ### 🔍 Endpoint Stories
 
@@ -281,6 +309,18 @@ Validation check: the transcoding pipeline (SQS → Worker → S3) has no REST e
 **`GET /v1/uploads/{id}/status`** is the polling endpoint for the creator's UI. Transcoding can take 5–30 minutes for a long video. The UI polls this every 10 seconds to show a progress bar (`{parts_completed: 8, total_parts: 12}`). When `status` transitions to `READY`, the UI starts showing the public playback link. Alternative: push a WebSocket event when transcoding completes — eliminates polling but adds complexity. For MVP, polling is fine.
 
 **`GET /v1/videos/{id}`** returns `manifest_url` as a convenience field (same as calling `/manifest` and following the redirect). Smart clients use `manifest_url` directly; standard video players use `/manifest`. Both point to the same CDN content. The `status` field transitions through `UPLOADING → TRANSCODING → READY → DELETED` — clients should poll until `READY` before showing the video player.
+
+**Every error code and the exact condition that fires it** — say these; a status code without a named trigger reads as guessing:
+
+| Code | Endpoint | Named trigger |
+|---|---|---|
+| `400` | `POST /v1/uploads` | `file_size` exceeds the per-account limit, or `content_type` is not an accepted container (we accept MP4/MOV/MKV; a `.exe` renamed to `.mp4` fails container probe) |
+| `400` | `PUT /v1/uploads/{id}/part/{n}` | Part is smaller than 5 MB and is not the final part — S3's hard minimum part size; the client chunked wrong |
+| `400` | `POST /v1/uploads/{id}/complete` | The submitted `{part_number, etag}` list does not match what S3 actually holds (a part was dropped or an ETag is stale) — we refuse to assemble a corrupt object |
+| `403` | `DELETE /v1/videos/{id}` | Caller's JWT subject is not the `owner_id` on the video record. Deliberately `403`, not `404` — the caller already knows the video exists because it is publicly playable, so hiding existence buys nothing |
+| `404` | `GET /v1/uploads/{id}/status` | Upload session expired (multipart sessions are reaped after 7 days) or never existed |
+| `404` | `GET /v1/videos/{id}` | Video ID unknown, or `status = DELETED` — a soft-deleted video reads as absent to everyone but the owner |
+| `404` | `GET /v1/videos/{id}/manifest` | Video exists but `status != READY` — transcoding has not produced a manifest yet. Note this is the one debatable choice: `404` keeps players simple (they retry), whereas `409 Conflict` would be semantically truer. Pick one and defend it; HLS players handle `404`-and-retry natively, so `404` wins on client compatibility |
 
 ---
 
@@ -502,8 +542,13 @@ Raw video cannot be served to clients — it is the wrong format, the wrong bitr
 | Parallel rendition transcoding (3 EC2 workers per video) | 3× faster; each rendition is independent | 3× cost; coordination overhead (who marks the video as READY when all 3 finish?) |
 | Segment-parallel transcoding (split video → transcode chunks → reassemble) | Linearly scalable; a 60-minute video can be processed in 5 minutes using 60 workers (one per minute of content) | Most complex; requires segment boundary alignment (can't split mid-GOP); needs final reassembly step |
 
-**Decision: SQS + parallel rendition transcoding (3 workers per video, coordinated via a job tracker)**
-Because the 5-minute upload-to-playback SLO requires parallel transcoding. A 60-minute video takes 30 CPU-minutes per rendition — sequential would take 90 CPU-minutes, violating the SLO. The coordination problem (who sets `status = READY`?) is solved by a completion counter in DynamoDB:
+**Decision: SQS + parallel rendition transcoding — 3 workers per video, 6 FFmpeg threads each, coordinated via a job tracker**
+
+Be precise here, because the naive version of this answer misses the SLO and the interviewer will catch it. A 60-minute video costs 30 CPU-minutes *per rendition* — 90 CPU-minutes total. Sequential on one core = 90 wall-clock minutes. Three renditions in parallel on one core each = still 30 wall-clock minutes. Both violate the 5-minute SLO. What actually meets it: **90 CPU-minutes / 5 wall-clock minutes = 18 vCPUs concentrated on this one video** — 3 renditions in parallel × 6 FFmpeg encoder threads each. That is the design.
+
+**The escape hatch for long videos:** the 18-vCPU number scales linearly with duration. A 4-hour video needs 72 vCPUs to hit 5 minutes, which no single instance gives you cheaply. Above roughly 90 minutes of source, switch that video to segment-parallel transcoding (split at I-frame boundaries, fan out to N workers, reassemble) so wall-clock time stays flat as duration grows. State the crossover out loud — "rendition-parallel up to ~90 minutes, segment-parallel above it" — rather than claiming one strategy covers every input.
+
+The coordination problem (who sets `status = READY`?) is solved by a completion counter in DynamoDB:
 
 ```
 TranscodeJob table (DynamoDB):
@@ -853,13 +898,13 @@ DocuSign does not stream video. However, the question "architect a worldwide vid
 
 | Dimension | Relevant? | How this design addresses it |
 |---|---|---|
-| Testability | ✅ | Transcode worker is a pure function (input: S3 path; output: HLS segments); testable with a synthetic test video; CDN pre-warm logic testable by mocking the CloudFront API; origin failover testable by blocking S3 access and verifying CDN serves cached content |
-| Usability | ✅ | HLS manifest URL is stable and bookmarkable; player auto-selects quality — no user intervention; upload API supports resumable multipart — no "start over" on failure; `GET /videos/{id}` returns `status` field so clients can poll for transcoding completion |
-| Extensibility | ✅ | New rendition (4K HDR) = new Transcode Worker parameter, new S3 prefix, new playlist entry in master.m3u8 — no API changes; new CDN vendor = new origin pull config, same S3 backend; new storage tier = S3 lifecycle rule addition, no code changes |
-| Security | ✅ | Pre-signed CDN URLs for content requiring access control (DocuSign documents); TLS 1.3 minimum for all CDN delivery; S3 bucket policy: `public` ACL blocked — only CDN can access; S3 Object Lock for legally immutable documents; CloudFront access logs for audit trail |
-| Availability | ✅ | CDN serves content during S3 outage (content cached at edge); multi-region S3 eliminates single-region SPOF for origin; transcode SQS queue is durable (messages survive worker crashes); S3 11-nines durability for stored segments |
-| Scalability | ✅ | CDN absorbs 4 Tbps peak without scaling any origin infrastructure; transcode workers auto-scale to 100K uploads/day; S3 scales to unlimited storage; CDN PoP count increases by adding vendor PoPs, not changing architecture |
-| Observability & Traceability | ✅ | CloudFront access logs (who fetched what, when, from which PoP); transcode job duration histogram (P99 transcoding time by video length); CDN cache hit ratio by region (alert < 90%); upload completion rate (alert if > 5% uploads fail to complete multipart); segment error rate (4xx/5xx from CDN edge) |
+| Testability | ✅ | The transcode worker is a pure function — S3 path in, 3 renditions + manifest out — so the 18-vCPU/5-minute SLO is a unit-testable assertion against a fixture video, not a hope. The 97% cache-hit target is testable by replaying one day of CloudFront logs against the TTL table. For DocuSign: the same harness proves an envelope PDF renders identical page thumbnails on every worker — a rendering difference between two workers would put two visually different versions of one legally sealed contract into circulation. |
+| Usability | ✅ | The 2 GB upload never restarts: 8 MB resumable parts mean a dropped mobile connection costs 8 MB, not 2 GB. Playback needs zero user input — the player walks the manifest and switches 360p↔1080p on its own within one 6-second segment. For DocuSign: a signer on hotel Wi-Fi opening a 400-page mortgage envelope gets page-at-a-time rendering off the same chunked-delivery mechanic, instead of a 90-second blank screen waiting on a monolithic PDF. |
+| Extensibility | ✅ | Adding a 4K rendition changes `renditions_expected` from 3 to 4 and appends one `#EXT-X-STREAM-INF` line to `master.m3u8` — zero API changes, and old players ignore the variant they can't decode. That is only true because the manifest is the indirection layer. For DocuSign: adding a watermarked-copy variant of a signed envelope (required for regulated-industry customers who must distribute "COPY — not for execution" versions) is the identical move — one more derived output behind the same manifest. |
+| Security | ✅ | At 1M concurrent viewers, a leaked URL is a 4 Tbps liability, so nothing is publicly cacheable by default: signed CDN URLs carry `viewer_id + object_id + expiry + HMAC`, validated at the edge via Lambda@Edge with no origin round-trip, so signing costs nothing against the 97% hit ratio. For DocuSign: this is what stops an executed NDA from being retrievable by anyone who once saw the link — plus S3 Object Lock in GOVERNANCE mode, because ESIGN/UETA non-repudiation means a signed envelope must be provably un-overwritable, not merely un-overwritten. |
+| Availability | ✅ | The 99.99% playback SLO survives a full origin outage: with segments on a 1-year immutable TTL, every edge keeps serving for the duration of any realistic S3 incident — the outage is invisible to the 97% of requests that never leave the PoP. Only cold long-tail content fails. For DocuSign: a signer completing a ceremony during an us-east-1 event still downloads their executed PDF from the edge, which matters because "the document existed but was unreachable at the moment of signing" is a legally contestable state, not just a bad page load. |
+| Scalability | ✅ | 1M concurrent viewers × 4 Mbps = 4 Tbps egress against ~120 Gbps of origin traffic at a 97% hit ratio — a 33× amplification factor absorbed entirely by rented PoPs, with zero origin capacity added. Ingest scales on a separate axis: 100K uploads/day = 150,000 CPU-hours/day = ~780 auto-scaled workers. For DocuSign: a mortgage lender blasting one template to 10,000 borrowers is a single hot object read 10,000 times — the identical read-amplification shape, which is why the template gets pre-warmed rather than pulled 10,000 times. |
+| Observability & Traceability | ✅ | Three alerts map to the three failure modes named in Section 10: cache hit ratio < 90% by region (pre-warm pipeline broke — origin traffic 3× from 120 to 400 Gbps), P99 transcode duration > 5 min (SLO breach; the 18-vCPU concentration is not landing), multipart completion rate < 95% (client chunking regression). For DocuSign: CloudFront access logs are not a metric but evidence — every envelope download is recorded with IP, JWT claims, and timestamp, because "prove who accessed this contract and when" is a chain-of-custody question that shows up in litigation, not in a dashboard. |
 
 ---
 
@@ -873,5 +918,6 @@ DocuSign does not stream video. However, the question "architect a worldwide vid
 
 | Date | Change |
 |---|---|
+| Aug 2026 | **Audit pass — Section 3.5 added, transcoding math corrected, status-code triggers, Section 14 rewritten.** (1) **Section 3.5 Core Entities added** (was missing entirely) in the standards position between Requirements and Scale Estimation — 6 entities (Video, UploadSession, Rendition, Segment, Manifest, ViewEvent), two columns only, nature words folded into descriptions (ephemeral / derived-rebuildable / immutable / append-only), plus key relationships naming that the hot path touches only Manifest + Segment. (2) **Section 4 transcoding capacity math fixed** — the old "~600 parallel workers / steady state ~300" did not follow from its own inputs: 100K videos × 3 renditions × 30 CPU-sec per video-minute = 150,000 CPU-hours/day = ~6,250 vCPUs continuous, so ~780 16-vCPU workers at 50% utilization. Added the SLO check the old version omitted: 90 CPU-minutes in 5 wall-clock minutes requires **18 vCPUs concentrated on a single video**. Warm-tier storage corrected 55 PB → ~45 PB (110 PB × 150/365). (3) **Deep Dive 1 decision reconciled with the 5-minute SLO** — the previous text claimed 3-way rendition parallelism satisfied the SLO, but 3 renditions × 1 vCPU = 30 wall-clock minutes and misses it by 6×. Now specifies 3 renditions × 6 FFmpeg threads = 18 vCPUs, and names the ~90-minute crossover above which rendition-parallel must yield to segment-parallel. (4) **Named triggers added for every 4xx** in Endpoint Stories (table of 7 codes → exact firing condition), including the 5 MB S3 minimum part size for `400`, and `403` added to `DELETE /v1/videos/{id}` (previously the endpoint was owner-authorized but had no authorization failure code). (5) **Section 14 all 7 cells rewritten** to pass the 3-point test — each now names a Section 4 number (4 Tbps / 97% hit ratio / 33× amplification / 150,000 CPU-hours / 18 vCPUs / 8 MB parts) and a specific DocuSign scenario (executed NDA URL leakage, ESIGN non-repudiation via Object Lock, 10,000-borrower mortgage template pre-warm, chain-of-custody access logs in litigation). |
 | Jul 6, 2026 | **🔑 Technology Quick Reference table added.** 13-row glossary covering CDN, PoP, Origin, Transcoding, Rendition, HLS, DASH, ABR, RTMP, Pre-warming, VOD, TTL, Multi-region S3 — inserted before Section 0 so the file is readable without prior video streaming knowledge. |
 | Jul 5, 2026 | File created. Full 15-section 60-min interview-ready solution. Type A (Infrastructure). PDF-confirmed question. Covers: 3-stage progressive HLD (single-region origin → transcoding+S3+pull-CDN → HLS/DASH+multi-region+push), 3 decision tables, HLS manifest structure, S3 multipart upload flow, DocuSign pivot (envelope PDF distribution maps 1:1 to video distribution architecture), Tier 1/2/3 probe answers, 5 common mistakes. Cross-refs verified against actual SystemDesignConcepts files. |

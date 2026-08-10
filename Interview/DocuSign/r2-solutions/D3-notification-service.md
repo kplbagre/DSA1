@@ -144,20 +144,20 @@ Then immediately pivot to Section 2 (clarifying questions).
 - Notifications/day: 100 per user = 1B notifications/day
 - Notifications/sec: 1B ÷ 86,400 = 11.6K notifs/sec baseline
 - Peak (3×): 35K notifs/sec
-- Per-channel breakdown (assume): 60% email, 30% SMS, 10% push
-  - Email: 21K notifs/sec baseline
-  - SMS: 10.5K notifs/sec baseline
-  - Push: 3.5K notifs/sec baseline
+- Per-channel breakdown (assume): 60% email, 30% SMS, 10% push — **quoted at peak (35K/sec), with baseline in parentheses:**
+  - Email: 21K notifs/sec peak (7K baseline)
+  - SMS: 10.5K notifs/sec peak (3.5K baseline)
+  - Push: 3.5K notifs/sec peak (1.2K baseline)
 
-**Provider limits (typical):**
-- SendGrid: up to 100K emails/sec (plenty)
-- Twilio: up to 10K SMS/sec (need to shard at 10K+ or use multiple accounts)
-- Firebase Cloud Messaging: up to 30K push/sec (plenty)
+**Provider limits (typical) — say the per-account number, not the vendor's global number:**
+- SendGrid: a dedicated-IP Pro/Premier account realistically sustains **low thousands of emails/sec** (SendGrid's *entire platform* does ~3B/day ≈ 35K/sec across all customers). 21K/sec from one tenant is **not** a number any single ESP account will accept — you need multiple subusers across many dedicated IPs, negotiated capacity, and a warmed IP pool. Treat email throughput as the hardest constraint in this design, not the easiest.
+- Twilio: ~10K SMS/sec with a short-code + high-throughput messaging service; a standard long-code account is ~1 msg/sec/number, so this requires explicit provisioning
+- Firebase Cloud Messaging: ~30K push/sec (genuinely plenty — push is the one channel with headroom)
 
 **Storage:**
 - Per notification record: ~500 bytes (user_id, channel, message, status, timestamp)
-- Notifications/year: 1B × 365 = 365B notifications = 182 GB/year
-- At 5 years: 910 GB (fits in one Postgres instance; archive after 1 year to S3)
+- Per day: 1B × 500 B = **500 GB/day**
+- Per year: 365B notifications × 500 B = **182 TB/year** (not GB — this is the number that kills the naive "one Postgres table" answer)
 
 **Bandwidth:**
 - Inbound (event ingestion): 35K notifs/sec × 2 KB = 70 MB/sec
@@ -165,9 +165,9 @@ Then immediately pivot to Section 2 (clarifying questions).
 
 **Key conclusions:**
 - At 35K notifs/sec, **single Kafka broker is sufficient** (typical throughput ~100K msgs/sec); add 3 brokers for HA
-- At 21K emails/sec, **SendGrid is fine** (capacity is 100K/sec)
-- At 10.5K SMS/sec, **single Twilio account is at the limit**; might need shard by region
-- At 182 GB/year, **single Postgres instance handles easily**; archive after 1 year to cold storage
+- At 21K emails/sec peak, **SendGrid is the bottleneck, not the safe part** — one account will not do it; plan for a sharded subuser pool plus a second ESP (SES) for failover
+- At 10.5K SMS/sec peak, **single Twilio account is at the limit**; shard by region or add a second account
+- At **500 GB/day / 182 TB/year, notification history does NOT fit in one Postgres instance.** This is the single most important number in this section: Postgres keeps a **30-day hot window in monthly partitions (~15 TB)** to serve the in-app inbox, and every partition older than that is detached and written to S3/Parquet for analytics and compliance queries. If the requirement were "queryable history forever with low latency," the right store is Cassandra partitioned by `user_id` — Postgres is chosen here *only* because the hot window is bounded.
 
 ---
 
@@ -241,7 +241,7 @@ Value:
 
 | Store | Used for | Why this, not alternatives | Trade-off |
 |---|---|---|---|
-| **PostgreSQL** | NotificationHistory, UserPreference, Outbox | 182 GB/year — fits comfortably in single instance; Outbox requires ACID (written in the same transaction as the triggering event — guarantees no event loss on crash); relational joins for preference lookup | At 35K notifs/sec, a single Postgres write path for history would strain; archive after 1 year to S3 cold storage |
+| **PostgreSQL** | NotificationHistory (30-day hot window only), UserPreference, Outbox | Outbox requires ACID — it must be written in the same transaction as the triggering event, which no non-relational store here gives us; UserPreference is tiny (10M rows) and needs relational reads; NotificationHistory is kept in **monthly partitions with a 30-day retention window (~15 TB)** because the full 182 TB/year does not fit | 182 TB/year means history is *not* durable in Postgres — partitions older than 30 days are detached to S3/Parquet, so "show me my notification from 8 months ago" is an analytics query, not an inbox query. If product requires low-latency history beyond 30 days, switch NotificationHistory to Cassandra partitioned by `user_id`. |
 | **Redis** | IdempotencyKey (24h TTL), preference cache (5-min TTL), rate limit counter per user | Sub-ms lookup for dedup check on every delivery retry; preference cache absorbs repeated lookups at 35K notifs/sec; token bucket for 100 notifs/user/hour rate limit is O(1) with INCR+TTL | Volatile — if Redis restarts, idempotency keys are lost; at-least-once delivery guarantee + recheck against Postgres history is the fallback |
 | **Kafka** | NotificationRequest event transport (primary inbound path) | 35K events/sec — Kafka handles ~100K msgs/sec on a single broker; topic partitioned by `user_id` preserves per-user ordering; durable replay if consumer crashes | Adds ~10–50ms latency vs direct HTTP call; acceptable for async notification delivery; not suitable if P99 < 10ms required |
 
@@ -985,7 +985,7 @@ CREATE TABLE idempotency_keys (
 
 **Lose:** Stale preferences (up to 5 minutes); if user disables SMS at 12:00 PM, they might get 2-3 SMS messages until cache expires.
 
-**Failure mode if wrong:** If you do synchronous DB lookup per notification, DB becomes the bottleneck (typically 10-20 notifs/sec max for a single DB). You'll need read replicas and caching anyway. **Business impact:** At DocuSign's notification volume (1M+ notifications/day), synchronous DB preference lookups saturate the database at ~1K notifications/minute — during a bulk-send event (a customer sends 50K envelopes at once), the notification queue backs up for hours, signers receive signing request emails an hour late, the customer's campaign deadline is missed, and they file an SLA complaint.
+**Failure mode if wrong:** If you do a synchronous DB lookup per notification, the preference read becomes the throughput ceiling. A single Postgres primary sustains roughly **5–8K indexed point-reads/sec** while also absorbing the outbox and history writes — so at 35K lookups/sec you are ~5× over budget, connection pools saturate, and the fan-out consumers stall waiting on connections rather than on providers. **Business impact:** At DocuSign's volume (1B notifications/day, Section 4), the fan-out stage caps at ~6K notifs/sec instead of 35K — a 6× shortfall. During a bulk-send event (a customer sends 50K envelopes at once) the Kafka consumer lag grows faster than it drains, signers receive signing-request emails an hour late, the customer's contract deadline is missed, and they file an SLA complaint against a service that was never actually down — just permanently behind.
 
 ---
 
@@ -1138,6 +1138,89 @@ Notifications are **AP** (availability over consistency). Staleness is acceptabl
 
 ---
 
+**Q: "Your webhook handler receives a `bounce` event for `signer@acme-old-domain.com` — the mailbox no longer exists. Your retry logic sees a failure and retries. What actually happens to DocuSign?"**
+
+> This is the question that separates people who have run an email platform from people who have only designed one. **A hard bounce must never be retried, and the address must be permanently suppressed.**
+>
+> **Why retrying is actively dangerous.** Mailbox providers (Gmail, Outlook, Yahoo) score senders on the ratio of attempted-to-accepted mail. The industry threshold is roughly a **0.5% hard-bounce rate**; cross it and the provider starts throttling, then bulk-foldering, then rejecting *all* mail from your IPs — including the legitimate "please sign this contract" emails to valid addresses. At 21K emails/sec on shared dedicated IPs, a bulk import containing 2% stale addresses that you retry 7× each produces a bounce storm that can burn a warmed IP pool in under an hour. Recovering sender reputation takes weeks. This is a **self-inflicted platform-wide outage**, and no amount of retry logic makes it better — the retry logic *is* the cause.
+>
+> **The suppression list.** A separate table, checked before every send, that outranks user preferences:
+>
+> ```sql
+> CREATE TABLE email_suppressions (
+>     email_hash   BYTEA       PRIMARY KEY,
+>     reason       VARCHAR(20) NOT NULL CHECK (reason IN ('HARD_BOUNCE', 'COMPLAINT', 'UNSUBSCRIBE', 'SPAM_TRAP')),
+>     first_seen   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+>     bounce_count INT         NOT NULL DEFAULT 1,
+>     released_at  TIMESTAMPTZ
+> );
+> ```
+>
+> **Bounce classification drives the action — this is the whole answer:**
+>
+> | Provider signal | Meaning | Action |
+> |---|---|---|
+> | Hard bounce (SMTP 5xx — `550 no such user`) | Address does not exist | Suppress **permanently**. Never retry. Do not wait for a second occurrence. |
+> | Soft bounce (SMTP 4xx — mailbox full, greylisted) | Temporary | Retry with backoff. Suppress only after ~5 consecutive soft bounces over 72h — a mailbox that has been full for three days is effectively dead. |
+> | Spam complaint (FBL / `abuse` report) | Recipient pressed "Report spam" | Suppress **immediately and permanently**, and treat it as more serious than a bounce. Complaint rate > 0.1% triggers provider penalties. |
+> | Spam trap hit | Address planted to catch list abuse | Suppress + alert security; indicates a scraped or purchased list somewhere in the pipeline. |
+>
+> **Where it plugs in:** the Delivery Worker checks `email_suppressions` *before* the idempotency check and marks the notification `SUPPRESSED` (not `FAILED`) so ops dashboards distinguish "we chose not to send" from "we tried and broke."
+>
+> **The DocuSign-specific wrinkle — suppression is a product problem, not just an infra one.** If a signer's address hard-bounces, the envelope is now permanently undeliverable, and *silently* suppressing it means the sender waits days for a signature that will never arrive. So suppression must raise a visible event: the **sender** gets "we could not deliver to signer@acme.com — the address does not exist" in the envelope status, with a "correct recipient address" action. Suppressing quietly is technically correct and a product failure. Also: suppression is per-address-per-tenant for *marketing* mail but must be global for hard bounces — a nonexistent mailbox is nonexistent for every customer.
+>
+> **In an interview:** "Hard bounces are never retried — they're suppressed permanently on the first occurrence, because the bounce rate is what determines whether Gmail accepts any of our mail at all. Soft bounces retry with backoff and suppress after ~5 failures over 72 hours. Complaints suppress immediately. And critically, a suppression surfaces to the *sender* as an undeliverable-recipient event on the envelope, so they can fix the address instead of waiting forever."
+
+---
+
+**Q: "SendGrid has a regional outage — 100% of email API calls are returning 503 for 40 minutes. Your retry logic backs off to 127 seconds and then everything lands in the DLQ. Is that the right behaviour?"**
+
+> No. Exponential backoff is the right answer for a *transient per-message* failure and the wrong answer for a *provider-wide* one. With 21K emails/sec, 40 minutes of outage is ~50M messages: SQS will buffer them, but every one of them burns 7 retries first, and any that exhaust retries land in a DLQ that no human can replay at that volume. The fix has two parts.
+>
+> **Part 1 — circuit breaker per provider.** Track the error rate per provider over a rolling window. Above a threshold (e.g. > 50% failures over 30 seconds with a minimum of 20 samples) the breaker **opens**: the worker stops calling SendGrid entirely and stops consuming retries against it. This is important because retrying into a dead provider adds load to its recovery and wastes worker capacity. The breaker half-opens after 30s and lets a few probe requests through.
+>
+> **Part 2 — provider failover behind a channel abstraction.** The `EmailProvider` interface has two implementations — `SendGridProvider` (primary) and `SesProvider` (secondary). When the SendGrid breaker opens, the worker routes to SES:
+>
+> ```java
+> public class FailoverEmailProvider implements EmailProvider {
+>
+>     private final List<EmailProvider> providers;
+>     private final Map<String, CircuitBreaker> breakers;
+>
+>     @Override
+>     public SendResult send(EmailMessage message) {
+>         for (EmailProvider provider : providers) {
+>             CircuitBreaker breaker = breakers.get(provider.name());
+>             if (!breaker.allowRequest()) {
+>                 // Breaker open — this provider is known-down, skip without burning a retry
+>                 continue;
+>             }
+>             try {
+>                 SendResult result = provider.send(message);
+>                 breaker.recordSuccess();
+>                 return result;
+>             } catch (ProviderUnavailableException e) {
+>                 breaker.recordFailure();
+>             }
+>         }
+>         // Every provider is down — do NOT drop; let SQS redeliver after the visibility timeout
+>         throw new AllProvidersUnavailableException(message.getEventId());
+>     }
+> }
+> ```
+>
+> **The four things that make failover real rather than a slide:**
+> 1. **Warm the secondary continuously.** Route 1–2% of normal traffic through SES at all times. An ESP IP pool that has sent nothing for six months has no sender reputation — failing over to it during an incident means Gmail greylists your emergency traffic. Cold standby for email is not standby.
+> 2. **Idempotency must span providers.** The Redis key is `notif:{event_id}:{user_id}:{channel}` — deliberately *not* keyed on the provider. Otherwise a message that SendGrid actually accepted but failed to acknowledge gets re-sent through SES and the signer receives the envelope twice.
+> 3. **SPF/DKIM/DMARC must already authorise both senders.** DNS records need SES in the SPF record and a DKIM key published *before* the incident; a DNS change has TTL propagation delay you cannot afford mid-outage.
+> 4. **Templates diverge.** SendGrid dynamic templates and SES templates are different objects. Render the final HTML in *our* service and send both providers a fully-rendered body — never depend on provider-side templating, or failover silently degrades every email to a broken layout.
+>
+> **What does not get failover:** SMS. Porting a short code between carriers takes weeks, and the sender ID a signer sees would change mid-conversation. For SMS the honest answer is degrade-and-queue: buffer in SQS and surface the delay, because the alternative (a second Twilio-equivalent with a different sender number) looks like a phishing attempt to the recipient.
+>
+> **In an interview:** "Per-message backoff handles transients; a provider-wide outage needs a circuit breaker plus a second ESP. I'd put both behind an `EmailProvider` interface, keep SES warm with 1–2% of live traffic so its IP reputation exists when I need it, and keep the idempotency key provider-agnostic so failover can't double-send. SMS gets no failover — short-code porting is a multi-week process, so SMS degrades to queued-with-visible-delay instead."
+
+---
+
 **Q: "You store quiet hours in the user's timezone (e.g., 'Asia/Kolkata', 22:00–08:00). During the US spring-forward DST transition (clocks jump from 2:00 AM to 3:00 AM), what happens to notifications scheduled for US users with quiet hours ending at 8:00 AM?"**
 
 > DST transitions are a real edge case that fails silently. The spring-forward scenario:
@@ -1172,7 +1255,7 @@ Notifications are **AP** (availability over consistency). Staleness is acceptabl
 
 - **Mistake 1:** "I'll have one queue for all notification channels." → **Why it's wrong:** SMS is the bottleneck (Twilio max ~10K SMS/sec). If SMS queue gets congested, emails get delayed. Users see 5-minute email latency, which is unacceptable. → **What to say instead:** "Per-channel SQS queues. Each channel has independent scaling. Email consumer fleet can have 10 instances, SMS can have 5, push can have 3. They don't interfere."
 
-- **Mistake 2:** "I'll call the user preference service for every notification (synchronous lookup)." → **Why it's wrong:** At 35K notifs/sec, you're making 35K preference lookups/sec to the database. Most databases can't sustain more than 1K concurrent queries. You'll need caching anyway. → **What to say instead:** "Redis cache for user preferences, 5-minute TTL. Fallback to database on cache miss. This handles 35K lookups/sec with sub-100ms latency."
+- **Mistake 2:** "I'll call the user preference service for every notification (synchronous lookup)." → **Why it's wrong:** At 35K notifs/sec you're making 35K preference lookups/sec against a primary that sustains ~5–8K indexed point-reads/sec while also carrying the outbox writes — a 5× overrun that shows up as connection-pool exhaustion, not as a slow query. → **What to say instead:** "Redis cache for user preferences, 5-minute TTL, fallback to Postgres on miss. Redis handles 35K lookups/sec at sub-millisecond latency (~0.2ms), so the DB only sees the ~35 misses/sec from TTL expiry."
 
 - **Mistake 3:** "If the outbox processor crashes, notifications are lost." → **Why it's wrong:** Outbox entries are durable in the DB. The processor is stateless and restartable. When it restarts, it will re-process all PENDING outbox entries. Nothing is lost. → **What to say instead:** "Outbox entries are append-only in the database. The processor is stateless and restartable. If it crashes, the next instance reads the same PENDING entries and processes them. At-least-once delivery is guaranteed."
 
@@ -1187,7 +1270,7 @@ Notifications are **AP** (availability over consistency). Staleness is acceptabl
 | **Extensibility** | ✅ | New channel (Slack, WhatsApp) = new SQS queue + new consumer class implementing DeliveryHandler interface; fan-out core unchanged. For DocuSign: adding in-app notifications for the DocuSign mobile app = new push-queue + APNs/FCM consumer, zero changes to the outbox, Kafka, or email/SMS consumers. |
 | **Security** | ✅ | Service-to-service auth (HMAC-signed API key) on POST /v1/notifications. User preferences are tenant-isolated (tenant_id scoped). Notifications contain no contract content — only metadata + a signed pre-signed URL to the document — for DocuSign: if a notification SMS is intercepted, the attacker sees only "A document is awaiting your signature" + an expiring URL, not the contract contents. |
 | **Availability** | ✅ | Outbox pattern makes event publishing atomic with the DB transaction — no dual-write gap (notification is never lost even if the service crashes between DB write and Kafka publish). At 35K notifs/sec (Section 4), per-channel SQS queues mean an SMS provider outage (Twilio down) does not delay email delivery — queues are independent. 99.9% SLO. |
-| **Scalability** | ✅ | Kafka 50 partitions by user_id → 50 parallel fan-out consumers. At 1B notifs/day (Section 4 = 35K notifs/sec), SQS email-queue auto-scales consumer fleet to 21K emails/sec (SendGrid's max). Notification history archived to S3 after 1 year — active table stays < 10GB. For DocuSign's bulk-send feature (one customer sends 50K envelopes at once), the Kafka partition design ensures load is spread across 50 consumers, not serialized. |
+| **Scalability** | ✅ | Kafka 50 partitions by `user_id` → 50 parallel fan-out consumers, sized so peak 35K notifs/sec (Section 4) is 700/sec per partition. The binding constraint is **not** our fleet but ESP capacity: 21K emails/sec peak exceeds any single SendGrid account, so email is sharded across a subuser/dedicated-IP pool with SES as a warm second provider. Notification history is 500 GB/day (Section 4) — Postgres holds a 30-day partitioned hot window (~15 TB) and detaches older partitions to S3/Parquet; there is no world in which the active table is single-digit GB. For DocuSign's bulk-send feature (one customer sends 50K envelopes at once), the 50-partition design spreads the burst across 50 consumers, and the `high`/`bulk` SLA queues (Section 11) keep a live "please sign" email from queuing behind those 50K. |
 | **Observability & Traceability** | ✅ | Every notification carries notification_id + trace_id from event creation through Kafka → fan-out → SQS → delivery attempt. Log at each stage: queued, preferences_checked, delivered, failed. Alert: delivery_latency_p99 > 30s (SLA breach). For DocuSign's legal proof of notification: "We notified signer@example.com on June 24 at 2:14 PM UTC" is a query on notification_status (event_id, channel, sent_at, provider_response) — the legal audit trail required for non-repudiation defense. |
 
 ---
@@ -1432,5 +1515,6 @@ Thread B: deliver event_id=X → SQS → worker: SETNX "notif:sent:X:email" → 
 | June 24, 2026 | **D3-notification-service.md created.** Full 15-section solution framework for Type A System Design. Covers: outbox pattern for reliable event publishing, per-channel fan-out (email/SMS/push), exponential backoff retry logic, idempotency for exactly-once delivery, rate limiting, and DocuSign-specific depth (multi-signer coordination, audit trails, quiet hours). Scale: 1B notifs/day, 35K notifs/sec peak. Prerequisites: `07-cdc-outbox.md`, `04-idempotency.md`. |
 | Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **APNs vs FCM distinction** — FCM wraps APNs for iOS (adds latency), or use native APNs direct (lower latency, but two auth flows); store `device_platform` per device and route directly; (2) **Stale device token handling** — APNs returns HTTP 410 `BadDeviceToken`, FCM returns `registration_not_found`; correct response: immediately delete from device token table, no retry; failure to handle this causes APNs rate-limiting of your entire service; (3) **Outbox polling at scale** — 3,500 rows/batch at 100ms is fine today; at 10× scale, switch from polling to CDC via Debezium (reads Postgres WAL, publishes to Kafka, zero SELECT overhead, sub-ms latency); `SELECT FOR UPDATE SKIP LOCKED` prevents multi-processor row contention for the intermediate scale. |
 | Jul 5, 2026 | **Section 6 restructured: single final-state diagram → 3-stage progressive HLD.** Stage 1 (Direct Sync HTTP): upstream calls Notification Service synchronously; Service calls SendGrid + Twilio in sequence — BREAKING POINTs: provider down = caller blocks + request fails; sequential calls saturate thread pool at 35K/sec; no retry = lost notifications. Stage 2 (Kafka + Per-Channel SQS + Retry): Kafka for ordered event ingestion, Fan-out Service routes to email-queue/sms-queue/push-queue, delivery workers with exponential backoff retry — BREAKING POINTs: dual-write gap (crash between DB write and Kafka publish = silent loss); no idempotency (consumer restart = duplicate emails). Stage 3 (Outbox + Redis + DLQ — production): outbox pattern makes DB write + Kafka publish atomic; Redis handles rate limiting (INCR+TTL) + preferences cache (5-min TTL) + idempotency keys (event_id+user_id+channel, 24h TTL); DLQ captures permanent failures. Four inline decision tables added: (1) event transport — sync HTTP ❌ / single queue ⚠️ / Kafka ✅; (2) fan-out queue strategy — single queue ❌ / in-memory ❌ / per-channel SQS ✅; (3) retry pattern — none ❌ / fixed-interval ⚠️ / exp backoff+jitter ✅; (4) idempotency storage — none ❌ / Postgres table ⚠️ / Redis TTL ✅. All Section 6 verdicts verified against Section 7 deep dive choices — no contradictions. |
+| Aug 2026 | **Audit pass — storage math, provider limits, and the two missing production gaps.** (1) **Fixed a 1000× storage error**: 365B notifications × 500 B = **182 TB/year**, not 182 GB/year. This invalidated the "fits in one Postgres instance" conclusion, so Section 4, the Data Store Selection table, and the Section 14 Scalability cell now state 500 GB/day with a 30-day partitioned hot window (~15 TB) in Postgres and older partitions detached to S3/Parquet — plus the explicit "if you need low-latency history beyond 30 days, this becomes Cassandra partitioned by `user_id`" fork. (2) **Fixed the per-channel breakdown**, which computed 60/30/10% against the 35K *peak* while labelling the results "baseline" — now quoted as peak with baseline in parentheses. (3) **Corrected the SendGrid capacity claim**: "up to 100K emails/sec (plenty)" contradicted the file's own "SendGrid: 3B emails/day" (≈35K/sec platform-wide). Email is now framed as the *hardest* constraint in the design — a single account will not do 21K/sec — requiring a sharded subuser/dedicated-IP pool. (4) **Fixed Trade-off 3 and Mistake 2**: "10-20 notifs/sec max for a single DB" and "sub-100ms Redis latency" replaced with ~5–8K indexed point-reads/sec and ~0.2ms; the business-impact figure "1M+ notifications/day" corrected to the file's actual 1B/day. (5) **NEW Tier 2 probe — bounce/complaint suppression**, the biggest missing piece: hard bounces must be suppressed permanently on first occurrence and never retried, because a >0.5% bounce rate causes mailbox providers to throttle *all* mail from your IPs; includes the `email_suppressions` schema, the hard/soft/complaint/spam-trap classification table, `SUPPRESSED` vs `FAILED` status distinction, and the DocuSign product consequence (a suppressed signer address must surface to the sender as an undeliverable-recipient event, or they wait forever for a signature that can never arrive). (6) **NEW Tier 2 probe — provider failover**: circuit breaker per provider plus a `FailoverEmailProvider` routing SendGrid → SES, and the four things that make it real — continuously warming the secondary with 1–2% of live traffic, keeping the idempotency key provider-agnostic so failover can't double-send, pre-publishing SPF/DKIM for both senders, and rendering templates in-house; plus why SMS deliberately gets no failover (short-code porting takes weeks and a changed sender number reads as phishing). |
 | Jul 9, 2026 | **Section 11 additions.** (1) SLA-based queue isolation from Docusign Engineering Blog mid-2025: Live Queue (P95 <15 min), Bulk Queue (flexible SLA), Workflow Queue (per-workflow SLA); explains head-of-line blocking and two-tier priority model; cross-references existing per-channel queues. (2) CAP theorem position for notifications explicitly stated: AP (staleness not legally material; duplicate recoverable; contrast with signed records which are CP). |
 | Jul 5, 2026 | **Section 10 business impact + Section 14 DocuSign dimensions pass.** Section 10: added **Business impact:** to all 3 trade-offs — 40% latency overhead causing signer abandonment before notification delivery completes (throughput cost), email delay triggering duplicate "Sign Now" click creating duplicate envelope event (at-least-once delivery), bulk-send 50K envelopes backing up notification queue for hours and missing marketing campaign deadline (queue depth). Section 14: rewrote all 7 dimension cells — ZoneId DST ambiguity in quiet-hours scheduler causing midnight notification surge (Usability), `delivery_log` audit trail as legal proof of notification for non-repudiation disputes (Observability), bulk-send Kafka partition design from Section 4 (35K notifs/sec, 20 partitions) enabling Scalability RCA. |

@@ -231,7 +231,7 @@ Then immediately go to Section 2. Do NOT start drawing.
 - If latency > 5ms, becomes request bottleneck
 
 **Key conclusions:**
-- "At 35K requests/sec peak and 100K keys, we can't use a single counter per request (11K-35K increments/sec). Redis INCR can handle ~500K ops/sec, so we're fine, but we need to avoid lock contention."
+- "At 35K requests/sec peak, one Redis node is *not* comfortably fine. The often-quoted ~500K ops/sec is pipelined single-command `GET`; our unit of work is a non-pipelined `EVALSHA` running a 3–4 command Lua script, which realistically sustains ~60–80K ops/sec on Redis's single command thread. 35K/sec is ~50% of one core — enough to work, not enough headroom for a hot tenant plus the 3× spike. That's why Stage 3 shards."
 - "At 10 MB memory footprint, keeping all counters in Redis is feasible."
 - "Rate limit decisions must be < 1ms; latency is critical. We can't afford DB queries or synchronous network calls."
 
@@ -298,7 +298,7 @@ X-RateLimit-Reset: 1720090800
 
 **`POST /v1/rate-limit/check`** is the middleware check — typically called inline by an API Gateway or a middleware wrapper before the actual request is processed. The response body has `allowed: true/false`. Every call to this endpoint increments the counter (it IS the rate limit check, not a simulation). Idempotency has no meaning here: every call is a separate request that should be counted. The 429 response from this endpoint carries the same headers as the 429 injected by the gateway.
 
-**`GET /v1/rate-limit/status/{api_key}`** is the observability endpoint — for callers to check their quota before making a burst of calls. It does NOT increment the counter. Think of it as "how many tokens do I have in my bucket right now?" The `remaining` and `reset_at` fields let a client decide "I have 50 left and the window resets in 42 seconds — I can send 50 requests now or wait."
+**`GET /v1/rate-limit/status/{api_key}`** is the observability endpoint — for callers to check their quota before making a burst of calls. It does NOT increment the counter. Think of it as "how many tokens do I have in my bucket right now?" The `remaining` and `reset_at` fields let a client decide "I have 50 left and the window resets in 42 seconds — I can send 50 requests now or wait." Its two 4xx codes have precise triggers: `401` when the `Authorization` header is absent or the key's HMAC/signature fails verification, and `404` when the key is well-formed and authenticated but has **no row in `quota:{api_key}`** — i.e. it was revoked or never provisioned. Keep those distinct: a revoked key returning `401` would tell an attacker "wrong credential, try again," while `404` correctly says "this identity is gone." Note the deliberate asymmetry — a caller may only query *their own* key's status, so a request for someone else's key returns `404`, never `403`, to avoid confirming that another tenant's key exists.
 
 **The 429 response headers are the real design deliverable** for this question. Most candidates say "return 429 if rate limited" and stop. The interviewer wants to see `Retry-After` (RFC 7231 standard header), `X-RateLimit-Remaining`, and `X-RateLimit-Reset`. Without `Retry-After`, a misbehaving client retries immediately after receiving 429 — which sends another rejected request, adding load with no benefit. Good clients that parse `Retry-After` back off automatically and don't pile on.
 
@@ -389,7 +389,29 @@ KEY INVARIANT (Stage 1):
 >
 > 📖 Algorithm mechanics and edge cases: `SystemDesignConcepts/Foundations/Performance-and-Scale/02-rate-limiting.md`
 
-**Why Stage 2 breaks:** Single Redis node = bottleneck + single point of failure. At 100K req/sec, single-threaded Redis CPU hits 100% — Lua script execution blocks the event loop and P99 latency exceeds 100ms, adding overhead to every API call. At 1M req/sec, the node cannot sustain writes at all. Also: if Redis is down, all requests fail (or all pass — neither is correct). Observable: Redis CPU alarm fires; rate limiter P99 spikes; upstream API P99 climbs proportionally. Need clustering and atomicity.
+**Why Stage 2 breaks — and be careful with the numbers here, because the naive version of this answer contradicts itself.** The "Redis does 500K ops/sec" figure you'll see quoted is for *pipelined single-command* `GET`/`SET` on a loopback benchmark. Our workload is nothing like that: each rate-limit decision is one `EVALSHA` running a 3–4 command Lua script, non-pipelined, one round trip per request. Realistic sustained throughput for that shape of work on one Redis core is **~60–80K ops/sec**, not 500K.
+
+So the breaking point:
+
+```
+BREAKING POINT: Stage 2 breaks at ~35K req/sec — our own Section 4 peak.
+  Exhausted resource: the single Redis process's ONE event-loop thread
+    (Redis command execution is single-threaded; Lua runs on that same thread
+    and blocks it for the whole script).
+  At 35K EVALSHA/sec against a ~70K ops/sec effective ceiling we are at ~50%
+    of one core with ZERO headroom for: (a) a single hot enterprise tenant
+    adding 10K req/sec, (b) the 3× traffic spike we already budgeted for,
+    (c) BGSAVE/AOF-rewrite fork stalls, or (d) failover.
+  Observable symptom: Redis `instantaneous_ops_per_sec` plateaus while the
+    client-side `latency` histogram shifts — rate-limiter P99 goes from
+    ~0.8ms to >50ms, and because the limiter is inline, EVERY DocuSign API
+    call inherits that 50ms.
+  Why Stage 3 is needed: two independent reasons, and say both —
+    (1) capacity headroom (shard the key space), and
+    (2) a single node is a SPOF with no failover; at 99.9% single-node
+        availability that is ~8.7 hours/year of a hard dependency on the
+        request path, which alone disqualifies it.
+```
 
 ---
 
@@ -489,43 +511,71 @@ The rate limiting algorithm determines accuracy and latency. Token bucket is fas
 | Option | Pros | Cons |
 |---|---|---|
 | **Token Bucket** | O(1) per request, fast. Handles bursts naturally (accumulate tokens). Simple to implement. | Can overestimate capacity (burst allowance may exceed true limit in practice). Not perfectly accurate for strict limits. |
-| **Sliding Window (log-based)** | Perfectly accurate. Every request is counted exactly. No overages possible. | O(N) complexity per request (scan all requests in window). For 100K requests/min, that's 1,666 requests to scan per new request. Latency disaster. |
+| **Sliding Window (log-based)** | Perfectly accurate. Every request is counted exactly. No overages possible. | **Memory, not CPU, is what kills it.** The log stores one timestamp entry per allowed request per key, so a key at its 1,000 req/min limit holds 1,000 entries. As a Redis ZSET that's roughly 1,000 × ~64 bytes ≈ 64 KB *per key*; at 100K keys that's ~6.4 GB versus the 10 MB a counter needs — a 640× blow-up. The per-request cost with `ZREMRANGEBYSCORE` + `ZADD` + `ZCARD` is O(log N + M), not O(N), so the honest objection is the memory footprint and the GC/eviction pressure, not scan time. Get this right — saying "O(N) scan per request" invites a correction. |
 | **Fixed Window (counter)** | O(1) per request, fast. Simple counter per time bucket. | Edge case: requests at window boundaries can burst (e.g., 1000 at 11:59, 1000 at 12:00 = 2000 in 2 seconds). Unfair to users at edges. |
 | **Token Bucket + Sliding Log (hybrid)** | Combines accuracy and speed. Token bucket for burst detection; sliding log for fairness check. | Added complexity; more code to maintain and debug. |
 
 **Decision: Token Bucket with burst allowance**
-Because at 35K requests/sec, O(N) sliding window is infeasible. Token bucket is O(1) and acceptable for most use cases. The burst allowance is intentional (allow 100 req/sec for 2 seconds = 200 token burst) to smooth traffic spikes without being unfair.
+Because the sliding window log needs ~6.4 GB of Redis to hold per-request timestamps for 100K keys against the 10 MB a token bucket needs, and our requirement explicitly asks for a burst allowance that only token bucket expresses natively. Token bucket is O(1) in both time and space per key.
+
+**Be precise about what "burst allowance" costs you.** With capacity `C` and refill rate `R` per second, the maximum a client can send in any window of `T` seconds is `C + R×T` — *not* `R×T`. That surplus `C` is the burst, and it is a deliberate, quantified over-grant, not an accident:
+
+```
+Standard tier: limit 1,000 req/min → R = 1000/60 = 16.67 tokens/sec
+               burst requirement 100 req/sec → C = 600 (a 6-second burst at 100/sec)
+
+Worst case in any 60-second window = C + R×60 = 600 + 1,000 = 1,600 requests
+                                   = 60% over the nominal 1,000/min limit.
+```
+
+If 60% over-grant is unacceptable to the business, you shrink `C` — and you lose burst tolerance in exchange. That is the actual dial, and naming the 1,600 number is what shows you understand the algorithm rather than reciting it.
 
 **Token bucket pseudocode:**
 
+> ⚠️ **The bug almost every candidate writes on the whiteboard.** If you compute elapsed time as `(now - lastRefillTime) / 1000` with `long` arithmetic *and* then unconditionally assign `lastRefillTime = now`, the bucket never refills under real traffic: at 100ms between calls the integer division truncates to `0` seconds, you add 0 tokens, and you throw away the 100ms by resetting the timestamp. Every call loses its remainder, so the bucket drains to empty and stays there. Do the arithmetic in milliseconds with a `double`, or only advance the timestamp by the amount you actually consumed.
+
 ```java
 class TokenBucket {
-    private final int capacity;        // max tokens (burst size)
-    private final int refillRate;      // tokens per second
+
+    // max tokens the bucket can hold — this IS the burst size
+    private final int capacity;
+    // tokens added per second; fractional, so declare it double not int
+    private final double refillRatePerSecond;
     private double tokens;
-    private long lastRefillTime;
-    
+    private long lastRefillMillis;
+
+    TokenBucket(int capacity, double refillRatePerSecond) {
+        this.capacity = capacity;
+        this.refillRatePerSecond = refillRatePerSecond;
+        this.tokens = capacity;
+        this.lastRefillMillis = System.currentTimeMillis();
+    }
+
     public synchronized boolean allowRequest() {
-        // Refill tokens based on elapsed time
-        long now = System.currentTimeMillis();
-        long elapsedSeconds = (now - lastRefillTime) / 1000;
-        tokens = Math.min(capacity, tokens + refillRate * elapsedSeconds);
-        lastRefillTime = now;
-        
-        // Check if we have at least 1 token
+        refill();
         if (tokens >= 1.0) {
             tokens -= 1.0;
-            return true;  // allow
+            return true;
         }
-        return false;  // reject
+        return false;
+    }
+
+    private void refill() {
+        long now = System.currentTimeMillis();
+        // Millisecond precision + double arithmetic: a 100ms gap correctly adds
+        // 0.1 × refillRate tokens instead of truncating to zero.
+        double elapsedSeconds = (now - lastRefillMillis) / 1000.0;
+        tokens = Math.min(capacity, tokens + (refillRatePerSecond * elapsedSeconds));
+        lastRefillMillis = now;
     }
 }
+```
 
-// Example: 1000 requests/min, burst of 100 req/sec (6-7 second burst)
-TokenBucket bucket = new TokenBucket(
-    capacity = 600,        // 100 req/sec × 6 sec burst window
-    refillRate = 16.67     // 1000 req/min ÷ 60 sec
-);
+```java
+// Standard tier: 1,000 req/min sustained, 100 req/sec burst for ~6 seconds.
+// capacity 600 = 100 req/sec × 6 sec burst window
+// refill 16.67 = 1000 req/min ÷ 60 sec
+TokenBucket bucket = new TokenBucket(600, 16.67);
 ```
 
 **In an interview, if asked:** "Token bucket is O(1) and handles bursts naturally by accumulating tokens during quiet periods. The burst allowance (capacity) is tunable — larger capacity = more bursty traffic allowed. Sliding window is more accurate but O(N) latency kills it at scale."
@@ -535,7 +585,7 @@ TokenBucket bucket = new TokenBucket(
 ### Deep Dive 2: Distributed Rate Limiting — Redis + Lua Scripts
 
 **Why this is the riskiest component:**
-At 35K requests/sec, we can't afford a single bottleneck. Redis is fast (500K ops/sec), but we need to ensure strong consistency. A naive approach (client checks, then increments) has a race condition: two concurrent requests both see capacity, both increment, both pass = overage.
+At 35K requests/sec, we can't afford a single bottleneck. Redis is fast (~60–80K scripted ops/sec per node, see Stage 2), but we need to ensure strong consistency. A naive approach (client checks, then increments) has a race condition: two concurrent requests both see capacity, both increment, both pass = overage.
 
 **Strong consistency challenge:**
 
@@ -577,7 +627,9 @@ String decision = redis.eval(luaScript, keys, args);
 return decision.equals("1");  // allow if 1, reject if 0
 ```
 
-**Why sharding?** 35K requests/sec to single Redis instance approaches ~7% of max capacity (500K/sec). Sharding by key hash distributes load across N shards: 35K/N per shard. At N=4, each shard sees ~8.75K/sec (easy).
+**Why sharding?** Not because 35K/sec is impossible on one node — because it leaves no headroom and no failover. Against a realistic ~70K ops/sec ceiling for scripted, non-pipelined work, 35K/sec is ~50% of one Redis command thread. Sharding by key hash gives 35K/N per shard: at N=4 each shard sees ~8.75K/sec (~12% utilization), which absorbs a 3× spike plus one hot enterprise tenant and still survives losing a shard's primary.
+
+> ⚠️ **Do not quote "500K ops/sec" as your Redis budget in an interview.** That number is `redis-benchmark` with pipelining on trivial commands. State the workload shape first ("one non-pipelined EVALSHA per request, 3–4 commands inside"), then the number. Interviewers who run Redis in production notice the difference immediately.
 
 **⚠️ Production gotcha: Redis Cluster CROSSSLOT error**
 
@@ -620,39 +672,106 @@ Rate limiter is a critical service. If it fails, do we:
 (B) Allow all requests? → Fairness SLA broken (quotas not enforced).
 (C) Degrade gracefully? → Some requests allowed, quotas approximate.
 
-**Strategy: Graceful degradation with local state**
+**Strategy: Graceful degradation with a *divided* local budget**
 
-On Redis failure:
-1. API servers fall back to local in-memory counters (per-server)
-2. Requests are allowed/rejected using local state (approximate)
-3. Overages are possible (local counters don't coordinate across servers)
-4. When Redis recovers, local counters sync to Redis (eventual consistency)
+The naive version of this answer — "each server falls back to its own local token bucket" — is a trap, and it's worth knowing exactly why, because the interviewer will make you do the arithmetic.
+
+### 🎨 Visual — Redis is down: why each node gets 1/N of the budget, not all of it
+
+```
+Design load: 50 rate-limiter nodes behind the LB. Standard tier = 1,000 req/min.
+
+  ❌ NAIVE FALLBACK — every node instantiates a FULL-quota local bucket
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  node 1   bucket(limit = 1,000/min)   ──┐                           │
+  │  node 2   bucket(limit = 1,000/min)   ──┤                           │
+  │  ...                                    ├──▶ effective global limit │
+  │  node 50  bucket(limit = 1,000/min)   ──┘    = 50 × 1,000           │
+  │                                              = 50,000 req/min       │
+  │                                                                     │
+  │  That is a 4,900% over-grant — 50× the quota, not "5–10%".          │
+  │  The limiter is effectively OFF while still reporting healthy.       │
+  └────────────────────────────────────────────────────────────────────┘
+
+  ✅ DIVIDED FALLBACK — each node gets limit ÷ N, with a fairness margin
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  N discovered from the service registry / K8s endpoint count = 50   │
+  │  per-node budget = ceil(1,000 / 50) × 1.2  = 20 × 1.2 = 24 /min    │
+  │                                        └─ 20% margin for uneven LB  │
+  │  node 1   bucket(24/min) ──┐                                        │
+  │  node 2   bucket(24/min) ──┤                                        │
+  │  ...                       ├──▶ worst case 50 × 24 = 1,200 req/min  │
+  │  node 50  bucket(24/min) ──┘        = 20% over quota, BOUNDED       │
+  └────────────────────────────────────────────────────────────────────┘
+
+  Why the 20% margin exists at all: a round-robin LB does not distribute one
+  api_key's traffic perfectly evenly. Without margin, a key whose requests
+  happen to land 60/40 across two nodes gets throttled below its paid quota —
+  you'd be penalising a paying customer during YOUR outage. The margin trades
+  a bounded, known over-grant for never under-serving.
+
+KEY INVARIANT:
+   Fallback over-grant is N × per_node_budget, where N is the node count.
+   The only way to bound it is to divide the budget by N. "Each node keeps
+   the full limit" is not degradation — it is silently disabling the limiter.
+```
+
+**So the strategy is:**
+1. On `RedisException`, fall back to a local in-memory bucket sized `ceil(limit / N) × 1.2`, where `N` is the live node count from the service registry
+2. Emit a `rate_limiter_degraded=true` metric and alert — a silent fallback is worse than the outage, because nobody knows enforcement is approximate
+3. Do **not** try to sync local counters back into Redis on recovery. The windows have already expired and the counts are unreconcilable; just resume authoritative counting on the next window. (Attempting a sync is a common wrong answer — it writes stale counts over fresh ones.)
 
 ```java
 class RateLimiter {
+
     private final RedisClient redis;
     private final Map<String, TokenBucket> localBuckets = new ConcurrentHashMap<>();
-    
-    public boolean allowRequest(String apiKey) {
+    private final ClusterMembership membership;
+    private final MeterRegistry metrics;
+
+    public boolean allowRequest(String apiKey, RateLimitPolicy policy) {
         try {
-            // Try Redis first (strong consistency)
-            return checkWithRedis(apiKey);
+            return checkWithRedis(apiKey, policy);
         } catch (RedisException e) {
-            // Fallback to local state (approximate)
+            // Redis unreachable → fail open, but with a DIVIDED budget so the
+            // total over-grant across the fleet stays bounded at ~20%.
+            metrics.counter("rate_limiter.degraded", "reason", "redis_down").increment();
             TokenBucket local = localBuckets.computeIfAbsent(
                 apiKey,
-                k -> new TokenBucket(CAPACITY, REFILL_RATE)
+                k -> buildDividedBucket(policy)
             );
             return local.allowRequest();
         }
     }
+
+    private TokenBucket buildDividedBucket(RateLimitPolicy policy) {
+        // N = live node count; never zero, so guard it
+        int nodeCount = Math.max(1, membership.liveNodeCount());
+        // 1.2 = fairness margin for uneven load-balancer distribution
+        double perNodePerMinute = Math.ceil((double) policy.getRequestsPerMinute() / nodeCount) * 1.2;
+        int perNodeCapacity = (int) Math.ceil(policy.getBurstCapacity() / (double) nodeCount);
+        return new TokenBucket(perNodeCapacity, perNodePerMinute / 60.0);
+    }
 }
 ```
 
-**Trade-off:** Temporary overages during Redis failure (~5-10% overage possible) vs complete unavailability. Acceptable because:
-- Redis failure is rare (99.99% uptime)
-- Temporary overages are minor vs total blocking
-- Clients can implement backoff / retry logic
+**Trade-off:** a bounded ~20% over-grant during a Redis outage versus 100% request rejection. Acceptable because:
+- Redis at 99.99% uptime is ~52 minutes/year of degraded enforcement
+- A bounded 20% over-grant costs backend headroom; fail-closed costs the entire API
+- Clients already implement backoff against `429`, so the recovery path is well-trodden
+
+---
+
+**Clock skew — the failure mode nobody mentions until they've been paged for it**
+
+Both the fallback bucket and the window-key computation read the **local node's wall clock**. Two consequences at 50 nodes:
+
+| Where the clock is read | Skew symptom | Fix |
+|---|---|---|
+| `rate_limit:{key}:{window_minute}` computed on the app node | Two nodes 400ms apart straddle a minute boundary and write to *two different* window keys for the same instant. The key that "loses" starts at 0, so a client gets close to 2× quota for that second — the fixed-window boundary problem, but induced by skew rather than by the client | Compute the window from **Redis's** clock, not the app's: call `redis.call('TIME')` inside the Lua script. Redis 5+ replicates scripts by their effects, so a non-deterministic `TIME` call inside Lua is safe (this was genuinely unsafe under pre-5.0 verbatim script replication) |
+| `System.currentTimeMillis()` in the local fallback bucket | An NTP step correction jumping the clock *backwards* makes `elapsedSeconds` negative, so `tokens + (rate × negative)` **removes** tokens and the node rejects everything until the clock catches up | Use `System.nanoTime()` (monotonic — never steps backwards) for elapsed-time math, and reserve wall-clock time for the `Retry-After` value the client sees |
+
+**In an interview:** "One authoritative clock. The counter window comes from Redis's `TIME`, not from the 50 app nodes' clocks, so NTP skew can't split a window. And any elapsed-time math in-process uses a monotonic clock, because `currentTimeMillis` can step backwards and a negative elapsed time silently drains the bucket."
 
 ---
 
@@ -704,8 +823,8 @@ quota:api_key_12345 → { tier: "standard", limit: 1000, burst: 100 }
 
 - **Chose:** Token bucket with burst allowance
 - **Gain:** O(1) latency per request; handles bursts naturally (accumulated tokens during quiet periods)
-- **Lose:** Not perfectly accurate. Burst allowance can temporarily exceed true limit (e.g., 1000 req/min limit allows 100 req/sec burst = 2000 in 2 seconds if perfectly timed)
-- **Failure mode if wrong:** If we chose sliding window for perfect accuracy, O(N) complexity (scan all requests in window) would add 50-100ms latency per request at scale. Rate limiter becomes the bottleneck, not the backend. At 35K requests/sec, we can't afford that. **Business impact:** A malicious tenant floods the API at 50× their quota (5,000 req/sec from 50 servers, each seeing only 100 req/sec locally) — for DocuSign this means Goldman Sachs's $500K/year signing workflows are starved of API capacity, SLA is breached, and the enterprise contract is at risk of cancellation.
+- **Lose:** Not perfectly accurate. The maximum in any 60-second window is `capacity + rate × 60` = `600 + 1,000` = **1,600 requests against a nominal 1,000/min limit — a 60% over-grant** that is deliberate and quantified, not accidental
+- **Failure mode if wrong:** If we chose the sliding window log for perfect accuracy, the cost lands on Redis memory, not CPU: one timestamp entry per allowed request per key means ~64 KB per saturated key and ~6.4 GB across 100K keys, versus 10 MB for counters. Redis crosses its `maxmemory` ceiling and begins evicting keys — and an evicted rate-limit key reads as "zero requests so far," so the limiter silently starts letting *everything* through for the evicted keys. **Business impact:** the failure is invisible in the limiter's own metrics (no errors, no 5xx — just fewer 429s), so the first signal is the *backend* browning out. For DocuSign that means signing-API latency climbs for every tenant at once during a quarter-end envelope surge, senders see envelopes stuck in "sending," and the incident is misdiagnosed as a signing-service problem for the first 30 minutes because the rate limiter looks perfectly healthy on its dashboard.
 
 ### Trade-off 2: Strong Consistency (Atomic Lua) vs Eventual Consistency (Local Counters)
 
@@ -716,9 +835,9 @@ quota:api_key_12345 → { tier: "standard", limit: 1000, burst: 100 }
 
 ### Trade-off 3: Fail-Open (Allow on Redis Failure) vs Fail-Closed (Reject on Redis Failure)
 
-- **Chose:** Fail-open with local fallback (allow requests using local counters, approximate quotas)
-- **Gain:** Availability; requests are not blocked if Redis is temporarily down. Graceful degradation.
-- **Lose:** Temporary overages possible during Redis failure. Quotas are approximate for 1-2 minutes until Redis recovers.
+- **Chose:** Fail-open with a *divided-budget* local fallback — each of the N nodes enforces `ceil(limit / N) × 1.2` locally, so the fleet-wide over-grant is bounded at ~20%
+- **Gain:** Availability; requests are not blocked if Redis is temporarily down. Graceful degradation with a *quantified* accuracy loss rather than an unbounded one.
+- **Lose:** ~20% over-grant while degraded, plus the operational cost of knowing the live node count N (service-registry dependency). If you skip the division and let every node keep the full limit, the over-grant is N× — 50 nodes = 50× quota = the limiter is effectively off. Say the division out loud; it's the difference between degradation and disabling.
 - **Failure mode if wrong:** If we chose fail-closed (reject all requests when Redis is down), the entire API becomes unavailable. 99.99% Redis uptime = ~52 minutes downtime/year. Customers can't access the service. SLA breach. With fail-open, we trade temporary quota overages for continuous availability. **Business impact:** During those ~52 minutes of Redis downtime per year, 100% of API requests are rejected — for DocuSign this means active signing ceremonies are abruptly blocked mid-flow, senders cannot void or resend envelopes, and enterprise customers breach their contractual SLA, triggering financial penalties and VP-level support escalations.
 
 ---
@@ -733,7 +852,7 @@ quota:api_key_12345 → { tier: "standard", limit: 1000, burst: 100 }
 
 > "Let me pause and map this back to the DocuSign evaluation dimensions:
 > - **Scalability:** Sharded Redis cluster handles 35K requests/sec with token bucket (O(1)). Horizontal scaling: add more Redis shards as load increases.
-> - **Availability:** Fail-open strategy with local fallback. Redis failure doesn't block API access; quotas degrade gracefully to ~5-10% overages during outage.
+> - **Availability:** Fail-open with a divided-budget local fallback — each node enforces `limit ÷ N` so the fleet-wide over-grant during a Redis outage is bounded at ~20%, not the 50× you'd get if every node kept the full limit.
 > - **Security:** API-key-based rate limiting prevents credential-stuffing attacks (bot retries limited by key). Tiered quotas: free tier gets 100 req/min, standard gets 1000; attackers must pay for higher quotas.
 > - **Observability:** Log rate limit decisions (allow/reject per key) for audit. Track quota usage per tenant. Alert on unusual patterns (key suddenly exceeds quota = possible bot).
 > - **Extensibility:** Strategy pattern: pluggable algorithms (token bucket, sliding window, leaky bucket). Adding a new quota tier = adding a row to config; no code redeployment.
@@ -755,7 +874,11 @@ quota:api_key_12345 → { tier: "standard", limit: 1000, burst: 100 }
 ### Surface Probe (Tier 1 — every candidate gets this)
 
 **Q: "How do you handle the burst case — when a client sends 100 requests in 1 second but the limit is 1000 per minute?"**
-> Token bucket naturally handles bursts. Clients accumulate tokens during quiet periods. A burst of 100 req/sec means 100 tokens are consumed in 1 second; the bucket still has 1,000 - 100 = 900 tokens left. Over the remaining 59 seconds, 1,000 tokens are generated (16.67 per second). Total available: 900 + (16.67 × 59) = 1,882 tokens, which exceeds 1,000 limit. This is the intentional burst allowance. In an interview: "Token bucket accumulates tokens during quiet periods, allowing bursts up to the bucket capacity. This is natural and fair."
+> Token bucket handles it by construction, and the numbers are worth stating exactly — the bucket holds `capacity = 600` tokens (100 req/sec × a 6-second burst window) and refills at `1000/60 = 16.67` tokens/sec.
+>
+> A client idle long enough to be full has 600 tokens. A 100 req/sec burst drains 100 tokens/sec but refills 16.67/sec, so the net drain is ~83/sec — the burst can be sustained for roughly `600 / 83 ≈ 7 seconds` before the bucket empties, after which the client is throttled down to the steady 16.67 req/sec refill rate.
+>
+> **The number the interviewer is fishing for is the worst case over the window:** `capacity + rate × 60 = 600 + 1,000 = 1,600` requests in one 60-second window, i.e. 60% over the nominal 1,000/min. Note that tokens are `min(capacity, ...)`-clamped, so the bucket can *never* hold more than 600 — any answer that produces a token count above capacity has made an arithmetic error. In an interview: "Burst tolerance and limit accuracy are the same dial. Capacity 600 buys a 7-second 100 req/sec burst and costs a bounded 60% over-grant per window. If the business wants tighter accuracy, shrink capacity and lose burst tolerance."
 
 **Q: "How do you prevent a user from just creating multiple API keys to bypass the rate limit?"**
 > Rate limiting is per API key, not per user. If a user creates 10 keys and distributes requests across them, they can get 10× quota. To prevent: tie API keys to user accounts in config. Look up user_id from api_key; apply per-user aggregate limit (sum of all their keys). Store user-to-keys mapping in Redis. In an interview: "I'd implement per-user aggregate quotas. The rate limiter fetches all keys for a user and sums their usage. This prevents quota multiplication through key proliferation."
@@ -862,7 +985,7 @@ quota:api_key_12345 → { tier: "standard", limit: 1000, burst: 100 }
 
 - **Mistake 3:** Using a separate counter per millisecond / second granularity without explaining cleanup → **Why wrong:** 1M requests/sec = 1M counters per second = storage explodes. **Say instead:** "Counters use window-based keys (per minute) with TTL-based auto-expiry. After the window closes, the key is auto-deleted in 60 seconds."
 
-- **Mistake 4:** Designing for strong consistency but not mentioning what happens if Redis is down → **Why wrong:** You sound like you didn't think about failure modes. **Say instead:** "Strong consistency requires Redis. If Redis fails, I fall back to local in-memory counters (approximate fairness, ~5-10% temporary overages). When Redis recovers, local state syncs back."
+- **Mistake 4:** Designing for strong consistency but not mentioning what happens if Redis is down → **Why wrong:** You sound like you didn't think about failure modes. And the *common* version of this answer — "each server falls back to its own local counter" — is worse than no answer, because with 50 servers each holding the full quota the effective limit becomes 50× and the limiter is silently off. **Say instead:** "Strong consistency requires Redis. On Redis failure I fail open to a local bucket sized `limit ÷ N` where N is the live node count, which bounds the fleet-wide over-grant at ~20% instead of 50×, and I emit a `degraded` metric so the approximation is visible. I do *not* sync local counters back on recovery — those windows have expired and writing stale counts over fresh ones is worse than dropping them."
 
 - **Mistake 5:** Not distinguishing between different "rate limiting" use cases (API quotas, DDoS protection, leaky bucket backpressure) → **Why wrong:** These require different algorithms. You sound like you have one hammer for all nails. **Say instead:** "I'm assuming rate limiting for API quotas (fair distribution of access). For DDoS protection, I'd use token bucket at the ingress (network level) to drop packets before reaching the app. For backpressure, I'd use a leaky bucket (requests enter a queue at any rate but drain at a fixed constant rate, like water through a hole at the bottom — spikes smooth out; unlike token bucket, excess requests queue rather than get dropped immediately) + a worker pool processing at the drain rate."
 
@@ -876,8 +999,8 @@ quota:api_key_12345 → { tier: "standard", limit: 1000, burst: 100 }
 | Usability | ✅ | API response headers include X-RateLimit-Remaining and Retry-After — clients know exactly when to retry without guessing. HTTP 429 follows RFC 6585. For DocuSign's API consumers: an integration script that exceeds quota gets a Retry-After of 37 seconds and backs off automatically without developer intervention. |
 | Extensibility | ✅ | Algorithm is a Strategy interface (TokenBucketStrategy, SlidingWindowStrategy) — swappable without changing the rate limiter API or caller code. Quota tiers are config-driven rows (free: 100/min, standard: 1,000/min, enterprise: 10,000/min) — adding a new tier for a new DocuSign plan = one DB row. |
 | Security | ✅ | Per-api-key quotas isolate tenants: Goldman Sachs (enterprise) and a free-tier developer share zero quota — one cannot starve the other. At 35K req/sec (Section 4), a tenant attempting a DDoS at 50× quota (5,000 req/sec from distributed clients) is blocked per-key; other tenants are unaffected. For DocuSign: credential-stuffing attacks on signing endpoints are throttled per API key before reaching the signing service. |
-| Availability | ✅ | Fail-open with local fallback: Redis failure → in-memory token bucket per server → ~5-10% temporary overages during Redis outage. 99.99% uptime target (52 min/year downtime allowed) vs ~52 min Redis downtime/year makes fail-open the correct choice. For DocuSign: zero availability degradation to API consumers during Redis maintenance windows. |
-| Scalability | ✅ | Token bucket is O(1) per request (one Redis Lua call = one network RTT). At 35K req/sec (Section 4), Redis cluster sharded by hash(api_key) across N shards — each shard sees 35K/N req/sec, far below single-node Redis max (~500K ops/sec). Adding a shard doubles capacity horizontally. |
+| Availability | ✅ | Fail-open with a divided-budget local fallback: on `RedisException` each of the 50 nodes enforces `ceil(1,000/50) × 1.2 = 24 req/min` locally, bounding the fleet-wide over-grant at ~20% instead of the 50× a full-quota-per-node fallback would produce. At 99.99% Redis uptime that's ~52 min/year of *approximate* enforcement versus ~52 min/year of a *dead API* under fail-closed. For DocuSign the deciding argument is the signing ceremony: fail-closed would abort in-flight signing sessions mid-flow during a Redis maintenance window, which is a customer-visible legal-document failure; a 20% quota over-grant for 52 minutes is invisible to every customer. |
+| Scalability | ✅ | Token bucket is O(1) in time and space per key (one `EVALSHA` = one network RTT). At the 35K req/sec Section 4 peak, one Redis node is at ~50% of its realistic ~60–80K ops/sec ceiling for non-pipelined scripted work — workable but with no headroom, so the cluster shards by `hash(account_id)` across N shards: at N=4 each shard sees ~8.75K/sec (~12%), absorbing the 3× spike plus one hot enterprise tenant. Contrast with the sliding window log, which would need ~6.4 GB of Redis at 100K keys versus 10 MB for counters — the algorithm choice, not the shard count, is what makes this fit in memory. |
 | Observability & Traceability | ✅ | Log every rate limit decision: (api_key, timestamp, allow/reject, remaining_quota, shard_id, request_id). Alert: api_key suddenly using 10× normal quota → bot or runaway script (DocuSign security team needs this to detect credential-stuffing). Dashboard: 429 rate by tenant (high 429 rate on enterprise key = quota misconfiguration, raise quota or investigate client). |
 
 ---
@@ -1007,37 +1130,44 @@ public class RateLimitResult {
 public class TokenBucketRateLimiter implements RateLimiter {
 
     private final int capacity;
-    private final int refillRatePerSecond;
-    private int tokens;
-    private long lastRefillTimestamp;
+    // double, not int: 1,000 req/min is 16.67 tokens/sec and int truncation to 16
+    // silently under-grants the customer by 4% of their paid quota
+    private final double refillRatePerSecond;
+    private double tokens;
+    private long lastRefillNanos;
 
-    public TokenBucketRateLimiter(int capacity, int refillRatePerSecond) {
+    public TokenBucketRateLimiter(int capacity, double refillRatePerSecond) {
         this.capacity = capacity;
         this.refillRatePerSecond = refillRatePerSecond;
         this.tokens = capacity;
-        this.lastRefillTimestamp = System.currentTimeMillis();
+        // nanoTime is monotonic — an NTP step backwards would make elapsed time
+        // negative with currentTimeMillis and silently drain the bucket
+        this.lastRefillNanos = System.nanoTime();
     }
 
     @Override
     public synchronized RateLimitResult allowRequest() {
         refill();
-        if (tokens > 0) {
-            tokens--;
-            return RateLimitResult.allow(tokens);
+        if (tokens >= 1.0) {
+            tokens -= 1.0;
+            return RateLimitResult.allow((int) tokens);
         }
-        // Retry after: time until next refill (1 token = 1/refillRate seconds)
-        int retryAfter = 1000 / refillRatePerSecond / 1000;
+        // Retry-After = whole seconds until the next token exists.
+        // Integer division here is a real trap: 1000 / 16 / 1000 == 0, which
+        // emits `Retry-After: 0` and tells every client to retry IMMEDIATELY —
+        // the exact thundering herd the header exists to prevent. Round UP,
+        // and floor at 1 second.
+        int retryAfter = Math.max(1, (int) Math.ceil(1.0 / refillRatePerSecond));
         return RateLimitResult.reject(retryAfter);
     }
 
     private void refill() {
-        long now = System.currentTimeMillis();
-        long elapsedSeconds = (now - lastRefillTimestamp) / 1000;
-        int tokensToAdd = (int) (elapsedSeconds * refillRatePerSecond);
-        if (tokensToAdd > 0) {
-            tokens = Math.min(capacity, tokens + tokensToAdd);
-            lastRefillTimestamp = now;
-        }
+        long now = System.nanoTime();
+        // Fractional seconds in double: a 100ms gap adds 1.667 tokens instead of
+        // truncating to 0 and throwing away the elapsed time
+        double elapsedSeconds = (now - lastRefillNanos) / 1_000_000_000.0;
+        tokens = Math.min(capacity, tokens + (elapsedSeconds * refillRatePerSecond));
+        lastRefillNanos = now;
     }
 }
 ```
@@ -1055,18 +1185,24 @@ public class TokenBucketRateLimiter implements RateLimiter {
  */
 public class RedisTokenBucketRateLimiter implements RateLimiter {
 
+    // Atomic check-and-decrement. Two details that are easy to get wrong:
+    //  1. On first request in a window we must SET capacity-1, not capacity —
+    //     otherwise the very first request consumes no token (off-by-one, and
+    //     over a 1,000-window-per-day key that is 1,000 free requests/day).
+    //  2. SET + EXPIRE, not SETEX with a stale TTL: the TTL must be seeded
+    //     exactly once per window or a long-running key never expires.
     private static final String LUA_SCRIPT =
         "local current = redis.call('GET', KEYS[1]) " +
         "if current == false then " +
-        "  redis.call('SET', KEYS[1], ARGV[1]) " +
+        "  redis.call('SET', KEYS[1], ARGV[1] - 1) " +
         "  redis.call('EXPIRE', KEYS[1], ARGV[2]) " +
-        "  return ARGV[1] " +
+        "  return tonumber(ARGV[1]) - 1 " +
         "end " +
         "if tonumber(current) > 0 then " +
         "  return redis.call('DECR', KEYS[1]) " +
-        "else " +
-        "  return -1 " +   // quota exhausted
-        "end";
+        "end " +
+        // quota exhausted for this window
+        "return -1";
 
     private final RedisClient redisClient;
     private final String clientId;
@@ -1111,17 +1247,23 @@ public class RateLimiterService {
         try {
             return limiter.allowRequest();
         } catch (RedisException e) {
-            // Redis down → fail open with in-memory fallback
-            // ~5-10% temporary overages acceptable vs 100% reject
+            // Redis down → fail open, but with a budget divided by node count so
+            // the fleet-wide over-grant is bounded (~20%) rather than N× the quota.
             return fallbackLimiter(clientId).allowRequest();
         }
     }
 
     private RateLimiter fallbackLimiter(String clientId) {
-        // Local in-memory limiter — approximate fairness during Redis outage
         return localFallbacks.computeIfAbsent(
             clientId,
-            id -> new TokenBucketRateLimiter(DEFAULT_CAPACITY, DEFAULT_REFILL_RATE)
+            id -> {
+                // N = live node count. Each node may only enforce its 1/N share,
+                // otherwise 50 nodes × full quota = 50× the limit.
+                int nodeCount = Math.max(1, membership.liveNodeCount());
+                int perNodeCapacity = (int) Math.ceil(DEFAULT_CAPACITY / (double) nodeCount);
+                double perNodeRefill = (DEFAULT_REFILL_RATE / nodeCount) * 1.2;
+                return new TokenBucketRateLimiter(perNodeCapacity, perNodeRefill);
+            }
         );
     }
 }
@@ -1144,7 +1286,8 @@ public class RateLimiterFactory {
             case IN_MEMORY:
                 return new TokenBucketRateLimiter(
                     config.getBurstCapacity(),
-                    config.getRequestsPerMinute() / 60
+                    // 60.0 not 60 — integer division would floor 16.67 to 16
+                    config.getRequestsPerMinute() / 60.0
                 );
             default:
                 throw new IllegalArgumentException("Unknown storage type: " + config.getStorageType());
@@ -1177,7 +1320,7 @@ The Java `synchronized` keyword is per-JVM. Two app servers each run their own `
 > The in-memory `TokenBucketRateLimiter` does NOT handle it — each server has its own counter; combined they allow 2× the limit. The `RedisTokenBucketRateLimiter` handles it — both servers hit the same Redis key. The Lua script atomicity means server A's DECR and server B's DECR are serialized. Shared state = Redis, not Java heap.
 
 **Q: "Redis goes down. What does your class do?"**
-> `RateLimiterService.allowRequest()` catches `RedisException` and falls back to `localFallbacks` — a per-server in-memory `TokenBucketRateLimiter`. During Redis downtime, each server enforces its own limit. If there are 5 servers, effective limit is 5× — ~5-10% temporary overages. This is fail-open: acceptable for API quota enforcement, unacceptable for security throttling.
+> `RateLimiterService.allowRequest()` catches `RedisException` and falls back to `localFallbacks` — a per-server in-memory `TokenBucketRateLimiter`. The critical detail is how that bucket is **sized**: if each server keeps the full quota, the effective limit is N× (50 servers = 50× = the limiter is off). So the fallback bucket is built with `limit ÷ N` where N is the live node count from the service registry, plus a 20% fairness margin for uneven LB distribution — bounding the fleet-wide over-grant at ~20%. This is fail-open: acceptable for API quota enforcement, unacceptable for security throttling like login or OTP attempts.
 
 **Q: "DocuSign has free (100 req/min), standard (1K req/min), enterprise (10K req/min) tiers. Where does tier config live?"**
 > `RateLimitConfigRepository` — a DB table (or config service) mapping `account_id` → `RateLimiterConfig`. The factory looks up the tier-specific config on first request, creates the right limiter, caches it in `ConcurrentHashMap`. Changing a customer's tier = update the DB row + remove their entry from `limiters` map (next request creates a new limiter with the new config).
@@ -1195,4 +1338,5 @@ The Java `synchronized` keyword is per-JVM. Two app servers each run their own `
 | Jul 4, 2026 | **Diagram rewrite + 4 new Q&As.** Replaced flat `[Box]──→[Box]` ASCII diagram with proper box-drawing character diagram: full request flow (Client → Gateway → Rate Limiter → Redis → ALLOW/REJECT), Redis cluster sharding visualization with shard contents, and side-by-side Lua atomicity illustration (wrong two-op race vs correct Lua atomic). Key invariant callout added. New Q&As in Section 12: (1) **Fail-open vs fail-closed decision framework** — product decision based on what the limiter protects (quota fairness → fail-open; security throttling → fail-closed); DocuSign API quota case analyzed; (2) **Connection pooling as highest-impact latency optimization** — eliminates TCP handshake (~2ms saved), priority-ordered list of 4 optimizations with specific latency impact; (3) **Geographic rate limiting — preventing quota double-spending across US/EU Redis clusters** — four options analyzed (single global Redis, async sync, home-region assignment, bounded overages), home-region + GeoDNS stickiness recommended as correct approach for DocuSign's data-residency requirements. |
 | Jul 9, 2026 | **New Tier 2 probe added to Section 12.** JWT + KYC multi-tenant identity probe: how DocuSign actually identifies rate-limit clients — JWT `account_id` (tenant) not API key or IP; KYC-verified account = billing unit = rate limit boundary; rate key changes from `{api_key}:{window}` to `{account_id}:{window}`; maps to enterprise contract tiers at KYC time. This is the confirmed probe from 2025 candidate reports (IP-only answer → rejection). |
 | Jul 5, 2026 | **Section 10 business impact + Section 14 DocuSign dimensions pass.** Section 10 Trade-off 3 (fail-open vs fail-closed): added **Business impact:** — during ~52 minutes of Redis downtime per year, fail-closed rejects 100% of API requests, blocking active signing ceremonies mid-flow and triggering contractual SLA financial penalties and VP-level escalations. Section 14: rewrote all 7 dimension cells — Goldman Sachs financial API contractual SLA violation if limit is exceeded (Security), 35K req/sec at 5× normal capacity with Redis Cluster + geosharded counters (Scalability), bot detection alert on 10× quota spike with trace_id per-request attribution (Observability). |
+| Aug 2026 | **Audit pass — corrected the fail-open overage number and three code bugs.** (1) **The "~5-10% temporary overage" claim was wrong everywhere it appeared** (Deep Dive 3, Trade-off 3, Section 11, Section 14 Availability, Common Mistake 4, LLD probe) — with 50 nodes each running a *full-quota* local bucket the over-grant is 50×, and one LLD sentence even said "effective limit is 5× — ~5-10% overages," which is self-contradictory. Replaced throughout with the divided-budget fallback: each node enforces `ceil(limit / N) × 1.2`, bounding the fleet-wide over-grant at ~20%, with the 20% margin justified (uneven LB distribution would otherwise under-serve a paying customer during *our* outage). Added a Picture+Invariant visual contrasting naive vs divided fallback, and the "do not sync local counters back on recovery" rule. (2) **Clock skew added** (was absent) — window keys must come from Redis's `TIME` inside Lua rather than 50 app-node wall clocks, and in-process elapsed-time math must use monotonic `nanoTime` because an NTP step backwards makes elapsed time negative and silently drains the bucket. (3) **Stage 2 breaking point regrounded** — it justified Stage 3 with "at 100K req/sec Redis hits 100% CPU" while our own Section 4 peak is 35K, so the transition didn't follow from our numbers; now framed on the realistic ~60–80K ops/sec ceiling for non-pipelined `EVALSHA` (the widely-quoted 500K is pipelined single-command benchmark) plus the SPOF argument. The 500K figure corrected in all four places it appeared. (4) **Sliding-window-log objection corrected** — "O(N) scan, 1,666 requests to scan" confused a per-second rate with a window size; the real objection is memory (~64 KB/saturated key, ~6.4 GB at 100K keys vs 10 MB for counters) and the eviction failure mode, which is now Trade-off 1's business impact. (5) **Tier 1 burst probe math fixed** — it computed 1,882 tokens in a bucket whose capacity is 600, which is impossible under the `min(capacity, …)` clamp; replaced with the correct worst case `capacity + rate × T = 1,600` per 60s window (60% over-grant) and the ~7-second sustainable burst. (6) **Three code bugs fixed:** the Section 7 `TokenBucket` computed `(now - last)/1000` in `long` then unconditionally reset the timestamp, so at sub-second call rates it never refilled at all; `refillRate` was declared `int` and assigned `16.67` with C-style named arguments (not valid Java); the LLD `Retry-After` was `1000 / refillRatePerSecond / 1000` which evaluates to **0**, emitting `Retry-After: 0` and causing exactly the thundering herd the header exists to prevent; the LLD Lua script `SET` the full capacity on first request instead of `capacity - 1` (off-by-one, one free request per window per key). (7) `401`/`404` triggers named in the status endpoint story. |
 | Jul 4, 2026 | **Section 6 restructured to progressive 3-stage HLD.** Replaced single final diagram with staged build: Stage 1 (single server, in-memory counter) → Stage 2 (shared Redis single node) → Stage 3 (Redis Cluster, production). Added 3 inline decision tables at point of introduction: WHERE to enforce (in-process vs API Gateway vs sidecar), WHAT to store counters in (in-memory vs PostgreSQL vs Redis vs Cassandra), WHICH algorithm (Fixed Window vs Sliding Window Log vs Sliding Window Counter vs Token Bucket). Each table has cross-reference to `SystemDesignConcepts/`. Fixed algorithm table contradiction: Token Bucket corrected to ✅ (burst requirement is explicit); Sliding Window Counter moved to ⚠️. Standardized Redis key format to `rate_limit:{api_key}:{window_minute}` across all sections. Redis Cluster repositioned in Stage 3 diagram to show explicit bidirectional arrow from Rate Limiter Service. |

@@ -236,8 +236,12 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 **Connections:**
 - Concurrent WebSocket connections at peak: ~500M
-- Max TCP connections per server: ~65K
+- Connections per server: **~65K — and be careful how you justify this number, because the usual justification is wrong.**
+  - ❌ Wrong: "a server can only hold 65,535 TCP connections." The 65,535 figure is the **ephemeral port range**, and it constrains the *client* side — one client can open ~65K outbound connections *per destination IP:port pair*. A server accepting on a single listening port has no such limit: every connection is identified by the full 4-tuple (client IP, client port, server IP, server port), so the server side can hold millions. This is the well-known C10M problem, and production Linux boxes routinely carry 1M+ idle WebSockets.
+  - ✅ Right: the real ceilings are **file descriptors** (`ulimit -n`, tunable), **kernel memory per socket** (~10 KB of send/receive buffers) and **application heap per connection** (~50 KB for a JVM connection object + per-user session state). At ~60 KB all-in, a 64 GB server is memory-bound at roughly 1M connections.
+  - ✅ So why cap at 65K, well below the memory ceiling? **Blast radius and CPU headroom.** A server holding 1M connections that crashes forces 1M simultaneous reconnects — and reconnect storms are the failure mode that takes down neighbouring servers (see the thundering-herd probe in Section 12). 65K bounds one crash to 65K reconnects. It also leaves CPU for the actual work: fan-out serialization, TLS, and heartbeat processing, none of which are free per connection.
 - WebSocket connection servers needed: 500M / 65K = **~7,700 connection servers**
+- Note the assumption baked into 500M concurrent: it treats every DAU as simultaneously connected. That is deliberately pessimistic — real concurrency peaks nearer 30–40% of DAU — so 7,700 is a headroom number, not a steady-state one. Say that out loud rather than letting the interviewer catch it.
 
 **Key conclusions:**
 - "At 700K messages/sec, a single DB is impossible. We need horizontal sharding — Cassandra partitioned by conversation_id."
@@ -286,7 +290,7 @@ Validation check: the WebSocket protocol replaces `POST /v1/messages` for real-t
 |---|---|---|---|---|---|
 | POST | `/v1/conversations` | JWT Bearer | `{ "type": "GROUP\|ONE_TO_ONE", "participantIds": [...] }` | `{ "conversationId": "..." }` | 201, 400, 409 |
 | GET | `/v1/conversations` | JWT Bearer | — | `[{ conversationId, lastMessage, unreadCount }]` | 200 |
-| GET | `/v1/conversations/{id}/messages` | JWT Bearer | `?cursor={messageId}&limit=50` | `[{ messageId, senderId, content, status, createdAt }]` | 200, 404 |
+| GET | `/v1/conversations/{id}/messages` | JWT Bearer | `?cursor={messageId}&limit=50` | `[{ messageId, senderId, content, status, createdAt }]` | 200, 403, 404 |
 | PATCH | `/v1/messages/{id}/status` | JWT Bearer | `{ "status": "DELIVERED\|READ" }` | `204 No Content` | 204, 404 |
 
 ### WebSocket Protocol
@@ -315,6 +319,18 @@ Server → Client:
 **`PATCH /v1/messages/{id}/status`** to `READ` triggers a WebSocket `MESSAGE_STATUS_UPDATE` push to all other participants in the conversation. The REST call and the WebSocket push are the same state change — the PATCH updates the DB, the fan-out pushes the update to connected clients. For offline clients, the status update is durable in the DB and will be delivered on next sync.
 
 **No `POST /v1/conversations/{id}/messages` REST endpoint** in the primary path — real-time sends go over WebSocket. The REST fallback exists for bots and webhook integrations that can't maintain a WebSocket. Both write to the same Cassandra partition; read path is unified.
+
+**Every error code and the exact condition that fires it.** A status code in the table with no named trigger is the cheapest follow-up an interviewer gets — have these ready:
+
+| Code | Endpoint | Named trigger |
+|---|---|---|
+| `400` | `POST /v1/conversations` | `type: ONE_TO_ONE` with a `participantIds` length other than 2, or a `participantIds` entry that is not a known user |
+| `409` | `POST /v1/conversations` | A `ONE_TO_ONE` conversation already exists between these two users. 1:1 conversations are unique by participant pair — without this, Alice tapping Bob's name twice creates two separate threads and her message history silently splits across them. The response body carries the existing `conversationId` so the client can just navigate to it. Note `409` does **not** apply to `GROUP` — duplicate groups with the same members are legitimate and common. |
+| `403` | `GET /v1/conversations/{id}/messages` | Caller's JWT subject is not in the conversation's participant list. This is the tenant-isolation boundary: without it, any authenticated user can read any conversation by guessing a UUID. |
+| `404` | `GET /v1/conversations/{id}/messages` | `conversation_id` does not exist. Deliberately distinct from the `403` above — we return `403` (not `404`) for a real conversation the caller can't see, because the caller supplied a valid ID and hiding existence buys nothing once they can enumerate. Be ready to defend the opposite choice too: masking `403` as `404` prevents conversation-ID enumeration, and a privacy-first reviewer will prefer it. |
+| `404` | `PATCH /v1/messages/{id}/status` | `message_id` not found, or it has aged past the 1-year Cassandra TTL and been auto-expired |
+
+**One more thing the interviewer will catch:** the WebSocket handshake above authenticates with `?token={JWT}` in the query string. Query strings land in access logs, proxy logs, and browser history — a leaked log file becomes a leaked credential. Name the mitigation before you're asked: either send the JWT in the `Sec-WebSocket-Protocol` header during the upgrade, or issue a single-use short-TTL (30-second) ticket from a REST endpoint and pass *that* in the query string, so the thing that leaks is already expired.
 
 ---
 
@@ -402,13 +418,27 @@ MySQL stores messages. Routing: how does Message Service reach Client B?
            It has no idea that Client B is on Conn. Server B,
            not Conn. Server C or D or any of the other 7,699.
 
-BREAKING POINT 1: Routing gap. The Message Service cannot reach Client B
-   in real time without knowing which of 7,700 connection servers holds
-   Client B's WebSocket. Without a routing table, every delivery is a
-   broadcast to all servers (wasteful) or a database query per message (too slow).
+BREAKING POINT 1: Routing gap — quantified. The Message Service cannot reach
+   Client B without knowing which of 7,700 connection servers holds his socket.
+   The two options without a routing table both fail on arithmetic:
+     - Broadcast to all servers: 700K msgs/sec × 7,700 servers
+       = 5.4 BILLION gRPC calls/sec, and 7,699 of every 7,700 are discarded.
+       No network fabric carries this; NIC saturates on the Message Service tier.
+     - Query Postgres per delivery: 700K reads/sec against a table that a single
+       primary serves at ~5K reads/sec — a 140× overshoot.
+   Observable symptom: message delivery P99 climbs past the 200ms SLO into
+   multi-second territory, then messages stop arriving at all as the fan-out
+   thread pool fills and rejects. Users see the "sending..." spinner persist.
+   Stage 3 is needed because delivery needs an O(1) sub-millisecond lookup
+   (Redis), not a broadcast and not a relational read.
 
-BREAKING POINT 2: No offline delivery. If Client B is offline, the message
-   is simply discarded — no push notification, no queuing.
+BREAKING POINT 2: No offline delivery. At any instant roughly 60-70% of the
+   500M DAU are not connected — call it 300M+ users. Every message addressed to
+   them is discarded on the floor: no push notification, no queue, no retry.
+   Observable symptom: a user opens the app after lunch and their conversation
+   has a hole in it — messages sent while they were away simply never exist.
+   That is silent data loss, which violates the zero-message-loss durability
+   requirement in Section 3 outright.
 
 BREAKING POINT 3: MySQL append-only writes at 700K msgs/sec — B-tree
    index degrades; time-series range reads ("last 50 msgs") become full-table
@@ -648,14 +678,16 @@ LIMIT 50;
 Message for user B arrives at Message Service.
 Message Service asks: "Which connection server currently has user B's WebSocket?"
 
-Answer lives in Redis: SET user:{userId}:server → "conn-server-247"
-TTL: 30 seconds (refreshed by heartbeat from connection server)
+Answer lives in Redis: SET user:{userId}:device:{deviceId}:server → "conn-server-247"
+TTL: 60 seconds — two missed 30-second heartbeats, refreshed on every heartbeat
 ```
 
+**Why 60s TTL and not 30s:** the TTL must be a *multiple* of the heartbeat interval, never equal to it. With a 30s heartbeat and a 30s TTL, a single delayed heartbeat — one GC pause, one network hiccup — expires the key and marks a perfectly healthy user offline, so their messages divert to push notification and they get a phone buzz for a chat they're actively staring at. 60s = tolerate one lost heartbeat, evict on two. This is the same reasoning as any failure detector: detection latency traded against false-positive rate.
+
 **What happens when a connection server crashes:**
-1. Redis TTL expires → user appears offline within 30 seconds
+1. Redis TTL expires → user appears offline within 60 seconds
 2. If Client B is still connected (to a different server after reconnect): new heartbeat updates Redis
-3. In-flight messages during the 30s gap: Message Service falls through to push notification path
+3. In-flight messages during the 60s gap: Message Service falls through to push notification path
 4. On reconnect: Client B syncs from Cassandra using their last-seen cursor
 
 **⚠️ Production gotcha: TCP alive but phone is off (the silent disconnect)**
@@ -681,19 +713,87 @@ The WebSocket protocol has built-in `PING`/`PONG` opcodes (RFC 6455) specificall
 - **Client:** send PING every 30 seconds
 - **Server:** if no PING received in 35 seconds, probe with a server-initiated PING; close on 5s timeout
 
-**Why 30 seconds?** Match the Redis TTL (30s). The heartbeat and the Redis presence key must stay in sync — if the heartbeat is 60s but Redis TTL is 30s, the key expires before the phone is detected as offline.
+**Why a 30-second heartbeat against a 60-second TTL?** The heartbeat must be strictly faster than the TTL, or the key expires under normal operation. 30s heartbeat / 60s TTL means one heartbeat can be lost without consequence, and the key only expires after two consecutive misses. The detection path (PING timeout at 35s + 5s PONG grace = socket closed at 40s) therefore always fires *before* the TTL expires at 60s — the connection server explicitly deletes the routing key on close, so the TTL is only the backstop for the case where the connection server itself died and can't clean up after itself.
 
-**In an interview:** "TCP's ESTABLISHED state doesn't mean the remote is reachable — if a phone loses power, the TCP connection is silently stranded. I use application-level WebSocket PING/PONG frames (RFC 6455) to detect this. If no PING from the client for 35 seconds, I probe and close the socket within 5 seconds. This bounds the zombie connection window to 40 seconds maximum — after which the Redis routing entry is deleted and messages fall through to push notifications."
+**In an interview:** "TCP's ESTABLISHED state doesn't mean the remote is reachable — if a phone loses power, the TCP connection is silently stranded. I use application-level WebSocket PING/PONG frames (RFC 6455) to detect this. If no PING from the client for 35 seconds, I probe and close the socket within 5 seconds. That bounds the zombie window to 40 seconds, and the connection server deletes the Redis routing key on close. The 60-second TTL is the backstop for the harder case — the connection server itself crashed, so nobody is left to clean up the key."
 
 **Consistent hashing for connection server assignment:**
 When a new WebSocket connection is established, the load balancer uses consistent hashing (see `SystemDesignConcepts/05-consistent-hashing.md`) on `user_id` to always route the same user to the same connection server (session affinity). This means Client B's desktop and mobile can both connect — to different connection servers based on device_id, not user_id.
 
-**Multi-device delivery:**
-Each device has its own WebSocket to its own connection server. Redis stores one entry per device:
+**Multi-device delivery — the "Bob has 3 devices" problem:**
+
+Each device has its own WebSocket to its own connection server, so Redis stores one entry *per device*, not per user:
 ```
 user:{userId}:device:{deviceId}:server → "conn-server-247"
 ```
-Fan-out delivers to ALL active devices for the recipient. Idempotency on the client side deduplicates (same message_id received twice is ignored).
+Fan-out delivers to ALL currently-routable devices; client-side dedup on `message_id` discards anything rendered twice. That much is the easy half. The hard half is that **"delivered" and "read" have different natural scopes**, and most candidates collapse them into one cursor.
+
+### 🎨 Visual — one message, three devices, two different cursors
+
+```
+Alice sends 1 message to Bob. Bob has 3 devices.
+
+                        ┌───────────────────────────────┐
+                        │  Redis routing — per DEVICE   │
+                        │   bob:phone   -> conn-svr-12  │
+                        │   bob:laptop  -> conn-svr-88  │
+                        │   bob:tablet  -> key expired  │
+                        └───────────────┬───────────────┘
+                                        │ lookup at delivery time
+  ┌───────┐  msg   ┌─────────────────┐  │
+  │ Alice │ ─────▶ │ Message Service │ ─┴──┬───────────┬──────────┐
+  └───────┘        └─────────────────┘     │           │          │
+                                           ▼           ▼          ▼
+                                     conn-svr-12  conn-svr-88   no route
+                                           │           │          │
+                                           ▼           ▼          ▼
+                                         phone      laptop     APNs push
+                                       delivered   delivered   (syncs from
+                                                                cursor on
+                                                                reconnect)
+
+Bob reads it on the PHONE only:
+
+   phone ──READ──▶ Message Service
+                        ├──▶ last_read_id   (keyed per USER, not per device)
+                        │       └──▶ unread badge clears on laptop AND tablet
+                        └──▶ exactly ONE status push back to Alice
+                                (not three — Alice must never see "Read" 3×)
+
+TWO CURSORS, NOT ONE:
+   delivery cursor  ->  per DEVICE   (which devices still owe a sync?)
+   read cursor      ->  per USER     (the human read it; all their screens agree)
+
+KEY INVARIANT:
+   Delivery is tracked per device; read is tracked per user. Collapsing them
+   into a single cursor fails in opposite directions — a per-user delivery
+   cursor silently loses the messages the offline tablet never got, while a
+   per-device read cursor shows Alice "Read" three times and leaves Bob's
+   badge lit on the screen he never touched.
+```
+
+This is why the Section 9 schema keys `last_read_id` on `(user_id, conversation_id)` and *not* on device: reading on one screen must clear the badge on all of them. Device-level state is tracked separately, and only for delivery.
+
+**Read-receipt fan-out — the cost nobody budgets for:**
+
+Receipts look free because each one is a few bytes. They are not, because receipts fan out on the *square* of group size while messages fan out linearly:
+
+| | 1:1 chat | 100-member group |
+|---|---|---|
+| Pushes to deliver the message | 1 | 99 |
+| Read receipts generated | 1 | 99 (one per reader) |
+| Pushes to distribute those receipts | 1 | 99 readers × 99 recipients = **9,801** |
+| Receipt-to-message push ratio | 1× | **~99×** |
+
+Run the numbers against our peak: if even **1% of the 700K msgs/sec peak lands in 100-member groups**, that is 7,000 msgs/sec × 9,801 = **68.6M receipt pushes/sec** — roughly 100× the entire message workload the system was sized for. The read-receipt feature, not the messaging feature, becomes the thing that melts the fan-out tier.
+
+**Three mitigations, in the order you should say them:**
+
+1. **Don't fan out per-member receipts in groups at all — aggregate them.** Group chats show "Read by 12" computed on demand (a single `COUNTER` read) rather than pushing 99 individual receipt events. This is exactly what WhatsApp does: per-member read detail in a group is behind a "Message Info" tap, not live on the bubble. Kills the 99× term outright.
+2. **True per-message read receipts only for 1:1.** At N=2 the fan-out is 1 and the cost is genuinely negligible — so keep the feature where it's cheap and degrade it where it isn't.
+3. **Debounce and batch.** A user scrolling through 40 unread messages generates 40 read events in two seconds. Coalesce them into one "read up to message_id X" event per conversation per 5-second window — receipts are cursor updates, and only the highest cursor matters, so collapsing them loses nothing.
+
+**In an interview:** "Read receipts are the hidden scaling trap in this design. Messages fan out linearly with group size; receipts fan out quadratically, because every reader's receipt has to reach every other member. In a 100-member group that's 9,801 pushes per message against 99 to deliver it — a 99× amplification. So I only push true per-message receipts in 1:1 chats, and in groups I collapse to an aggregate count read on demand. I'd also debounce receipts into a single cursor update per 5-second window, since only the highest read cursor is meaningful."
 
 ---
 
@@ -911,13 +1011,13 @@ SET user:{userId}:device:{deviceId}:server {connectionServerId} EX 60
 
 | Dimension | Relevant? | How your design addresses it |
 |---|---|---|
-| Testability | ✅ | Message Service accepts `MessageRepository` and `FanoutService` as constructor-injected interfaces — mockable without live Cassandra/Redis |
-| Usability | ✅ | WebSocket protocol has consistent event schema (every event has `type` field); REST API follows HTTP verb semantics; error responses are structured |
-| Extensibility | ✅ | Fan-out targets are a Strategy interface (`NotificationStrategy`) — adding SMS/email/in-app channel = new implementation, no core change |
-| Security | ✅ | TLS 1.3 in transit; AES-256 at rest; JWT auth on WebSocket connect; E2EE is the trade-off upgrade path |
-| Availability | ✅ | Kafka decouples delivery from persistence (message not lost if service restarts); push notification fallback for offline users; active-active connection server pool |
-| Scalability | ✅ | Cassandra horizontal sharding by conversation_id; consistent hashing across 7,700 WebSocket connection servers; fan-out strategy switches at group size boundary |
-| Observability & Traceability | ✅ | trace_id injected at WebSocket frame entry; propagated in Kafka message headers; all services log under same trace_id — full delivery path reconstructable |
+| Testability | ✅ | The hard thing to test here is not the happy path, it is the 7,700-server routing layer — so `MessageRepository` and `FanoutService` are constructor-injected interfaces, and the Redis routing table is swapped for an in-memory map, which makes "connection server holding 65K sockets dies, do those 65K messages reach APNs?" a unit test rather than a staging experiment. For DocuSign: the equivalent assertion is that an envelope-status notification still reaches a signer whose socket died mid-ceremony — untestable in staging at 500M-user scale, so it has to be provable at the seam. |
+| Usability | ✅ | The 200ms P99 delivery target is a usability requirement, not a performance one — above roughly 300ms, typing indicators and read receipts stop feeling live and users start double-sending. Every WebSocket event carries a `type` discriminator so clients deserialize without switch-on-shape, and history uses TIMEUUID cursors so a user scrolling up while 10 new messages arrive never sees a duplicated or skipped page. For DocuSign: in-document comment threads during a live signing session are exactly this — a signer and a sender negotiating a clause in real time, where a 2-second lag means they talk over each other. |
+| Extensibility | ✅ | Fan-out targets sit behind a `NotificationStrategy` interface, so the third channel costs one class, not a refactor — which matters because the 700K msgs/sec fan-out tier is the one component you cannot afford to reopen. The group-size threshold (write ≤100, read >1,000) is configuration, not branching logic. For DocuSign: adding SMS-based signing reminders alongside in-app and email is precisely this addition — the recipient list and delivery decision are already computed; only the transport is new. |
+| Security | ✅ | Isolation is enforced at the read boundary, not assumed: `403` on `GET /conversations/{id}/messages` for a non-participant is what stops any of 500M authenticated users from reading any conversation by guessing a UUID. TLS 1.3 in transit, AES-256 at rest, and the WebSocket upgrade authenticated by header or 30-second single-use ticket rather than a query-string JWT that would land in every proxy log. For DocuSign: a cross-tenant read here is not an embarrassment, it is contract content leaking between two enterprise customers who may be direct competitors — a SOC 2 reportable event and a breach-notification obligation. |
+| Availability | ✅ | 99.99% is 52 minutes/year, so the design assumes components die rather than hoping they don't: Kafka holds the message until the Message Service commits its offset (a crash mid-write replays, it does not lose), and total Redis loss degrades to push-only — all 500M users read as offline, delivery keeps working, nothing is lost. The 60-second routing TTL bounds how long that degraded window lasts. For DocuSign: "the signing request was sent but never arrived" is a legal dispute about whether a party had notice, not a support ticket — which is why the offline path is durable rather than best-effort. |
+| Scalability | ✅ | Two independent axes, each with its own number. Storage: 700K msgs/sec peak and 20 TB/day, impossible on any single node, handled by Cassandra partitioned on `conversation_id` with a 1-year TTL doing the archival. Connections: 500M concurrent across 7,700 servers at 65K each, capped there for blast radius rather than by any TCP limit. The trap is the third axis — read receipts fan out quadratically (9,801 pushes per message in a 100-member group vs 99 to deliver it), which is why group receipts aggregate instead of broadcasting. For DocuSign: a 50K-recipient HR policy envelope is that quadratic case exactly, and it is why bulk sends aggregate status rather than pushing per-signer events. |
+| Observability & Traceability | ✅ | A `trace_id` minted at WebSocket frame entry rides the Kafka header through Message Service, Cassandra write, and gRPC push, so any one of 20B daily messages can be reconstructed end to end — necessary because "Bob never got it" has six possible causes (Kafka lag, Cassandra timeout, stale Redis route, zombie socket, APNs rejection, client dedup bug) and they are indistinguishable from the outside. Alerts: consumer lag > 5s, delivery P99 > 200ms, routing-key hit rate drop. For DocuSign: this same trace is the audit artifact proving a signing notification was generated, delivered, and opened — non-repudiation evidence, not debugging telemetry. |
 
 ---
 
@@ -936,6 +1036,7 @@ The TL;DR fixes the core idea in your head. Under stress, you'll default to this
 
 | Date | Change |
 |---|---|
+| Aug 2026 | **Audit pass — 65K-connection myth corrected, read-receipt fan-out gap closed, TTL inconsistency fixed, Section 14 rewritten.** (1) **Section 4 "Max TCP connections per server: ~65K" corrected.** The 65,535 figure is the ephemeral *port* range and constrains the client side per destination tuple; a server accepting on one listening port is limited by file descriptors and memory, not ports, and production Linux boxes hold 1M+ WebSockets (the C10M problem). The 65K/server cap is retained — and so is the 7,700-server figure that depends on it — but it is now justified correctly: **blast radius** (a 1M-connection server crashing forces 1M simultaneous reconnects) plus CPU headroom for fan-out and TLS. Also surfaced the buried assumption that 500M concurrent = 100% of DAU online at once, and labelled it a headroom number. (2) **Redis routing TTL inconsistency resolved** — Deep Dive 2 said 30s while Section 6, Section 9, and the Section 12 probes all said 60s. Standardized on 60s and added the reasoning that was missing everywhere: TTL must be a *multiple* of the 30s heartbeat, never equal to it, or one GC pause marks a healthy user offline and diverts their live chat to push notification. (3) **Read-receipt fan-out cost added** (was entirely absent) — receipts fan out on the *square* of group size while messages fan out linearly: 9,801 pushes per message in a 100-member group vs 99 to deliver it, a 99× amplification. Quantified against peak: 1% of 700K msgs/sec in 100-member groups = 68.6M receipt pushes/sec, ~100× the workload the system was sized for. Three mitigations added (aggregate group receipts on demand as WhatsApp does, true per-message receipts only for 1:1, debounce to one cursor update per 5s window). (4) **Multi-device sync deepened with a 🎨 Visual + KEY INVARIANT** — the "Bob has 3 devices" case now shows the two-cursor rule explicitly: delivery tracked **per device**, read tracked **per user**, and why collapsing them fails in opposite directions (lost messages on the offline tablet vs "Read" shown three times to Alice). (5) **Stage 2 breaking points quantified** — the routing gap was "wasteful or too slow" with no number; now 700K × 7,700 = 5.4B gRPC calls/sec for broadcast and a 140× overshoot for per-delivery Postgres reads, with observable symptoms. Offline-delivery gap now names the ~300M disconnected users and identifies it as silent data loss against the Section 3 durability requirement. (6) **Named triggers added for every 4xx**, including the previously unexplained `409` on `POST /v1/conversations` (duplicate 1:1 pair — and why it must not apply to groups), plus `403` added to the message-history read as the tenant-isolation boundary. Also flagged the query-string JWT on the WebSocket handshake as a log-leakage vector with two mitigations. (7) **Section 14 all 7 cells rewritten** to pass the 3-point test — previously one-line generic phrases with no Section 4 numbers and no DocuSign scenarios. |
 | June 2026 | File created. Type A — System Design. Based on: DocuSign PDF (confirmed question type), candidate report ("Facebook messenger type app"), ByteByteGo chat system design chapter, hellointerview.com WhatsApp breakdown, codekarle.com WhatsApp architecture. Advisor review: DocuSign angle clarified (7 dimensions, not forced chat-domain mapping); multi-device sync and E2EE addressed explicitly; cross-references used instead of reproduced content. |
 | Jul 4, 2026 | **Diagram rewrite + 4 new Q&As.** Replaced flat `[Box]──→[Box]` diagram with proper box-drawing chars. Added full system architecture diagram + message send flow + presence service diagram. Added Two-hop mental model invariant to KEY INVARIANT. Section 12: added Tier 2 Q "thundering herd on conn server crash" (jitter + consistent hashing); Tier 2 Q "duplicate messages" (3 root causes: client retry, multi-device fan-out, Kafka at-least-once); Tier 3 Q "new servers + consistent hashing — what happens to existing clients" (hash ring governs new assignment only; Redis is source of truth). |
 | Jul 5, 2026 | **Section 6 restructured: single final-state diagram → 3-stage progressive HLD.** Stage 1 (HTTP Polling + MySQL): client polls every 5s, single REST server, single MySQL node — BREAKING POINTs: 500M DAU × 1 poll/5s = 100M empty requests/sec; MySQL B-tree can't sustain 700K writes/sec. Stage 2 (WebSocket + Message Service + MySQL): connection servers hold WebSocket state, stateless Message Service processes inbound messages — BREAKING POINTs: routing gap (Message Service can't determine which of 7,700 conn servers holds Client B); no offline delivery; MySQL write throughput ceiling. Stage 3 (Kafka + Redis Routing + Cassandra + Push — production): Kafka for durability, Redis routing table (user_id → conn_server_id, 60s TTL), Cassandra for time-series storage, APNs/FCM for offline users, presence via heartbeat. Four inline decision tables added: (1) real-time transport — polling ❌ / SSE ⚠️ / WebSocket ✅; (2) message storage — MySQL ❌ / MongoDB ⚠️ / Cassandra ✅; (3) connection routing — DB lookup ❌ / gossip ❌ / Redis TTL key ✅; (4) fan-out strategy — write-only ❌ / read-only ⚠️ / hybrid ≤100/≥1000 ✅. All Section 6 verdicts verified against Section 7 deep dive choices — no contradictions. |

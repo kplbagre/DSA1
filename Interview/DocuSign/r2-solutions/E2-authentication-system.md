@@ -198,6 +198,8 @@ Validation check: "service accounts need programmatic access" → `client_creden
 
 **`POST /auth/login`** has two response shapes and that's the interview probe. If `mfa_enabled = false`, the response body contains `access_token` and `refresh_token` — login is complete in one call. If `mfa_enabled = true`, the response body contains `mfa_required: true` and a `request_id` (a short-lived nonce stored in Redis for 5 minutes). The `request_id` is how the MFA step proves it's continuing the same login flow — without re-sending the password. Most candidates miss this: they issue a partial JWT or put MFA inline. The two-step design keeps login clean and security boundaries clear.
 
+Both error codes have exact triggers, and both are security decisions rather than plumbing. **`401 Unauthorized`** fires on either "no user with that email" or "bcrypt mismatch" — and it must return the *identical* body and take the *identical* amount of time in both cases. If a missing email returns 401 in 5ms while a wrong password returns 401 in 200ms, you have built a **user-enumeration oracle**: an attacker walks a list of addresses and learns which ones hold DocuSign accounts purely from response timing. The fix is to run a dummy bcrypt comparison against a fixed hash when the user doesn't exist, so both paths cost the same. **`429 Too Many Requests`** fires on the credential-stuffing rule: more than 5 failed attempts for one `email` in 15 minutes, or more than 50 failed attempts from one source IP in 15 minutes (the second limit is the one that catches a botnet spraying one password across thousands of accounts, which never trips a per-account counter). Return `Retry-After`. Critically, **the 429 check runs before bcrypt** — see Section 4: each hash is 200ms of CPU, so evaluating the limit after hashing means an attacker can spend 2,000 of your cores just by being rejected.
+
 **`POST /auth/verify-mfa`** completes the MFA flow. `423 Locked` is the status code for "account locked after too many wrong attempts" — not `401` (wrong credentials) and not `429` (rate limit). `423` is the right HTTP status for "temporarily locked by security policy." The `request_id` is consumed on success — replaying it returns `401`. The full token pair (access + refresh) is issued only here; the previous login step issues nothing token-like.
 
 **`POST /auth/refresh`** is where refresh token rotation happens. Old refresh token in → new access token + new refresh token out. The old refresh token is immediately blacklisted. If an attacker steals the old refresh token and tries to use it after the legitimate client already refreshed, the system detects the replay: both the legitimate client and the attacker now have different valid refresh tokens from the same parent — when the attacker's old token arrives, it's already in the blacklist.
@@ -219,18 +221,21 @@ Validation check: "service accounts need programmatic access" → `client_creden
 **Storage:**
 - User credentials: 10M users × 500 bytes (email, hashed password, salt) = 5 GB (fits in single Postgres instance)
 - Session data: 2M sessions × 500 bytes (user_id, roles, metadata) = 1 GB (fits in single Redis instance)
-- Audit logs: 100M logins/day × 200 bytes = 20 TB/year (archive after 1 year to S3 Glacier)
-- Token blacklist (revocation): 10M users × (logout events/user/year) = assume 50 revocations/user/year = 500M revocations/year = 50M active revocations (cached in Redis)
+- Audit logs: 100M logins/day × 200 bytes = **20 GB/day = 7.3 TB/year** (archive after 1 year to S3 Glacier). Caveat worth saying out loud: that covers *login* events only. If `access_audit_log` also records every authorization decision at 35K req/sec, it is 604 GB/day / 220 TB/year — so authorization audit rows go to an append-only store (Kafka → S3/Parquet, or a monthly-partitioned table), never the same table as logins.
+- Token blacklist (revocation): 50 revocations/user/year × 10M users = 500M/year ≈ **16 revocations/sec**. The key insight is that blacklist entries live for **at most the access token's remaining TTL (≤ 900s)**, so the steady-state set size is 16/sec × 900s ≈ **14,000 keys ≈ 1.4 MB** — not 50M entries. This is the whole reason the "TTL = remaining token lifetime" trick works: the blacklist is permanently tiny and needs no cleanup job. If you quote 50M active revocations you have implicitly assumed entries never expire, and the interviewer will ask why you are storing a revocation for a token that expired eight months ago.
 
 **Bandwidth:**
 - Inbound (login requests): 3.5K logins/sec × 500 bytes = 1.75 MB/sec
 - Outbound (token responses): 3.5K logins/sec × 2 KB (JWT token + metadata) = 7 MB/sec
 
 **Key conclusions:**
-- At 35K token validations/sec, **stateless JWT is essential** (can't do 35K DB lookups/sec on session store)
+- At 35K token validations/sec, **stateless JWT is essential** — not because Redis can't do 35K reads/sec (it can, that's ~35% of one node) but because it makes Redis a hard dependency on 100% of API traffic across every region
 - Token validation should be < 10ms (JWT signature verification is ~1-2ms, acceptable)
 - Session store (Redis) holds 2M sessions; no bottleneck at 2 devices/user
-- Login service (token generation) at 3.5K logins/sec is fine (bcrypt hashing is slow ~200ms per login, so need 3-4 parallel instances)
+- **⭐ bcrypt is the single biggest capacity number in this design, and it is not "3-4 instances."** Do the arithmetic on the whiteboard: 3,500 logins/sec × 200ms of CPU per hash = **700 CPU-seconds of work per second = 700 dedicated cores**. On 16-core instances that is **~44 instances doing nothing but hashing passwords** — and that is the peak-only figure; baseline 1,160 logins/sec still needs ~232 cores (~15 instances). Three consequences you should name before the interviewer does:
+  1. **Tune the cost factor deliberately.** 200ms corresponds to bcrypt cost ~12. Dropping to cost 10 (~50ms) cuts the fleet 4× to ~175 cores. OWASP accepts cost ≥ 10, so this is a legitimate 4× infra saving — state it as a conscious security/cost trade-off, not an accident.
+  2. **Isolate the login fleet.** Token *validation* is 1-2ms and stateless; login is 200ms and CPU-saturating. Putting them in one autoscaling group means a credential-stuffing burst starves validation and takes down the whole API. They must be separate deployments with separate scaling policies.
+  3. **This is exactly why credential stuffing is a capacity attack, not just a security one.** An attacker sending 10K invalid logins/sec forces 2,000 cores of bcrypt work — so the rate limiter and the account-lockout rules have to reject *before* the hash is computed, keyed on `(email, source IP)`, or your own defence-in-depth becomes the DoS vector.
 
 ---
 
@@ -278,13 +283,22 @@ request sends the session cookie and the server looks up the session.
                                    │  3. Forward to service │
                                    └────────────────────────┘
 
-BREAKING POINT 1: At 35K API requests/sec, every request does a Redis
-   session lookup (10–50ms each). Redis session store becomes the
-   hot bottleneck: 35K reads/sec × 50ms = ~1,750 CPU-seconds/sec.
-   Even with horizontal Redis, this limits request throughput.
+BREAKING POINT 1: Not raw throughput — be precise here, because the lazy
+   version of this claim is wrong. A Redis GET is ~0.2ms of server time and
+   ~0.5-1ms in-datacenter round trip, and one node does ~100K ops/sec. So
+   35K session reads/sec is ~35% of ONE node: Redis is not the ceiling.
+   What actually breaks is the coupling. Exhausted resource: headroom and
+   blast radius. At 35K/sec (3.5K logins/sec x 10 requests each) a 3x
+   spike is 105K/sec — past a single node — and every one of those reads
+   is now on the critical path of 100% of API traffic in every region,
+   so a cross-region request pays 70-150ms of WAN RTT per call.
+   Observable symptom: P99 on every endpoint tracks Redis P99, and a
+   single 200ms Redis GC pause shows up as a site-wide latency spike.
 
 BREAKING POINT 2: Session state is tied to Redis. If Redis is unavailable
-   (even for a failover), no request can be validated — auth is down.
+   (even for a 5-10s Sentinel failover), NO request can be validated —
+   that is a full auth outage, so a 99.99% SLO (52 min/year) is now
+   bounded by Redis availability rather than by our own service.
    Horizontal scaling requires all Auth Service instances to share session state.
 
 BREAKING POINT 3: Single-factor login — if Alice's password is leaked,
@@ -477,7 +491,7 @@ JWT is the contract between Auth Service and every other service. A forged or ta
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Option A: Opaque tokens (server stores session)** | Simple; revocation is instant; server controls lifetime | 35K validations/sec = 35K DB/Redis lookups/sec = bottleneck; slower (10-50ms per validation) |
+| **Option A: Opaque tokens (server stores session)** | Simple; revocation is instant; server controls lifetime | Every one of 35K validations/sec becomes a network call — ~1ms same-DC, 70-150ms cross-region — and the session store becomes a hard availability dependency for 100% of API traffic. (Don't claim "10-50ms per Redis lookup"; it's ~1ms. The argument is coupling and cross-region latency, not Redis throughput.) |
 | **Option B: JWT (stateless tokens with signature)** | Stateless; fast validation (1-2ms signature check); scales to 35K QPS easily | Complex; revocation requires blacklist (eventual consistency); key rotation needed |
 | **Option C: Hybrid (JWT + session store)** | Best of both: fast validation + instant revocation | Added complexity; larger attack surface |
 
@@ -841,17 +855,54 @@ public class MFAService {
         User user = userRepo.findById(userId);
         String secret = decrypt(user.getTotpSecret());
 
-        // TOTP algorithm: compute expected code for current time
-        String expectedCode = generateTOTPCode(secret, Instant.now());
-
-        return submittedCode.equals(expectedCode);
+        // Accept the previous, current, and next 30-second window (+/- 1 step).
+        // Checking only the current window is the classic TOTP bug: the user's
+        // phone clock drifts by a few seconds, or they type the code at second 29
+        // and it arrives at second 31, and a correct code is rejected. RFC 6238
+        // explicitly recommends a small backward window for transmission delay.
+        // Do NOT widen this further — every extra step doubles the replay window.
+        Instant now = Instant.now();
+        for (int step = -1; step <= 1; step++) {
+            String candidate = generateTOTPCode(secret, now.plusSeconds(30L * step));
+            if (MessageDigest.isEqual(
+                    candidate.getBytes(StandardCharsets.UTF_8),
+                    submittedCode.getBytes(StandardCharsets.UTF_8))) {
+                // Burn the used counter value so the code cannot be replayed
+                // inside its remaining validity window.
+                return totpReplayGuard.consume(userId, now.plusSeconds(30L * step));
+            }
+        }
+        return false;
     }
+
+    /**
+     * MUST use SecureRandom, never java.util.Random.
+     * java.util.Random is a 48-bit linear congruential generator seeded from the
+     * clock: observe two outputs and you can predict every subsequent code.
+     * An attacker who triggers an MFA send for a victim could compute the code
+     * without ever seeing the email. This is a real CVE class, not a nitpick.
+     */
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private String generateRandomCode(int length) {
-        Random random = new Random();
-        return String.format("%0" + length + "d", random.nextInt((int) Math.pow(10, length)));
+        int bound = (int) Math.pow(10, length);
+        return String.format("%0" + length + "d", SECURE_RANDOM.nextInt(bound));
     }
 }
+```
+
+**Two things the interviewer will check in this code:**
+
+1. **`SecureRandom`, not `Random`** — see the comment above. Same rule applies to the TOTP secret and the `request_id` nonce.
+2. **Constant-time comparison for the OTP.** `storedCode.equals(submittedCode)` short-circuits on the first differing character, which leaks the code one digit at a time to an attacker who can measure timing precisely. For a 6-digit code with a 5-minute window this is a narrow attack, but the correct call costs nothing:
+
+```java
+// Constant-time comparison — runs in the same time whether digit 1
+// or digit 6 differs, so response timing reveals nothing about the code.
+boolean matches = MessageDigest.isEqual(
+    storedCode.getBytes(StandardCharsets.UTF_8),
+    submittedCode.getBytes(StandardCharsets.UTF_8)
+);
 ```
 
 **MFA flow:**
@@ -890,7 +941,7 @@ See **Deep Dive 2** for complete schema. Key tables:
 
 **Lose:** Revocation has latency (user logs out, but token stays valid until expiry or blacklist check). Requires token blacklist (Redis) for revocation.
 
-**Failure mode if wrong:** If you use stateful sessions (Redis) at 35K validations/sec, Redis becomes bottleneck (typical capacity: 50K ops/sec; you're at 70% of max). Adds 10-50ms latency per request. **Business impact:** Every API call in a signing ceremony must validate the session — 50ms added latency × 35K req/sec means all API calls degrade simultaneously — for DocuSign this means the signing ceremony UX (where a signer is waiting to click "Adopt & Sign" — the moment of highest legal significance) adds a 50ms penalty to every page interaction, degrading the experience at exactly the wrong moment and increasing ceremony abandonment rate.
+**Failure mode if wrong:** If you use stateful sessions at 35K validations/sec, the cost is not Redis throughput (35K/sec is ~35% of one node) — it is that **every API call in every region now has a hard synchronous dependency on one session store.** A signer in Frankfurt hitting a US-primary session store pays 70–150ms of WAN round trip *per request*, and a 5–10 second Sentinel failover means zero requests validate anywhere. **Business impact:** For DocuSign, the signing ceremony is a multi-request flow — load envelope, fetch tabs, adopt signature, submit — so a 100ms per-call penalty compounds into ~0.5s of added wait at the "Adopt & Sign" click, the single moment of highest legal significance and highest abandonment sensitivity. Worse, the failover case turns a 10-second Redis blip into a global auth outage: every in-flight signing ceremony returns 401, signers believe their session expired mid-signature, and support sees a spike of "did my signature go through?" tickets — the one question DocuSign can least afford to answer with "we're not sure."
 
 ---
 
@@ -914,7 +965,7 @@ See **Deep Dive 2** for complete schema. Key tables:
 
 **Lose:** Redis adds 1-2ms latency to every validation; requires Redis uptime for logout to work.
 
-**Failure mode if wrong:** If no blacklist, user logs out but token is still valid (until expiry). User thinks they're logged out but aren't (security hole). If Redis is down, logout fails (availability issue). **Business impact:** A signer uses a public computer, logs out, and believes their session is terminated — but the JWT remains valid for its remaining 60-minute lifetime — for DocuSign this means the next person at that computer clicks "back" and can view, download, or interact with in-progress contracts and signed PDFs, a serious legal privacy violation that exposes PII and confidential agreement terms without the account holder's consent.
+**Failure mode if wrong:** If no blacklist, user logs out but token is still valid (until expiry). User thinks they're logged out but aren't (security hole). If Redis is down, logout fails (availability issue). **Business impact:** A signer uses a public library computer, logs out, and believes their session is terminated — but with no blacklist the access token stays valid for the remainder of its 15-minute TTL. For DocuSign this means the next person at that terminal presses "back," the cached JWT is replayed, and they can view, download, or continue interacting with in-progress contracts and completed PDFs. Fifteen minutes is not a small window in a public-terminal scenario — it is longer than the average session. That is a PII and confidential-terms exposure that a customer's own security review will find, and "the token is stateless so we can't revoke it" is not an answer that survives a SOC 2 audit.
 
 ---
 
@@ -941,7 +992,11 @@ CSRF (Cross-Site Request Forgery — an attack where a malicious website tricks 
 
 1. **Use JWT Bearer tokens in the `Authorization` header, not cookies.** Browsers don't auto-attach `Authorization` headers to cross-origin requests. CSRF only works when the browser automatically attaches credentials (cookies). JWT in `Authorization` header does not auto-attach → CSRF is structurally eliminated for pure API clients.
 
-2. **For any session cookie-based path (web UI, SSO callback):** Use the `SameSite=Strict` cookie attribute. This instructs the browser: "only send this cookie when the request originates from the same domain." Cross-origin form submissions or fetch requests from attacker's domain → browser withholds the cookie → CSRF fails.
+2. **For any cookie-based path (web UI session, refresh-token cookie, SSO callback): all three flags, always.** Name them explicitly — an interviewer asking "how do you store the refresh token?" is asking for exactly this list:
+   - **`HttpOnly`** — JavaScript cannot read the cookie, so an XSS payload can't exfiltrate the refresh token. This is the flag that makes a cookie safer than `localStorage` for a 7-day credential.
+   - **`Secure`** — the cookie is only ever transmitted over HTTPS. Without it, a single plain-HTTP request (a stray `http://` link, a captive portal redirect) leaks the refresh token to anyone on the network.
+   - **`SameSite=Strict`** — "only send this cookie when the request originates from the same site." Cross-origin form submissions or fetches from the attacker's domain → browser withholds the cookie → CSRF fails. Use `SameSite=Lax` *only* on the SAML/OIDC callback, which is by definition a cross-site POST from the IdP and would otherwise never receive the cookie; `Strict` everywhere else.
+   - Plus **`Path=/auth/refresh`** so the refresh cookie is not attached to every ordinary API call — narrowing where a long-lived credential can possibly be observed.
 
 3. **CSRF token (Double Submit Cookie pattern) for legacy or browser-based flows:**
    - Server issues a random CSRF token in a non-HttpOnly cookie (readable by JS)
@@ -999,7 +1054,7 @@ public String login(String email, String password, String existingSessionId) {
 
 **Q: "Why JWT and not session cookies?"**
 
-> At 35K token validations/sec, stateless JWT (1-2ms signature check) scales better than session cookies (10-50ms Redis/DB lookup per validation). JWT can run on distributed API instances without state; session cookies require shared session store.
+> At 35K token validations/sec, stateless JWT verifies locally in ~1-2ms of CPU with zero network calls. A session cookie needs a lookup on every request — ~1ms in the same datacenter, but 70-150ms cross-region, and it makes the session store a hard synchronous dependency for 100% of API traffic. Be careful not to overstate it: the problem with Redis sessions isn't that Redis is slow, it's that you've coupled every request in every region to one store's availability. JWT lets any API instance in any region validate independently.
 
 ### Tier 2 — Deep Probe
 
@@ -1106,9 +1161,9 @@ public String login(String email, String password, String existingSessionId) {
 | **Testability** | ✅ | JWT validation is deterministic (same RS256 signature + same token → always VALID or always INVALID). Unit test: sign a test token with a test private key, verify with the public key — no live auth service needed. RBAC authorization logic (hasPermission(user, resource, action)) is a pure function testable with mock user + mock resource. |
 | **Usability** | ✅ | POST /login → {access_token (15min), refresh_token (7 days)} — transparent token refresh via POST /auth/refresh means users never see a re-login prompt during normal usage. MFA is opt-in: non-MFA users see no friction. For DocuSign: a signer who clicks an envelope link is auto-authenticated via the signing ceremony URL token — no separate login screen interrupts the signing flow. |
 | **Extensibility** | ✅ | New permission types (sign, view, approve, manage_team) are new rows in resource_permissions — no code changes. New MFA methods (hardware FIDO2 key, magic link) = new MFAStrategy implementation injected via Spring bean. For DocuSign: adding a new role "Notary" with a specific permission set = one INSERT into roles + role_permissions, zero code deployment. |
-| **Security** | ✅ | RS256 signature prevents token forgery (private key never leaves Auth Service; all validators use public key). Bcrypt (cost factor 12, ~200ms) makes brute-force of 1M passwords take ~57 hours per attacker request. Redis blacklist (jti → revoked, TTL = token's remaining lifetime) ensures immediate revocation on logout. For DocuSign: a stolen JWT from a leaked log file is immediately invalidated once the user logs out — the blacklist closes the replay window. |
+| **Security** | ✅ | RS256 signature prevents token forgery (private key never leaves Auth Service; all validators use public key). **bcrypt cost factor 12 (~200ms/hash) means 1M candidate guesses against one stolen hash takes ~55 hours on a single core — the same 1M guesses against a SHA-256 hash take under a second** on commodity GPU hardware, which is the entire argument for a deliberately slow KDF and the reason "we hash with SHA-256" is a failing answer. Redis blacklist (`jti` → revoked, TTL = token's remaining lifetime) caps post-logout replay at 0 instead of 15 minutes, and stays at ~14K keys / 1.4 MB (Section 4) because the TTL matches the token. Rate limiting runs *before* bcrypt so credential stuffing can't be used as a CPU-exhaustion DoS. For DocuSign: a JWT leaked into an application log is dead the moment the user logs out — without the blacklist it remains a valid bearer credential for any contract that user can reach. |
 | **Availability** | ✅ | JWT signature validation is CPU-only (RSA verify ~1-2ms, no external call) — at 35K validations/sec (Section 4), 10 stateless auth service instances handle validation in parallel. Redis blacklist checked via GET (< 1ms). If Redis is down: fail-closed (deny access) — correct for security. Redis HA via Sentinel prevents unplanned downtime. |
-| **Scalability** | ✅ | Stateless JWT handles 35K validations/sec (Section 4) across 10 horizontally scaled instances — no session store bottleneck. Bcrypt login throughput: 200ms/hash × 10 instances = 50 logins/sec capacity (Section 4: 3.5K logins/sec peak → scale to 70 instances during peak). RBAC authorization: O(log N) index lookup on (user_id, resource_id) — sub-5ms even at 10M permission rows. |
+| **Scalability** | ✅ | The two halves scale on completely different resources and must be separate deployments. **Validation** is CPU-cheap and stateless: 35K/sec × 2ms ≈ 70 CPU-seconds/sec ≈ 70 cores, and because it needs no store it scales linearly in any region. **Login is 10× more expensive than the whole validation path**: 3,500 logins/sec × 200ms of bcrypt = **700 CPU-seconds/sec = ~700 cores ≈ 44 instances at 16 cores each** (Section 4). Dropping bcrypt from cost 12 to cost 10 (~50ms) cuts that to ~175 cores — a deliberate 4× saving still inside OWASP guidance. Co-locating the two fleets is the failure: a credential-stuffing burst saturates the shared pool and takes token validation down with it, so a password-spray attack becomes a full DocuSign API outage. RBAC authorization: O(log N) index lookup on `(resource_id, user_id)` — sub-5ms even at 10M permission rows. |
 | **Observability & Traceability** | ✅ | Immutable access_audit_log captures every login (user_id, timestamp, ip_address, user_agent, mfa_used, success/fail) — for DocuSign's 7+ year legal retention requirement, this is the tamper-proof record of "who logged in before the contested envelope was signed." Alert: > 5 consecutive failed logins for one user_id → brute-force attempt → temporarily lock + notify security. MFA adoption rate metric (alert if < 70% enterprise users enrolled). |
 
 ---
@@ -1439,4 +1494,5 @@ KEY INVARIANT:
 | Jul 5, 2026 | **Section 6 restructured: single final-state diagram → 3-stage progressive HLD.** Stage 1 (Session-Based Auth): stateful session cookie, Redis session lookup on every request — BREAKING POINTs: 35K session lookups/sec saturates Redis; single-factor login too risky for DocuSign. Stage 2 (Stateless JWT, no blacklist): RS256-signed JWT; validation is CPU-only (1-2ms); no session store — BREAKING POINTs: no revocation (stolen token valid for 15 min); no MFA (compromised password = full access). Stage 3 (JWT + Redis Blacklist + MFA + RBAC — production): Redis blacklist (jti → revoked, TTL = token's remaining lifetime); email OTP + optional TOTP MFA; RBAC roles in JWT + per-document resource_permissions table (fine-grained ACL); immutable access_audit_log. Four inline decision tables: (1) token strategy — session ❌ / JWT ✅ / hybrid ⚠️; (2) revocation — none ❌ / very short TTL ⚠️ / Redis blacklist ✅; (3) authorization model — simple RBAC ❌ / ABAC ❌ / RBAC+ACL ✅; (4) MFA method — none ❌ / SMS OTP ❌ / Email OTP+TOTP ✅. All Section 6 verdicts verified against Section 7 deep dive choices — no contradictions. |
 | Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **PKCE for mobile OAuth** — code_verifier generated by app, code_challenge = BASE64URL(SHA256(verifier)) sent during authorization, original verifier sent at token exchange; auth server hashes verifier and checks against stored challenge; prevents intercepted auth codes from being exchanged by attackers who don't know the verifier; RFC 7636 recommended approach for all public clients; (2) **Refresh token rotation for theft detection** — every RT use issues new RT + invalidates old; stored as token family chain with `current_rt_hash`; RT reuse (already-used RT presented) → revoke entire family; detects theft on first use but requires retry-with-idempotency for network failures; (3) **SAML 2.0 SSO trust and forgery prevention** — trust bootstrapped via customer's IdP X.509 certificate; at assertion time: XML signature verification, NotOnOrAfter expiry check, InResponseTo cross-site injection prevention; forged assertions fail signature; replayed assertions fail expiry; cross-site assertions fail InResponseTo. |
 | Jul 6, 2026 | **🔑 Technology Quick Reference table added.** 17-row glossary covering JWT, RS256, access/refresh token, token blacklist, jti, OAuth 2.0, OIDC, PKCE, RBAC, ACL, MFA, TOTP, OTP, SSO, SAML 2.0, bcrypt — inserted before Section 0. |
+| Aug 2026 | **Audit pass — bcrypt capacity, blacklist sizing, and two code-level security bugs.** (1) **Rewrote the bcrypt capacity conclusion**, which was badly wrong in two places: Section 4 said 3.5K logins/sec "needs 3-4 parallel instances" and Section 14 said "200ms/hash × 10 instances = 50 logins/sec → scale to 70 instances" (internally inconsistent — 50/sec from 10 instances implies 700 instances for 3.5K/sec). Correct figure: 3,500 × 200ms = **700 CPU-seconds/sec ≈ 700 cores ≈ 44 instances at 16 cores**, with three consequences now named — tune cost 12 → 10 for a 4× saving inside OWASP guidance, isolate the login fleet from the validation fleet (co-locating them turns a password-spray into a full API outage), and run rate limiting *before* bcrypt so credential stuffing isn't a CPU-exhaustion DoS. (2) **Fixed blacklist sizing**: "50M active revocations" ignored that entries expire with the token — steady state is 16 revocations/sec × 900s TTL ≈ **14K keys / 1.4 MB**, which is the actual point of the TTL trick. (3) **Fixed audit-log math**: 100M × 200 B = 20 GB/day = **7.3 TB/year**, not 20 TB/year — plus a note that per-request authorization audit at 35K/sec is 220 TB/year and cannot share the login table. (4) **Corrected the "Redis session lookup takes 10-50ms" claim** in four places (Stage 1 breaking point, Deep Dive 1 options table, Trade-off 1, Tier 1 probe). A Redis GET is ~0.2ms server / ~1ms same-DC RTT and one node does ~100K ops/sec, so 35K/sec is ~35% of one node — the real argument against stateful sessions is coupling (hard dependency on 100% of API traffic, 70-150ms cross-region RTT, a 5-10s failover = total auth outage against a 99.99% SLO), not throughput. Also removed the "35K × 50ms = 1,750 CPU-seconds/sec" line, which conflated Little's-law concurrency with CPU time. (5) **Fixed Trade-off 3's post-logout window** from 60 minutes to the design's actual 15-minute access token TTL. (6) **Named the triggers for login `401` and `429`**, previously listed in the table with no cause — and used them to introduce two attacks the file didn't cover: **user enumeration via response timing** (a missing email must run a dummy bcrypt so both 401 paths cost the same) and **credential stuffing** (per-email *and* per-source-IP failure limits, because a botnet spraying one password across thousands of accounts never trips a per-account counter). (7) **Fixed two real code-level security bugs**: MFA codes were generated with `java.util.Random` (a clock-seeded 48-bit LCG — two observed outputs predict all future codes) → `SecureRandom`, plus constant-time OTP comparison via `MessageDigest.isEqual`; and `verifyTOTPCode` checked only the current 30-second window, which rejects valid codes on any clock drift or transmission delay → now accepts ±1 step per RFC 6238 with a replay guard on the consumed counter. (8) **Completed the secure-cookie flag list** — the file mentioned `HttpOnly` and `SameSite=Strict` but never `Secure`; now all three plus `Path=/auth/refresh` scoping and the `SameSite=Lax` exception required for the SAML callback. |
 | Jul 5, 2026 | **Section 10 business impact + Section 14 DocuSign dimensions pass.** Section 10: added **Business impact:** to all 3 trade-offs — signing ceremony latency degradation at the "Adopt & Sign" moment (auth service dependency at highest legal significance), 30% non-MFA-adoption leaving users vulnerable to SIM-swapping with fraudulent contracts carrying full legal weight (enforcement cost), public computer 60-minute JWT validity post-logout exposing in-progress contracts (token lifetime). Section 14: rewrote all 7 dimension cells — FIDO2 and notary role RBAC extensibility (Extensibility), stolen JWT 15-minute blacklist closure window (Security), 70% enterprise MFA adoption rate alert + 7-year legal retention for `access_audit_log` (Observability). |

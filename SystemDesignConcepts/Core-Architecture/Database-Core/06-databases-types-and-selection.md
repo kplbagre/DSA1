@@ -24,14 +24,14 @@ Every system design question you face (URL shortener, chat system, expense repor
 | Term | Plain-English Meaning | Example |
 |------|----------------------|---------|
 | **ACID** | Atomicity (all-or-nothing), Consistency (valid state before and after), Isolation (concurrent txns don't interfere), Durability (survives crashes). The guarantee traditional databases give you. | PostgreSQL transactions: transfer money from account A to B; both succeed or both fail, never one without the other. |
-| **BASE** | Basically Available (system stays up even if replicas disagree), Soft state (replicas may not be identical), Eventual consistency (replicas converge given time). The guarantee distributed NoSQL systems give you. | DynamoDB: write succeeds immediately even if replicas haven't synced yet; they'll sync within milliseconds. |
-| **CAP Theorem** | In a distributed system, you can pick two of three: Consistency (all replicas see the same data), Availability (system always responds), Partition tolerance (survives network splits). You cannot have all three. | PostgreSQL with single primary: pick Consistency + Availability (but loses Partition tolerance — if the primary fails, replicas can't form consensus). Cassandra: picks Availability + Partition tolerance (loses Consistency — replicas may disagree temporarily). |
+| **BASE** | Basically Available (system stays up even if replicas disagree), Soft state (replicas may not be identical), Eventual consistency (replicas converge given time). The **default** posture of distributed NoSQL systems — not a fixed property. | DynamoDB: a write is quorum-durable before it acks, but the *default read* is eventually consistent and may see a stale replica. Pass `ConsistentRead=true` for a strongly consistent read (costs 2× RCU). So "DynamoDB = eventual" is a default, not a limit. |
+| **CAP Theorem** | **Not** "pick two of three." P (partition tolerance) is **mandatory** — networks fail whether you like it or not, so you cannot design P away. The real statement: *when a partition happens*, you must choose Consistency **or** Availability. So the only meaningful categories are **CP** and **AP**. "CA" describes a system that isn't distributed at all. | **Sync-replication PostgreSQL = CP** — during a partition it refuses writes rather than diverge. **Cassandra = AP by default** (writes accepted on both sides, replicas reconcile later) — but *tunable*: with `W + R > RF` it gives strong consistency per query. Full treatment in **`../Distributed-Systems/34-cap-theorem-consistency-models.md`**. |
 | **Consistency (strong)** | Every read sees the latest write. If I write "balance = 100," every subsequent read sees 100. | PostgreSQL with synchronous replication: write blocks until replicas confirm. |
 | **Consistency (eventual)** | Reads may see stale data temporarily, but all replicas converge to the same state eventually. | DynamoDB: write succeeds immediately and is replicated asynchronously to other regions; a read 100ms later might see the old value, but within seconds all replicas agree. |
 | **OLTP** | Online Transaction Processing — lots of small, fast reads/writes. Examples: web apps, payment systems, user registrations. | A1 (URL shortener): 35K shorten requests/sec, each is a small INSERT. |
 | **OLAP** | Online Analytical Processing — few large, slow queries over huge datasets (scans, aggregations). Examples: analytics, dashboards, reporting. | "How many documents were signed by region in Q2?" — scans billions of rows. |
 | **Sharding** | Horizontal partitioning — split data across multiple databases by some key (e.g., user_id % 10 = shard 0-9). Each shard is smaller, can live on different servers. | At 50M documents, split into 50 shards of 1M each (C3 pagination). |
-| **Replication** | Copying data to multiple servers for redundancy (high availability). **Read replica** = slave can be read from but not written to. **Primary** = the source of truth. | PostgreSQL with 1 primary + 2 read replicas: writes go to primary, reads can hit any replica. |
+| **Replication** | Copying data to multiple servers for redundancy (high availability). **Read replica** (formerly "slave" — the industry has moved to primary/replica) = can be read from but not written to. **Primary** = the source of truth, and the only place writes land. | PostgreSQL with 1 primary + 2 read replicas: writes go to primary, reads can hit any replica. |
 | **Indexing** | Data structure (typically B-tree or hash) that speeds up lookups. Without it, every query scans the entire table. | C3 pagination: compound index on (created_at, id) makes cursor queries O(1) instead of O(N). |
 | **Throughput** | How many operations per second the database can handle. Measured in requests/sec (req/sec) or transactions/sec. | E2 auth: 35K token validation requests/sec. A single PostgreSQL instance handles **50K+ simple indexed reads/sec** (buffer-cache hits) and **10–20K writes/sec**; complex JOINs/aggregations drop reads to 1–10K/sec. |
 | **Latency** | How long a single operation takes. Measured in milliseconds (ms). | A1 cache hit: 1-5ms (Redis). DB query miss: 10-20ms (PostgreSQL). |
@@ -47,28 +47,59 @@ Every system design question you face (URL shortener, chat system, expense repor
 
 **Your job:** Decide **what matters more for your problem** — consistency or availability? Strong consistency or eventual? Fast reads or fast writes?
 
-### The CAP Theorem Visualized
+### 🎨 Visual — CAP Is a Fork, Not a Triangle
+
+> **Do not draw the classic triangle in an interview.** The "pick two of
+> three" picture is the single most common CAP misconception, and senior
+> interviewers probe it deliberately. Draw this instead.
 
 ```
-                    CONSISTENCY
-                         △
-                        /│\
-                       / │ \
-                      /  │  \
-        PostgreSQL   /   │   \
-           (sync     /    │    \  Cassandra
-          replication)    │     (quorum replication)
-                  /       │       \
-                 /        │        \
-                /         │         \
-    AVAILABILITY ←────────┼────────→ PARTITION
-    (stays up)              │        TOLERANCE
-               Redis single-node (≈CA)   (network split)
+                      A PARTITION HAPPENS
+          (a network split — not optional, it WILL happen)
+                              │
+                ┌─────────────┴─────────────┐
+                ▼                           ▼
+     ┌────────────────────┐      ┌─────────────────────┐
+     │   CHOOSE  C        │      │   CHOOSE  A         │
+     │   = CP system      │      │   = AP system       │
+     ├────────────────────┤      ├─────────────────────┤
+     │ Minority side      │      │ BOTH sides keep     │
+     │ REFUSES writes     │      │ accepting writes    │
+     │ → clients see      │      │ → replicas diverge  │
+     │   errors/timeouts  │      │ → reconcile later   │
+     ├────────────────────┤      ├─────────────────────┤
+     │ Postgres (sync     │      │ Cassandra (default) │
+     │   replication)     │      │ DynamoDB (default)  │
+     │ ZooKeeper, etcd    │      │ Redis Cluster       │
+     │ Spanner            │      │ Dynamo-style stores │
+     └────────────────────┘      └─────────────────────┘
+
+  NOT ON THIS CHART: "CA".
+  A single node has no partition to tolerate, so CAP does not
+  apply to it at all. Single-node Postgres and single-node Redis
+  are not "CA systems" — they are not distributed systems.
+
+KEY INVARIANT:
+  P is mandatory. The choice is only ever C-or-A, and only
+  DURING a partition. In normal operation a CP system is both
+  consistent AND available — which is why "CP" does not mean
+  "unavailable"; it means "unavailable rather than wrong when
+  the network splits."
 ```
 
-**KEY INVARIANT:** Every database sits at a point on this triangle. You pick two of three. The position determines how the database behaves under failure (network split), how fresh reads are, and how it scales.
+> **Say this if CAP comes up:** "P isn't something you choose — networks
+> partition regardless. So the real question is what the system does
+> *during* a partition: refuse writes and stay correct (CP), or accept
+> writes on both sides and reconcile later (AP)."
 
-> **Redis in CAP:** Redis single-node ≈ CA — one server means no partition to tolerate; it is consistent and available. Redis Cluster ≈ AP — data is partitioned across nodes; under a network split, Redis Cluster prioritizes availability over strong consistency (reads may briefly return stale values).
+> **The sides are not fixed per product.** Cassandra is AP *by default*
+> but tunable to strong consistency per query with `W + R > RF`.
+> DynamoDB defaults to eventually consistent reads but offers
+> `ConsistentRead=true`. Naming the product is the junior answer; naming
+> the **configuration** is the senior one. See
+> **`59-nosql-cassandra-mongo-dynamo.md`** for the quorum math and
+> **`../Distributed-Systems/34-cap-theorem-consistency-models.md`** for
+> PACELC (the extension that also covers the *non*-partition case).
 
 ---
 
@@ -166,14 +197,22 @@ Every system design question you face (URL shortener, chat system, expense repor
 - You need **ACID transactions** (all-or-nothing operations)
 - Reads and writes are **balanced** (not 100:1 skewed)
 - Your team is **familiar with SQL** (easy to hire for)
-- Data fits on a **single machine or small cluster** (< 10 TB)
+- Sustained writes stay under **~10–20K/sec** and the **working set fits RAM**
 
 ❌ **Avoid if:**
 - Your schema **changes constantly** (new fields every sprint — use MongoDB)
-- You have **billions of rows** and need to shard (sharding is painful in SQL; NoSQL is easier)
+- Sustained writes exceed **~15–20K/sec** — one primary is the write ceiling, and no number of replicas moves it
+- The **working set no longer fits in RAM**, so reads start hitting disk on every query
 - Your data is **semi-structured** (nested documents, arrays, mixed types)
 - You need **sub-millisecond latency** (Redis is better)
 - You need **full-text search** (Elasticsearch is better)
+
+> **⚠️ Not a reason to leave Postgres: raw data size.** "Billions of rows"
+> or "10 TB" on its own does **not** force you off PostgreSQL — a single
+> Aurora node holds 64–128 TiB, and a plain Postgres node is bounded by
+> its volume, not by the engine. Reaching for sharding because a number
+> sounds big is a well-known down-level signal. Shard on **write
+> throughput** or **working set > RAM**, never on table size alone.
 
 ### Scaling Strategies
 
@@ -277,10 +316,20 @@ List<Document> docsByAlice = db.query(
 - Your data is **semi-structured** or **unstructured**
 
 ❌ **Avoid if:**
-- You need **ACID transactions** (money transfers, approval workflows)
-- You need **strong consistency** (audit logs, legal compliance)
-- You'll do complex **JOINs across collections** (much harder than SQL)
+- You'll do complex **JOINs across collections** — `$lookup` is a per-document nested loop, not a hash join
+- You want a **mature query planner** (window functions, CTEs, multi-table aggregation)
 - Your team is **SQL-fluent** (switching to NoSQL is a context-switch)
+- You need **transactions at high volume** — see the caveat below
+
+> **⚠️ "MongoDB has no ACID transactions" is out of date — do not say it.**
+> Multi-document ACID transactions shipped in **MongoDB 4.0 (2018)** on
+> replica sets and **4.2 (2019)** across shards. The accurate objection is
+> about *cost*, not existence: Mongo's transactions use two-phase commit
+> across replica-set members and hold locks for the transaction duration,
+> so they carry coordination overhead that a purpose-built RDBMS doesn't.
+> The right framing: "Mongo transactions are the answer when you already
+> have Mongo for document flexibility and need occasional multi-document
+> atomicity — not as a general PostgreSQL replacement."
 
 ### Example: MongoDB
 
@@ -325,13 +374,13 @@ List<Document> docsByAlice = db.query(
 - You need **sub-millisecond latency** (caching for high-traffic reads)
 - You're storing **simple key-value data** (user session, cached query result, counter)
 - You need **TTL (auto-expiry)** for temporary data
-- You have a **high read-to-write ratio** (100:1 reads, 1:1 writes)
+- You have a **high read-to-write ratio** (e.g. 100 reads per 1 write — the cache earns its keep by absorbing the reads)
 - You need **atomic operations** (increment a counter, INCR key, is guaranteed atomic)
 
 ❌ **Avoid if:**
 - You need **durability guarantees** (Redis data is lost on restart unless persisted to disk)
 - You need **complex queries** (Redis doesn't support SQL-like queries)
-- You need **transactions** (no ACID guarantees)
+- You need **rollback semantics** — Redis has `MULTI/EXEC` and atomic Lua scripts, but a failed command inside `MULTI` does **not** roll back the others; there is no ACID isolation across keys
 
 ### TTL and Eviction
 
@@ -429,10 +478,17 @@ Query: "Alice signed"
 Result: [Doc 1, Doc 3] sorted by relevance
 
 KEY INVARIANT:
-  Inverted index lets us answer "find all documents with keyword X"
-  in O(log N) time instead of O(N) full-table scan.
-  The index is built offline when documents are indexed,
-  making searches fast and scalable to billions of docs.
+  The inverted index makes lookup cost proportional to the number
+  of MATCHING documents, not to corpus size. Finding the term is
+  ~O(1) (a hash/FST lookup in the term dictionary); reading its
+  postings list is O(k) for k matches. That is why it stays fast
+  at a billion documents — N barely enters the cost.
+  (It is not "O(log N)" — that would still imply the corpus size
+  drives the cost, which is the intuition to avoid.)
+
+  Indexing is NEAR-real-time, not offline: Elasticsearch makes a
+  new document searchable on the next refresh (~1s by default),
+  which is why it can serve both search and log ingestion.
 ```
 
 ### Example from Our Solutions
@@ -475,11 +531,17 @@ Query: "average requests per minute over the last 24 hours?"
   Returns 1440 data points (one per minute).
   Fast because it's optimized for this pattern.
 
+Row count per series per day:
+  86,400 sec/day ÷ 10 sec/scrape = 8,640 samples/day/series
+  At 10K series (a modest fleet): 86.4M rows/day
+
 PostgreSQL would have to:
-  1. Scan all 1M rows (10 seconds × 86,400 seconds/day)
+  1. Scan the day's rows for the matching series
   2. GROUP BY time bucket
   3. AVERAGE each bucket
-  Much slower.
+  Much slower — and it stores each sample as a full row with
+  tuple headers, where a TSDB delta-encodes timestamps and
+  compresses values, often 10-20× smaller on disk.
 
 KEY INVARIANT:
   Time-series DBs pre-aggregate data so that "average over
@@ -549,10 +611,10 @@ KEY INVARIANT:
 
 | Scenario | Pick This DB | Why |
 |----------|---|---|
-| **Scale: < 100 GB, balanced reads/writes, structured data** | PostgreSQL | ACID, strong consistency, no sharding overhead. Simple. |
-| **Scale: < 100 GB, lots of READS, structured data** | PostgreSQL + Redis cache | Cache absorbs read load; DB handles writes. |
-| **Scale: 1 TB, structured, balanced** | PostgreSQL with read replicas | Reads hit replicas; primary handles writes. Single DB still fits. |
-| **Scale: 1 TB+, massive WRITES, structured** | PostgreSQL + sharding OR Cassandra | Need horizontal write scaling. Cassandra is easier to shard. |
+| **Structured data, balanced reads/writes, writes < 10–20K/sec** | PostgreSQL | ACID, strong consistency, no sharding overhead. Simple. |
+| **Structured data, reads swamp the node (writes fine)** | PostgreSQL + read replicas, or + Redis cache | Replicas and cache both scale reads. Neither scales writes. |
+| **Working set exceeds RAM, or storage nears the node ceiling** | PostgreSQL + sharding | Split data across independent primaries. Note this is about *working set*, not table size. |
+| **Sustained writes > 15–20K/sec, structured** | PostgreSQL + sharding OR Cassandra | One primary is the write ceiling. Cassandra is easier to shard. |
 | **Flexible schema, evolving rapidly** | MongoDB | Semi-structured. Easy schema changes. |
 | **Sub-millisecond latency, caching, counters** | Redis | In-memory, atomic operations, TTL. |
 | **Full-text search, keyword matching, 1B+ docs** | Elasticsearch | Inverted index. BM25 ranking. |
@@ -579,7 +641,7 @@ KEY INVARIANT:
 4. Solution: Redis cache with 1-hour TTL absorbs 90% of read traffic
 
 **If the requirement changed:**
-- "10B URLs/day" → sharding would be needed (Redis helps, but 33K writes/sec exceeds single DB). Add Cassandra or shard PostgreSQL.
+- "10B URLs/day" → 10B ÷ 86,400 ≈ 116K writes/sec average, ~**350K/sec at 3× peak** — roughly 20× a single primary's ceiling. Redis does not help here (it absorbs *reads*, and every shorten is still a durable write). Shard PostgreSQL or move to Cassandra.
 - "Expect analytics (top URLs)" → add BigQuery for analytical queries; keep PostgreSQL for OLTP.
 
 ---
@@ -631,7 +693,15 @@ KEY INVARIANT:
 3. Token revocation (logout) → Redis blacklist with TTL = token expiry time
 4. MFA codes → Redis with 5-min TTL
 
-**Why NOT Cassandra?** Eventual consistency is unacceptable for auth. If a user is compromised and we add their token to the blacklist, we need that visible immediately to all API servers. Cassandra's replication lag (even 10ms) is unacceptable for security.
+**Why NOT Cassandra?** Careful — the tempting answer ("eventual consistency is unsafe for auth") is **wrong**, and an interviewer who knows Cassandra will catch it. Cassandra's consistency is tunable per query: with `W=QUORUM, R=QUORUM, RF=3` you get `2 + 2 > 3`, so the read set and write set must overlap and a revoked token **is** visible immediately. Strong consistency is available if you ask for it.
+
+The honest reasons to prefer PostgreSQL here:
+1. **Relational model.** Users, roles, permissions and audit are a join-heavy graph. Cassandra has no joins — you would denormalize into a table per query pattern and maintain them all on write.
+2. **Multi-table ACID.** "Create user + assign default role + write audit row" is one transaction in Postgres. In Cassandra it is three writes with no atomicity across them (batches give atomicity only within a partition).
+3. **Scale doesn't justify it.** 10M users is a few GB. Cassandra earns its operational cost at 100× this, not here (see Mistake 4).
+4. **Blast radius of a mistake.** In Postgres, consistency is the default you'd have to actively weaken. In Cassandra it is a per-query setting one careless `ConsistencyLevel.ONE` can silently drop — a worse failure posture for auth even though the strong option exists.
+
+> **Say it this way:** "Cassandra *can* give me strong consistency with quorum reads and writes — the reason I'm not using it is the relational model, multi-table transactions, and that 10M users doesn't justify the ops cost."
 
 ---
 
@@ -647,11 +717,13 @@ KEY INVARIANT:
 
 ### Mistake 2: Forgetting the CAP Theorem
 
-**The trap:** Engineer designs a Cassandra cluster assuming strong consistency. Oops. Cassandra picks Availability + Partition tolerance, not Consistency.
+**The trap:** Engineer deploys Cassandra with default `ConsistencyLevel.ONE` and assumes reads return the latest write. They don't — `W=1, R=1, RF=3` gives `1 + 1 ≤ 3`, so a read can land on a replica that never received the write.
 
-**When it fails:** E2 (Authentication). If you use Cassandra, a compromised token might still validate on one node even after being revoked on another (replication lag). Unacceptable.
+**The trap in the other direction (equally common, and worse in an interview):** declaring "Cassandra can't do strong consistency, so use PostgreSQL." That is false. `W + R > RF` — e.g. `QUORUM/QUORUM` at `RF=3` — guarantees the read set overlaps the write set, so the latest write is always seen. Cassandra's consistency is **tunable per query**, not fixed.
 
-**Prevention:** Be explicit: "I need strong consistency" → PostgreSQL. "Availability is more important" → Cassandra.
+**When it fails:** A token revocation written at `W=ONE` and read at `R=ONE`. The revoked token still validates against a replica that hasn't received the write. The bug is the *consistency level*, not the database.
+
+**Prevention:** Never say "Cassandra is eventually consistent" flat. Say: "Cassandra is AP **by default**, tunable to strong per query with `W + R > RF`, at the cost of latency and of losing availability when a quorum is unreachable." Then pick the level per access pattern — quorum for revocation, `ONE` for telemetry. Caveat worth naming — but **not** hinted handoff (hints don't count toward the consistency level, so a quorum write either succeeds on real replicas or fails outright). The real limits of `W + R > RF` are that conflict resolution is last-write-wins on **wall-clock timestamps** (clock skew can drop a newer write), and that quorum gives freshness but **not** atomic compare-and-set — read-modify-write needs LWT/`SERIAL`. See `59-nosql-cassandra-mongo-dynamo.md`.
 
 ### Mistake 3: Choosing NoSQL Too Early
 
@@ -671,11 +743,13 @@ KEY INVARIANT:
 
 ### Mistake 5: Confusing Persistence and Durability
 
-**The trap:** "Redis is in-memory, so it's not durable." Actually, Redis **can** be durable if you enable AOF (Append-Only File) or RDB (snapshotting).
+**The trap:** "Redis is in-memory, so it's not durable." Redis **can** persist — RDB (periodic snapshots) or AOF (append-only log). With `appendfsync everysec`, the exposure is about one second of writes.
 
-**When it fails:** Using Redis for critical cache that must survive restarts, then Redis crashes and loses everything.
+**But durable ≠ a system of record.** Even with AOF you get: a bounded window of loss on crash, asynchronous replication to replicas (a failover can lose acknowledged writes), and no multi-key ACID transactions. Persistence protects you from a *restart*; it does not make Redis the authority for data you cannot reconstruct.
 
-**Prevention:** If data must survive restarts, use PostgreSQL. If data can be regenerated (cache), Redis is fine.
+**When it fails, both directions:** (a) treating Redis as ephemeral and losing a warm cache on every deploy, when enabling RDB would have kept it; (b) treating AOF as "durable like Postgres" and putting the only copy of a payment record there.
+
+**Prevention:** Ask *"can this be rebuilt from another source?"* — not *"is it in memory?"* Rebuildable (cache, sessions, counters you can recompute) → Redis, and turn on persistence to avoid cold-start stampedes. Not rebuildable (the authoritative record) → PostgreSQL, with Redis in front of it.
 
 ---
 
@@ -689,7 +763,11 @@ KEY INVARIANT:
 
 **Q2: Why does E2 (Authentication) use PostgreSQL instead of Cassandra, given that Cassandra scales better?**
 
-> Auth requires **strong consistency**. When a user is compromised and we add their token to the revocation list, every API server must see that revocation immediately. Cassandra's eventual consistency means a replica could lag by even 10ms — during that window, a revoked token could still validate on a stale replica. That's a security hole. PostgreSQL with synchronous replication guarantees that once a write commits, every subsequent read sees it. The trade-off is write scalability — but for auth, correctness beats scale. Token validation itself is stateless (JWT signature check), so we never hit the DB per validation; we only hit it on login/logout/revocation, which is far lower volume.
+> First, I'd reject the easy answer, because it's wrong: "Cassandra is eventually consistent so it's unsafe for auth" is not true. Cassandra's consistency is tunable per query — `W=QUORUM, R=QUORUM` at `RF=3` gives `2 + 2 > 3`, so the read set and write set overlap and a revoked token is visible immediately. If I said otherwise, I'd be describing a *default*, not a limit.
+>
+> The real reasons are the data model and the scale. Auth data is a join-heavy relational graph — users, roles, permissions, audit — and Cassandra has no joins, so I'd denormalize into a table per query pattern and maintain every one of them on write. "Create user + assign role + write audit row" is a single ACID transaction in Postgres; in Cassandra it's three writes with no atomicity across partitions. And 10M users is a few GB — Cassandra earns its operational cost two orders of magnitude above this. There's also a failure-posture argument: in Postgres, consistency is the default you'd have to actively weaken, whereas in Cassandra one careless `ConsistencyLevel.ONE` silently drops it. For auth I want the safe default.
+>
+> Worth adding: token validation is stateless (JWT signature check), so we never hit the DB per validation — only on login/logout/revocation, which is far lower volume. That's what makes a single Postgres primary comfortable here regardless.
 
 ---
 
@@ -752,9 +830,17 @@ Question 1: What forces you off a single node? (NOT raw data size —
   Working set > RAM or storage near ceiling → shard
 
 Question 2: What consistency do you need?
-  Strong (ACID)           → PostgreSQL
-  Eventual (BASE)         → Cassandra, MongoDB
-  Don't care (cache)      → Redis
+  Strong, multi-table ACID → PostgreSQL (the default; you'd have
+                             to actively weaken it)
+  Strong, single-key       → Cassandra at W+R > RF, or DynamoDB
+                             with ConsistentRead=true
+  Eventual is fine         → Cassandra/DynamoDB defaults, MongoDB
+                             secondary reads
+  Rebuildable (cache)      → Redis
+
+  ⚠ Do NOT say "Cassandra/DynamoDB are eventually consistent" as
+    though it were a limit. It is a DEFAULT. Both are tunable.
+    Naming the product is junior; naming the level is senior.
 
 Question 3: What queries will you run?
   Simple lookups (ID=X)   → Anything (SQL is simplest)
@@ -778,19 +864,19 @@ Question 5: How fast does data change?
 
 | Database | Best For | Avoid For | Latency | Scale |
 |---|---|---|---|---|
-| **PostgreSQL** | Structured data, ACID, simple schemas | Sharding at massive scale | 10-20ms | Single instance: 50K+ reads/sec, 10–20K writes/sec; up to 64–128 TiB storage |
-| **Cassandra** | Massive scale, high availability, eventual consistency | Strong consistency, small teams | 10-50ms | 100K+ req/sec (distributed) |
-| **MongoDB** | Flexible schemas, nested documents | Complex joins, strong consistency | 20-50ms | Scales with sharding |
-| **Redis** | Caching, counters, sessions, high throughput | Persistence, complex queries | 1-5ms | Fits in memory (25–50 GB fork-safe; up to ~100 GB with persistence disabled) |
+| **PostgreSQL** | Structured data, multi-table ACID, joins | Sustained writes past one primary | 10-20ms | Single instance: 50K+ reads/sec, 10–20K writes/sec; up to 64–128 TiB storage |
+| **Cassandra** | Massive write scale, multi-region active-active, no SPOF | Joins, multi-partition atomicity, **small ops teams** | 10-50ms | 100K+ req/sec (distributed). Consistency **tunable per query** (`W + R > RF` = strong) — not fixed at eventual |
+| **MongoDB** | Flexible schemas, nested documents | Complex joins (`$lookup` = nested loop), high-volume transactions | 20-50ms | Scales with sharding. **Has** multi-document ACID since 4.0 — at a 2PC cost |
+| **Redis** | Caching, counters, sessions, high throughput | System-of-record data, complex queries | 1-5ms | Fits in memory (25–50 GB fork-safe; up to ~100 GB with persistence disabled) |
 | **Elasticsearch** | Full-text search, relevance ranking, logging | Transactional updates, strong consistency | 50-200ms | 50M+ documents (sharded) |
 | **InfluxDB** | Metrics, logs, time-series data | Row-level random access | 10-50ms | Fits in memory + disk |
 | **BigQuery** | Analytics, aggregations, batch processing | Real-time transactional | 1-10 seconds | 100B+ rows (columnar compression) |
 
 ### The Three Guarantees You're Choosing Between
 
-**ACID (PostgreSQL):** All-or-nothing, consistent, isolated, durable. Slow to scale writes.
-**BASE (Cassandra):** Basically available, soft state, eventually consistent. Fast to scale, briefly inconsistent.
-**Cache (Redis):** Ultra-fast, temporary, TTL-based, fits in RAM. Loses data on restart.
+**ACID (PostgreSQL):** All-or-nothing, consistent, isolated, durable — *across multiple tables*, which is the part NoSQL rarely gives you. Slow to scale writes.
+**BASE (Cassandra, DynamoDB):** Basically available, soft state, eventually consistent **by default**. Fast to scale. Note "by default" — both are tunable to strong consistency per query; you trade latency and partition-availability to get it.
+**Cache (Redis):** Ultra-fast, TTL-based, fits in RAM. Can persist (RDB/AOF), but persistence ≠ system of record — use it for data you could rebuild.
 
 **Your job:** Decide which matters for each component of your system.
 - Auth → ACID (security)
@@ -801,6 +887,17 @@ Question 5: How fast does data change?
 ---
 
 ## 🏢 Real World — Where Companies Use This
+
+> **⚠️ Read this before quoting any of it.** These are *illustrative
+> patterns*, not verified current architectures. Public stacks change,
+> and most of what's written about them online is stale or secondhand.
+> **Never assert a company's internal stack as fact in an interview** —
+> if the interviewer works there (or worked there), a confident wrong
+> claim costs you far more than saying nothing. Use these to remember
+> the *pattern* ("payments → ACID store; analytics → columnar
+> warehouse"), and phrase it as *"a common pattern is…"* rather than
+> *"Company X uses…"*. The one exception is a stack the interviewer has
+> themselves described to you in the session.
 
 **Amazon (AWS / Retail)**
 - **Product catalog:** DynamoDB (key-value store) for lookups + Elasticsearch for search
@@ -818,7 +915,7 @@ Question 5: How fast does data change?
 
 **Stripe (Payments)**
 - **Transactions:** PostgreSQL with synchronous replicas (ACID critical for payments)
-- **Ledger:** BigQuery (immutable append-only log of all money movements)
+- **Ledger:** a **transactional store**, not a warehouse. A ledger of record needs ACID and strong consistency; an analytics warehouse cannot be the authority for money movements. (An earlier version of this file said BigQuery — wrong, and a bad thing to say in a payments interview.) The warehouse gets a *copy* of the ledger for reporting.
 - **User data:** PostgreSQL + Redis cache (session/profile lookups)
 - **Search:** Elasticsearch for transaction history, fraud detection queries
 - **Metrics:** InfluxDB for latency tracking, payment success rates
@@ -832,8 +929,8 @@ Question 5: How fast does data change?
 - **Recommendations:** Redis (precalculated, cached; updated hourly via batch)
 
 **Shopify**
-- **Products/inventory:** MongoDB (flexible schema for 1M+ stores with different catalog structures)
-- **Orders:** PostgreSQL (ACID for payment consistency) + Cassandra (distributed read replicas)
+- **Core commerce data (products, orders, inventory):** **MySQL**, horizontally sharded into isolated "pods" — Shopify is a well-documented Rails + MySQL shop, *not* MongoDB. (An earlier version of this file said MongoDB; that was wrong, and it's the kind of claim an interviewer corrects you on.)
+- **Sharding model:** each pod holds a disjoint set of shops, so a shop's data never spans pods — the "shard by tenant" pattern that makes cross-shard queries rare by design
 - **Cache layer:** Redis (product info, cart contents, checkout session)
 - **Search:** Elasticsearch (product search across stores)
 - **Analytics:** BigQuery (order trends, customer behavior)
@@ -842,7 +939,7 @@ Question 5: How fast does data change?
 - **Tweets:** Cassandra (massive scale, eventual consistency, billions of posts)
 - **User timeline:** Redis (precalculated feeds, cache refreshed every hour)
 - **Search:** Elasticsearch (full-text search over tweets, hashtags, trending)
-- **User graph:** Redis (following/followers, cached for speed)
+- **User graph:** a purpose-built graph/KV store (historically FlockDB, later Manhattan) with Redis as a **cache** in front — Redis is the cache tier, not the graph's system of record
 - **Metrics:** InfluxDB (tweets/sec, latency metrics)
 
 **Google**
@@ -891,4 +988,5 @@ This file covers SQL vs NoSQL selection and gives a surface-level view of Cassan
 | July 1, 2026 | **Comprehension gaps fixed.** (1) Terminology table: added Write Bottleneck and Replication Lag definitions. (2) Scaling Strategies: rewrote section — added prose explaining why reads scale but writes don't, replaced ambiguous "Write Bottleneck? No/Yes" diagram with labelled Read-heavy/Write-heavy branches, added ⚠️ Replication Lag callout, added ⚠️ Cross-Shard Queries callout with fan-out definition. (3) Added `## 🔬 Interview Q&As` section (5 Q&As covering bottleneck detection, Postgres vs Cassandra for auth, cross-shard queries, read-your-own-writes, replica vs shard). (4) Fixed CAP triangle: removed incorrect "NOT a database" Redis label; corrected to Redis single-node ≈ CA, Redis Cluster ≈ AP. |
 | Jul 3, 2026 | **Number consistency fixes** (cross-note scan). (1) Postgres write capacity: updated 4 occurrences of `5K–10K writes/sec` → `10–20K writes/sec` to align with `52-numbers-to-know-scale-triggers.md`. (2) Redis memory ceiling in ASCII diagram: `8 GB max` → `e.g., 25 GB` (fork-safe practical limit). (3) Redis capacity in Quick Lookup Table: `~32-256GB per instance` → `25–50 GB fork-safe; up to ~100 GB with persistence disabled`. |
 | Jul 15, 2026 | **Cross-reference added.** Created companion file `59-nosql-cassandra-mongo-dynamo.md` to close the NoSQL differentiation gap. This file remains the entry point (SQL vs NoSQL); `59` is the deep dive for the Cassandra/MongoDB/DynamoDB triangle. |
+| Aug 10, 2026 | **Correctness pass — two interview-fatal conceptual errors, plus contradictions with this repo's own canonical notes.** ⭐ **(1) CAP was taught as "pick two of three," with PostgreSQL classified as CA.** This is the single most-probed CAP misconception. P is **mandatory** — networks partition regardless — so the only meaningful categories are CP and AP, and "CA" describes a non-distributed system. Sync-replication Postgres is **CP**. The file also contradicted its own canonical note: `../Distributed-Systems/34-cap-theorem-consistency-models.md` states plainly *"P is mandatory (networks fail). You can't design it away"* and lists *"synchronous-replication PostgreSQL"* under **CP System**. The triangle diagram was replaced with a **partition-fork** diagram (CP branch vs AP branch) plus an explicit "do not draw the triangle" warning and a say-this-out-loud line. ⭐ **(2) "Cassandra can't do strong consistency" was taught in three places** (Example 4, Mistake 2, Q&A Q2) as the reason to reject Cassandra for auth. **False** — consistency is tunable per query, and `W + R > RF` (e.g. QUORUM/QUORUM at RF=3 → 2+2>3) guarantees the read set overlaps the write set, so a revoked token *is* immediately visible. This contradicted the companion file `59-nosql-cassandra-mongo-dynamo.md`, which states `W + R > RF → STRONG CONSISTENCY` and answers the identical question with *"Yes — mathematically."* All three sites rewritten to give the **honest** reasons to prefer Postgres for auth (relational join-heavy model; multi-table ACID; 10M users doesn't justify the ops cost; consistency-by-default is a safer failure posture than a per-query setting one careless `ConsistencyLevel.ONE` can drop), with the hinted-handoff caveat named. **(3) MongoDB "no ACID transactions"** — stale since MongoDB 4.0 (2018) / 4.2 sharded, and contradicted by file 59. Reframed as a *cost* objection (2PC across replica-set members, locks held for the transaction) rather than an existence claim. **(4) DynamoDB was filed as eventual-only** — it offers `ConsistentRead=true`; "eventual" is a default, not a limit. **(5) The Jul 19 premature-sharding fix had only been applied to the flowchart and TL;DR** — the Decision Matrix still keyed off raw size (`< 100 GB` / `1 TB` / `1 TB+`), the SQL "use if" row still said `< 10 TB`, and "billions of rows" was still listed as a reason to leave Postgres, all contradicting this file's own "64–128 TiB per node" statement. Matrix re-keyed onto the real triggers (sustained write rate, working-set-vs-RAM) and a ⚠️ callout added. **(6) Arithmetic:** the 10B-URLs/day scenario said 33K writes/sec — it is 10B ÷ 86,400 ≈ 116K/sec average, **~350K/sec at 3× peak** (off by 10×); and the Prometheus comparison read *"1M rows (10 seconds × 86,400 seconds/day)"*, which is dimensionally nonsense (seconds²) — corrected to 86,400 ÷ 10 = **8,640 samples/day/series**. **(7) Inverted index** was claimed O(log N) with an index "built offline" — corrected to ~O(1) term lookup + O(k) in *matching* docs (corpus size barely enters), and near-real-time indexing (~1s refresh), which also removes a contradiction with this file's own "Elasticsearch is already doing real-time indexing" line. **(8) Real-World section:** added a warning not to assert company stacks as fact, and fixed two that were wrong — **Shopify is MySQL** (sharded into pods), not MongoDB; **Stripe's ledger is a transactional store**, not BigQuery (a warehouse cannot be the authority for money movements). Twitter's user graph corrected from "Redis" to a purpose-built store with Redis as cache. **(9) Mistake 5** contradicted itself (debunked "Redis isn't durable," then advised "if it must survive restarts use PostgreSQL") — rewritten around the real test: *can this be rebuilt from another source?* **(10) Smaller:** garbled "100:1 reads, 1:1 writes"; Redis "no transactions" → the precise claim (MULTI/EXEC exists but has no rollback); "slave" → primary/replica. |
 | Jul 19, 2026 | **Accuracy fixes (interview-risk).** (1) Replaced the misleading *data-size → sharding* logic in both the main decision flowchart and the TL;DR decision tree — a single Postgres/Aurora node holds 64–128 TiB, so raw size rarely forces sharding; the real triggers are sustained writes > 15–20K/sec and working-set-exceeds-RAM. Prevents the "premature sharding at 1 TB" down-level signal. (2) Purged stale write-ceiling numbers (`~10K` / `>5K` WPS) from the scaling ASCII diagram and Quick Lookup Table → standardized on 10–20K writes/sec, 50K+ simple reads/sec (aligned with `../../Foundations/Performance-and-Scale/52-numbers-to-know-scale-triggers.md`). (3) Corrected the Throughput terminology row: Postgres single-instance reads are 50K+/sec (was understated as ~10K). |

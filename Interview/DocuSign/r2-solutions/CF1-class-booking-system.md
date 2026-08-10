@@ -280,11 +280,12 @@ Validation check: map each back to a FR. No orphan endpoints. "Waitlist auto-pro
  ┌──────▼──────────────────────────────┐
  │          Booking Service            │
  │  BEGIN TRANSACTION                  │
- │  SELECT * FROM classes              │
+ │  SELECT seats_taken FROM classes    │
  │    WHERE id = ? FOR UPDATE          │  ← locks class row
- │  IF capacity > 0:                   │
+ │  IF seats_taken < capacity:         │
  │    INSERT INTO bookings (...)       │
- │    UPDATE classes SET capacity -= 1 │
+ │    UPDATE classes                   │
+ │      SET seats_taken = seats_taken+1│
  │    COMMIT                           │
  │  ELSE: ROLLBACK → return 409        │
  └──────┬──────────────────────────────┘
@@ -580,6 +581,175 @@ Idempotency: each expiry job run is idempotent — re-processing an already-expi
 
 ---
 
+## Section 9 — 🗄️ Data Model
+
+> **Say this out loud:** "Redis is the hot path, but Postgres is the source of truth — so the no-oversell invariant has to live in the schema itself, not only in the Lua script. If Redis is flushed and every counter resets to full capacity, the database must still refuse the 16th booking for a 15-seat class."
+
+### Core Tables
+
+```sql
+CREATE TABLE users (
+    id                  UUID PRIMARY KEY,
+    email               VARCHAR(255) NOT NULL UNIQUE,
+    push_token          VARCHAR(255),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE studios (
+    id                  UUID PRIMARY KEY,
+    name                VARCHAR(120) NOT NULL,
+    city                VARCHAR(80) NOT NULL,
+    -- IANA zone name (e.g. 'Asia/Kolkata'); all instants stored in UTC,
+    -- converted to this zone only for display
+    timezone            VARCHAR(64) NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE classes (
+    id                  UUID PRIMARY KEY,
+    studio_id           UUID NOT NULL REFERENCES studios(id),
+    -- NULL for a one-off class; set for every occurrence of a recurring series
+    series_id           UUID,
+    class_type          VARCHAR(40) NOT NULL,
+    instructor_id       UUID,
+    starts_at           TIMESTAMPTZ NOT NULL,
+    ends_at             TIMESTAMPTZ NOT NULL,
+    -- immutable once the class is published; the ceiling, never decremented
+    capacity            INT NOT NULL,
+    -- the mutable counter; Redis class:{id}:seats is a derived copy of
+    -- (capacity - seats_taken)
+    seats_taken         INT NOT NULL DEFAULT 0,
+    status              VARCHAR(16) NOT NULL DEFAULT 'SCHEDULED',
+
+    CONSTRAINT chk_class_capacity   CHECK (capacity > 0),
+    CONSTRAINT chk_class_window     CHECK (ends_at > starts_at),
+    CONSTRAINT chk_class_status     CHECK (status IN ('SCHEDULED', 'CANCELLED', 'COMPLETED')),
+    -- THE no-oversell invariant. Any transaction that would push seats_taken
+    -- past capacity is rejected by Postgres itself, no matter what Redis says.
+    CONSTRAINT chk_no_oversell      CHECK (seats_taken >= 0 AND seats_taken <= capacity)
+);
+
+CREATE TABLE bookings (
+    id                  UUID PRIMARY KEY,
+    class_id            UUID NOT NULL REFERENCES classes(id),
+    user_id             UUID NOT NULL REFERENCES users(id),
+    status              VARCHAR(16) NOT NULL,
+    -- client-supplied; makes a retried POST /v1/bookings a no-op
+    idempotency_key     VARCHAR(64),
+    -- set when this booking came from a waitlist promotion, for fairness audits
+    promoted_from_waitlist BOOLEAN NOT NULL DEFAULT FALSE,
+
+    reserved_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- reserved_at + 5 min; the TTL sweeper's only input
+    expires_at          TIMESTAMPTZ NOT NULL,
+    confirmed_at        TIMESTAMPTZ,
+    cancelled_at        TIMESTAMPTZ,
+    -- cancelled inside the 2-hour cutoff → fee applies
+    cancelled_late      BOOLEAN NOT NULL DEFAULT FALSE,
+
+    CONSTRAINT chk_booking_status CHECK (
+        status IN ('SOFT_RESERVED', 'CONFIRMED', 'CANCELLED', 'EXPIRED')),
+    CONSTRAINT chk_booking_window CHECK (expires_at > reserved_at)
+);
+
+CREATE TABLE waitlist_entries (
+    id                  UUID PRIMARY KEY,
+    class_id            UUID NOT NULL REFERENCES classes(id),
+    user_id             UUID NOT NULL REFERENCES users(id),
+    -- FIFO score; mirrors the Redis ZSET score
+    joined_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    status              VARCHAR(16) NOT NULL DEFAULT 'WAITING',
+    -- which cancellation freed the seat this entry was promoted against
+    released_by_booking_id UUID REFERENCES bookings(id),
+    promoted_at         TIMESTAMPTZ,
+    -- promoted_at + 5 min; if the user does not claim, the seat moves on
+    claim_expires_at    TIMESTAMPTZ,
+
+    CONSTRAINT chk_waitlist_status CHECK (
+        status IN ('WAITING', 'PROMOTED', 'CLAIMED', 'EXPIRED', 'LEFT'))
+);
+```
+
+```sql
+-- ── Correctness indexes (these are constraints, not performance tuning) ──
+
+-- One live booking per user per class. This is what makes
+-- INSERT ... ON CONFLICT DO NOTHING work, and it is the only thing that stops
+-- the SAME user double-booking via a double-tap or a network retry.
+-- Partial, so a user who cancels can legitimately re-book the same class.
+CREATE UNIQUE INDEX uq_bookings_active_user_class
+    ON bookings (user_id, class_id)
+    WHERE status IN ('SOFT_RESERVED', 'CONFIRMED');
+
+-- One promotion per freed seat. Two concurrent cancellation handlers, or one
+-- handler retried after a timeout, cannot both promote a waitlist user against
+-- the same released booking — the second INSERT/UPDATE violates this index.
+CREATE UNIQUE INDEX uq_waitlist_promotion_per_release
+    ON waitlist_entries (released_by_booking_id)
+    WHERE released_by_booking_id IS NOT NULL;
+
+-- One waitlist entry per user per class while the entry is live.
+CREATE UNIQUE INDEX uq_waitlist_active_user_class
+    ON waitlist_entries (class_id, user_id)
+    WHERE status IN ('WAITING', 'PROMOTED');
+
+-- ── Access-path indexes ──
+
+-- Browse: "yoga classes at this centre tomorrow" (GET /v1/classes).
+CREATE INDEX idx_classes_studio_start
+    ON classes (studio_id, starts_at, class_type)
+    WHERE status = 'SCHEDULED';
+
+-- Reconciliation job: SELECT class_id, COUNT(*) ... GROUP BY class_id over
+-- live bookings only, every 5 minutes.
+CREATE INDEX idx_bookings_class_live
+    ON bookings (class_id)
+    WHERE status IN ('SOFT_RESERVED', 'CONFIRMED');
+
+-- TTL sweeper (every 30s): find soft reservations past expires_at.
+-- Partial index keeps it tiny — only unconfirmed rows are ever in it.
+CREATE INDEX idx_bookings_expiring
+    ON bookings (expires_at)
+    WHERE status = 'SOFT_RESERVED';
+
+-- "My bookings" screen.
+CREATE INDEX idx_bookings_user_recent
+    ON bookings (user_id, reserved_at DESC);
+
+-- Waitlist head + position query, FIFO by join time.
+CREATE INDEX idx_waitlist_fifo
+    ON waitlist_entries (class_id, joined_at)
+    WHERE status = 'WAITING';
+```
+
+**The seat claim as one statement — never SELECT-then-INSERT:**
+
+```sql
+-- Postgres fallback path (used when Redis is unavailable), and the
+-- durable second gate behind the Redis DECR on the normal path.
+-- One statement: the row lock is taken BY the UPDATE, and under READ
+-- COMMITTED Postgres re-evaluates `seats_taken < capacity` against the
+-- freshly committed row version after any concurrent writer releases it.
+UPDATE classes
+   SET seats_taken = seats_taken + 1
+ WHERE id = :class_id
+   AND seats_taken < capacity;
+-- rowsAffected = 1 → seat claimed, proceed to INSERT the booking
+-- rowsAffected = 0 → class is full, return 409 (no lock held, no retry loop)
+```
+
+### Key Schema Decisions:
+
+- **`capacity` is immutable, `seats_taken` is the counter — and `chk_no_oversell` is the real answer to this interview.** The naive Stage 1 sketch does `UPDATE classes SET capacity -= 1`, which destroys the ceiling: after 15 bookings `capacity` reads 0 and you can no longer tell an oversold class from a full one, and nothing in the schema forbids `-1`. Splitting the two lets a `CHECK (seats_taken <= capacity)` exist, which is the only overbooking defence that survives a Redis flush, a bad deploy, a manual `psql` session, or a Lua bug. Redis prevents contention; the CHECK constraint prevents oversell. They are different jobs.
+- **No `SELECT` before the claim.** `SELECT seats_taken ... ; if (seats_taken < capacity) { UPDATE }` is a time-of-check-to-time-of-use race: both transactions read 14, both write 15, and the class is oversold with neither transaction doing anything visibly wrong. The conditional `UPDATE ... WHERE seats_taken < capacity` collapses check and mutation into one atomic statement, and `rowsAffected` *is* the answer.
+- **`uq_bookings_active_user_class` (partial unique):** two distinct problems get conflated in interviews — *overbooking the class* (N+1 people in 15 seats) and *double-booking one user* (the same member holding two seats in the same class from a double-tap). Redis `DECR` solves the first and is completely blind to the second: two rapid taps are two successful decrements. This index is what solves the second, and it's what `ON CONFLICT (user_id, class_id) DO NOTHING` arbitrates against. **Postgres nuance to name out loud:** to make the planner infer a *partial* unique index as the conflict arbiter you must repeat its predicate — `ON CONFLICT (user_id, class_id) WHERE status IN ('SOFT_RESERVED','CONFIRMED') DO NOTHING`. Omit the predicate and Postgres raises "no unique or exclusion constraint matching the ON CONFLICT specification" at runtime, and your second safety net silently never existed.
+- **`released_by_booking_id` + `uq_waitlist_promotion_per_release`:** the waitlist promotion race is the failure mode nobody prepares for. One cancellation frees one seat, but the promotion path is triggered by a Kafka event with at-least-once delivery *and* re-driven by the 30-second sweeper — so the same freed seat can be promoted twice, handing one seat to two people. Tying every promotion to the identity of the cancellation that released it, with a unique index on that identity, makes promotion idempotent at the database layer rather than relying on the consumer never being redelivered.
+- **`idx_bookings_expiring` is partial on purpose:** the sweeper runs every 30 seconds forever. A plain index on `expires_at` would span every booking ever made (365M rows at 1M/day for a year); restricted to `status = 'SOFT_RESERVED'` it holds only the few hundred rows currently unconfirmed, so the sweep is an index range scan over a hot, cache-resident index instead of a growing one.
+- **Recurring series are materialised, not computed.** `series_id` groups occurrences, but every weekly 7 AM yoga slot is its own `classes` row. A booking must reference a concrete occurrence with its own capacity and its own seat counter — an RRULE evaluated at query time has nothing for `bookings.class_id` to point at, no place to hold `seats_taken`, and no way to express "this one Tuesday is cancelled". Cost: 500 centres × 12 classes × 90-day horizon ≈ 540K rows, generated by a nightly job that extends the horizon.
+- **SQL vs NoSQL choice: PostgreSQL.** Three reasons, in order. (1) The core requirement is a *multi-row invariant*: claim a seat and insert a booking must be all-or-nothing, and cancel-then-promote touches `bookings`, `classes`, and `waitlist_entries` together. A single-item conditional write (DynamoDB `ConditionExpression`, Cassandra LWT) can guard the counter, but it cannot make the counter and the booking row commit together — you're left hand-rolling a saga for something a `BEGIN`/`COMMIT` does for free. (2) `CHECK` constraints and partial unique indexes are declarative correctness that no application bug can bypass; Cassandra and DynamoDB have neither. (3) Volume does not force the issue: 1M bookings/day at ~500 bytes is 180 GB/year (Section 4), comfortable for one primary with read replicas and monthly partitioning of `bookings` by `reserved_at`. **Redis is not the alternative to Postgres here — it's a contention absorber in front of it.** Treating the Redis counter as the source of truth is the single most common way this design fails (Section 13, Mistake 3).
+
+---
+
 ## Section 10 — ⚠️ Trade-offs + Failure Modes
 
 ### Trade-off 1: Redis Seat Counter (AP) vs PostgreSQL SELECT FOR UPDATE (CP)
@@ -719,6 +889,24 @@ On restart, Redis replays the log. If DECR was fsynced before crash (within the 
 > **Why not MULTI/EXEC instead of Lua?** MULTI/EXEC queues commands and executes them as a batch, but doesn't actually make them atomic in the "fails together" sense. If the Redis server crashes mid-EXEC, some commands in the batch may have already written. Lua script is also not immune to this — the atomicity guarantee is "no other Redis command interleaves," not "crash-safe."
 >
 > **In an interview:** "No Redis solution is fully crash-safe without AOF. AOF + reconciliation is the belt-and-suspenders approach: AOF minimizes data loss to ~1 second; the reconciliation job catches any remaining discrepancies. This is acceptable for a booking system where ~0.01% of bookings in a crash window are affected."
+
+---
+
+## Section 13 — 🐞 Common Mistakes on This Question
+
+**Note:** Reading these BEFORE the interview prevents you from making them under stress. Every one of them has been the reason a candidate failed this exact question.
+
+---
+
+- **Mistake 1:** Checking capacity with a `SELECT`, then inserting the booking — `SELECT seats_taken FROM classes WHERE id = ?` followed by `if (seats_taken < capacity) { INSERT INTO bookings ... }`. → **Why it's wrong:** Classic TOCTOU (time-of-check-to-time-of-use) race. Two requests for the 15th seat both read `seats_taken = 14`, both pass the `if`, both insert. Neither transaction did anything individually invalid, no error is raised, and nothing in the logs looks wrong — the instructor just finds 16 people in a 15-person class. Wrapping the two statements in a transaction does **not** fix it: under READ COMMITTED (Postgres's default) two plain `SELECT`s don't block each other. Three things *would* fix it, and you should name which one you mean — `SELECT ... FOR UPDATE` (correct, but serializes every booker behind one row lock: that is precisely Stage 1's breaking point at 1,000/sec), SERIALIZABLE isolation (correct, but now you handle serialization-failure retries on every booking), or the conditional single-statement UPDATE below (correct, and holds the row lock only for the duration of one statement). → **What to say instead:** "I never read-then-write. The claim is a single conditional statement — `UPDATE classes SET seats_taken = seats_taken + 1 WHERE id = ? AND seats_taken < capacity` — and `rowsAffected` is the decision: 1 means I own the seat, 0 means the class is full and I return 409. The check and the mutation are the same atomic operation. On the hot path Redis `DECR` inside a Lua script plays the same role, and the `CHECK (seats_taken <= capacity)` constraint in Postgres is the backstop if Redis is ever wrong."
+
+- **Mistake 2:** Forgetting the waitlist promotion race — treating "on cancellation, free the seat and promote the next person" as two independent steps. → **Why it's wrong:** Two bugs hide here. First, **double-free**: the code in the LLD section originally did `seatCounter.increment(classId)` *and then* `waitlistService.promoteNext(classId)` — the seat is returned to the pool *and* handed to a waitlisted user, so the class ends up one over capacity. Second, **double-promotion**: the promotion is driven by a Kafka `booking.cancelled` event with at-least-once delivery and is also re-driven by the 30-second sweeper, so one freed seat can be promoted to two different users, both of whom receive "your spot is confirmed" push notifications. → **What to say instead:** "Releasing a seat and promoting the waitlist head is one atomic decision, not two: a single Lua script does `ZPOPMIN` and, if a user was popped, transfers the seat directly to them via `SETEX` *without* `INCR`-ing the counter — it only `INCR`s when the waitlist is empty. And because the Kafka consumer can be redelivered, promotion is made idempotent in Postgres too: every promotion records `released_by_booking_id` under a unique index, so the same cancellation can never promote twice."
+
+- **Mistake 3:** Treating the Redis counter as the source of truth. → **Why it's wrong:** Redis is a cache with a durability window. With `appendfsync everysec` you can lose up to a second of writes; with no AOF at all, a restart resets every counter to full capacity while 15 confirmed bookings still sit in Postgres — and the system happily sells all 15 seats a second time. Candidates who say "the seat count lives in Redis" have no answer to "what is the number after a failover?" → **What to say instead:** "Postgres is authoritative; the Redis counter is a derived hot-path copy of `capacity - seats_taken`. Three things follow: counters are rehydrated from Postgres on startup and on cache miss (never initialised to `capacity` blindly), a reconciliation job compares them every 5 minutes and corrects drift, and the `CHECK (seats_taken <= capacity)` constraint means that even a maximally wrong Redis counter degrades into rejected bookings rather than an oversold class."
+
+- **Mistake 4:** Solving overbooking of the *class* and assuming you've also solved double-booking of the *same user*. → **Why it's wrong:** They are different races with different fixes. Redis `DECR` is blind to identity — a user who double-taps Reserve, or whose client retries after a 30-second timeout, produces two successful decrements and two bookings. The class isn't oversold, but that member now holds two of the 15 seats, is charged twice, and one seat is dead inventory that the waitlist can never reach. → **What to say instead:** "Two separate guards. Per-class capacity is the Redis `DECR` plus the CHECK constraint. Per-user uniqueness is a partial unique index on `(user_id, class_id) WHERE status IN ('SOFT_RESERVED','CONFIRMED')`, arbitrated by `INSERT ... ON CONFLICT DO NOTHING` — partial so that a cancel-and-rebook is still legal. The Lua script also checks the existing `reserve:{classId}:{userId}` key first and returns -1 before touching the counter, so the common retry never even reaches the database."
+
+- **Mistake 5:** Designing the happy path only — no answer for the soft reservation that is never confirmed. → **Why it's wrong:** Every abandoned reservation (app backgrounded, payment sheet dismissed, phone dies) permanently removes a seat from a class that then starts half empty while 40 people sit on the waitlist. At a 20% abandonment rate on a 20-seat class, 4 seats/class evaporate. → **What to say instead:** "A reservation is soft with an explicit `expires_at`, and the seat is recovered by a 30-second sweeper over a partial index on `(expires_at) WHERE status = 'SOFT_RESERVED'` — not by Redis key expiry alone, because Redis keyspace notifications are at-most-once and a subscriber restart loses the event permanently. The sweeper marks the row EXPIRED, releases the seat, and promotes the waitlist in the same idempotent path used by cancellation."
 
 ---
 
@@ -917,24 +1105,31 @@ public class BookingService {
     }
 
     /**
-     * Cancel a booking → return seat to Redis counter.
+     * Cancel a booking → release the seat.
      * Late cancellation fee is a business rule enforced here (not in Redis).
      */
     public void cancel(String bookingId, String userId) {
         Booking booking = bookingRepo.findById(bookingId);
 
         if (booking.getStatus() == BookingStatus.CANCELLED) {
-            return;   // idempotent — already cancelled
+            // idempotent — already cancelled
+            return;
         }
 
         // Business rule: late cancellation fee (< 2 hours before class)
         boolean isLateCancellation = isWithinCutoff(booking.getClassStartTime(), Duration.ofHours(2));
 
         bookingRepo.updateStatus(bookingId, BookingStatus.CANCELLED);
-        seatCounter.increment(booking.getClassId());   // return seat to Redis
 
-        // Promote next person from waitlist
-        waitlistService.promoteNext(booking.getClassId());
+        // ONE atomic Redis operation, not increment() followed by promoteNext().
+        // The Lua script does ZPOPMIN and then EITHER hands the freed seat
+        // straight to that user via SETEX (no INCR — the seat is transferred),
+        // OR, if the waitlist is empty, INCRs the counter back.
+        // Calling increment() and promoteNext() separately double-frees the
+        // seat: the pool gets it back AND a waitlisted user gets it.
+        // bookingId is passed as the release token so a redelivered Kafka
+        // event cannot promote against the same freed seat twice.
+        waitlistService.releaseSeatAndPromote(booking.getClassId(), bookingId);
 
         if (isLateCancellation) {
             // Charge late-cancel fee — async, via event/Kafka
@@ -1034,7 +1229,7 @@ serializes all 1000 DECR calls. One by one. No race possible.
 > Two mechanisms: (1) The `soft_reservation:{classId}:{userId}` Redis key has a 5-minute TTL — when it expires, the seat is logically freed. (2) A reconciliation job runs every 5 minutes: `SELECT count(*) FROM bookings WHERE class_id=X AND status='SOFT_RESERVED' AND expires_at < NOW()` — for each expired row, update status to EXPIRED and INCR Redis counter. The reconciliation job is the safety net for any key expiry edge cases.
 
 **Q: "How does the waitlist work at the class design level?"**
-> `WaitlistService` wraps a Redis `ZSET` keyed by `waitlist:{classId}`. On join-waitlist: `ZADD waitlist:{classId} {timestamp} {userId}` — timestamp is the score, giving FIFO ordering. On cancellation: `BookingService.cancel()` calls `waitlistService.promoteNext(classId)` which calls `ZPOPMIN waitlist:{classId}` — pops the earliest timestamp. That userId gets a soft reservation (same `reserve()` flow, bypass the DECR because they're being promoted, or DECR has already been incremented on cancel).
+> `WaitlistService` wraps a Redis `ZSET` keyed by `waitlist:{classId}`. On join-waitlist: `ZADD waitlist:{classId} {timestamp} {userId}` — timestamp is the score, giving FIFO ordering. On cancellation: `BookingService.cancel()` calls `waitlistService.releaseSeatAndPromote(classId, cancelledBookingId)`, which runs **one** Lua script: `ZPOPMIN waitlist:{classId}` and then either `SETEX` the freed seat directly to that user (a *transfer* — deliberately no `INCR`, because the seat never returns to the public pool) or, if the ZSET was empty, `INCR` the counter. The promoted user gets a booking row with `promoted_from_waitlist = true` and `released_by_booking_id = cancelledBookingId`; the unique index on that column (Section 9) makes the whole promotion idempotent, so a redelivered `booking.cancelled` event is a no-op instead of a second promotion.
 
 **Q: "Why is BookingStatus an enum and not just a String in the DB?"**
 > Enums enforce valid state transitions at the Java layer before the DB sees them. `confirm()` checks `booking.getStatus() != BookingStatus.SOFT_RESERVED` — if we used a String, "SoFt_ReSeRvEd" would pass the equals check and corrupt state. The enum also makes `switch` statements exhaustive — adding a new status forces updating every switch that processes bookings. At interview: "I'd store it as a VARCHAR in Postgres — the DB stores strings, Java enforces the enum. No DB migration needed when I add a state."
@@ -1048,4 +1243,5 @@ serializes all 1000 DECR calls. One by one. No race possible.
 | June 23, 2026 | **File created.** Type A — System Design, Cult.fit context. Based on: Cure.fit interview reports (ZoomCar variant confirmed), `42-inventory-management-booking.md`, `02-rate-limiting.md`, DELIVERY-RECIPE framework. Covers: 6 clarifying questions with assumed answers, scale estimation (1M bookings/day, 1K/sec peak burst), Redis Lua atomic DECR for double-booking prevention, soft reservation TTL model, waitlist ZSET auto-promotion, background reconciliation job. Three deep dives: reservation atomicity (Lua vs SELECT FOR UPDATE vs optimistic locking), waitlist fairness (ZPOPMIN), TTL expiry recovery (keyspace notifications vs background polling). Trade-offs: Redis AP vs Postgres CP, async waitlist promotion, 5-min TTL calibration. Cure.fit-specific: 7 PM booking surge handling, late-cancellation fee enforcement, instructor cancellation broadcast, waitlist as product signal. |
 | Jul 4, 2026 | **Diagram rewrite + 4 new Q&As.** Replaced nested `[Box]` notation inside outer container with fully box-drawing diagram: API Gateway → Load Balancer → Booking/Browse Services → Redis (seat counters + soft reservations + waitlist ZSET) → PostgreSQL → Kafka. Key invariant callout added. New Q&As: (1) **Thundering herd / virtual waiting room** — position token issued at queue entry, Redis ZSET acts as metered queue, release N users/sec into booking API — transforms 10K concurrent hits into controlled drip; (2) **Stale seat counts in Browse UI** — three options (polling + 10s TTL cache, SSE for real-time, optimistic UI + server validation on click); recommendation: polling + server validation, SSE only for sub-second UX requirements; (3) **Redis Lua crash mid-script failure analysis** — DECR committed but SETEX not reached → counter decremented with no reservation key; AOF minimizes data loss to ~1s window; reconciliation job catches discrepancy within 5 minutes; why MULTI/EXEC doesn't help. |
 | Jul 4, 2026 | **Section 6 restructured into 3-stage progressive HLD.** Stage 1 (DB-only, SELECT FOR UPDATE) — establishes baseline, identifies lock-contention breaking point at 1,000/sec. Stage 2 (Redis hot path + ZSET waitlist) — moves seat counter to Redis atomic DECR, identifies synchronous notification as next breaking point. Stage 3 (Kafka async decoupling, production) — decouples notifications/waitlist promotion/analytics via Kafka so nothing on the async path can fail a booking. Three decision tables added: lock strategy (SELECT FOR UPDATE vs optimistic vs Redis DECR), waitlist storage (Postgres vs Redis List vs Redis ZSET), async transport (HTTP vs Redis pub/sub vs Kafka). Cross-refs added to `SystemDesignConcepts/` for each table. Verdict alignment verified: all three Section 6 table verdicts match Section 7 deep dive choices (Redis Lua ✅, Redis ZSET ✅, Kafka ✅). |
+| Aug 2026 | **Audit pass — Sections 9 and 13 added (both missing entirely) + one real bug fixed.** (1) **Section 9 Data Model created** with actual DDL for `users`, `studios`, `classes`, `bookings`, `waitlist_entries`. The schema now expresses the overbooking invariant rather than delegating it entirely to Redis: `capacity` is immutable and `seats_taken` is the counter (the old Stage 1 sketch's `UPDATE classes SET capacity -= 1` destroys the ceiling, so no CHECK is even expressible), guarded by `CHECK (seats_taken >= 0 AND seats_taken <= capacity)` — the one overbooking defence that survives a Redis flush. Claim is shown as a single conditional `UPDATE ... WHERE seats_taken < capacity` with `rowsAffected` as the decision, never SELECT-then-INSERT. Three correctness indexes: partial unique `(user_id, class_id) WHERE status IN ('SOFT_RESERVED','CONFIRMED')` (same-user double-booking; includes the Postgres nuance that `ON CONFLICT` must repeat a partial index's predicate to infer it as arbiter, or it raises at runtime), unique `released_by_booking_id` (makes waitlist promotion idempotent against at-least-once Kafka redelivery), partial unique waitlist membership. Plus four access-path indexes each justified by the query that needs it, materialised recurring-series rationale, and the SQL-vs-NoSQL decision. (2) **Section 13 Common Mistakes created** — 5 mistakes: SELECT-then-INSERT TOCTOU (including why a transaction alone doesn't fix it under READ COMMITTED), the waitlist promotion double-free/double-promotion race, treating the Redis counter as source of truth, conflating class overbooking with same-user double-booking, and no recovery path for abandoned soft reservations. (3) **Bug fix in the LLD `cancel()` method:** it called `seatCounter.increment()` *and then* `waitlistService.promoteNext()`, which double-frees the seat (returned to the pool **and** handed to a waitlisted user → one over capacity). Replaced with a single atomic `releaseSeatAndPromote(classId, bookingId)`; the corresponding LLD probe answer, which was ambiguous about whether the counter had already been incremented, was made definite. |
 | Jul 5, 2026 | **Section 10 business impact + Section 14 added (was missing entirely).** Section 10: added **Business impact:** to all 3 trade-offs — DocuSign notarized transaction overbooking when Redis AP model sacrifices CP guarantee, real estate closing delayed by stuck waitlist promotion (async decoupling failure), mortgage notary closing blocked by session slot squatting (TTL miscalibration). Section 14: new section created from scratch — all 7 dimensions written with Cure.fit/DocuSign notary pivot, including real estate closing time-pressure (Usability), Redis Lua atomicity as double-booking prevention mechanism (Correctness), overbooking incident RCA traceable via Kafka message timestamps (Observability). |

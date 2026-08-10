@@ -172,7 +172,9 @@ Validation check: every FR maps to an endpoint. The "compliance → 7-year reten
 
 ### 🔍 Endpoint Stories
 
-**`POST /v1/documents`** is the upload entry point — but the interesting question is where the bytes go. If you accept multipart binary in the request body, your API server becomes a byte-pumping pipe: every upload thread holds a connection open for the duration of the upload. At 10K uploads/day that's manageable; at 10M/day it isn't. The better pattern: POST returns a pre-signed S3 upload URL; the client uploads directly to S3; S3 triggers a Lambda or webhook to confirm the upload completed. The `document_id` is created in Postgres before the bytes land — so the metadata exists immediately and the async confirmation fills in `s3_key`. Most candidates describe the simple multipart approach; mentioning the pre-signed URL pattern is the differentiator.
+**`POST /v1/documents`** is the upload entry point — but the interesting question is where the bytes go. If you accept multipart binary in the request body, your API server becomes a byte-pumping pipe: every upload thread holds a connection open for the duration of the upload. At 10K uploads/day that's manageable; at 10M/day it isn't. The better pattern: POST returns a pre-signed S3 upload URL; the client uploads directly to S3; S3 triggers a Lambda or webhook to confirm the upload completed. **Metadata-first ordering:** the Postgres row is committed with `status = 'PENDING'` and its final `s3_key` *before* the URL is handed out, so the key is decided by the server, not the client — and a crash mid-upload leaves a `PENDING` row (invisible to users, swept by the reconciliation job) rather than a live row pointing at bytes that never arrived. The confirmation webhook flips `PENDING → ACTIVE`.
+
+The two error codes both have named triggers: **`400 Bad Request`** when `content_type` is outside the allow-list (we accept PDF, DOCX, PNG, JPEG — an executable or a `.zip` is rejected before any S3 key is minted) or `size_bytes` exceeds the 500 MB per-document ceiling from Section 3. **`409 Conflict`** when the caller replays the same `Idempotency-Key` header with a *different* body — a retried POST with the identical body returns the original `201` and the original `document_id`, which is what makes upload retries safe. (A duplicate *content* hash is not a 409 — that's the dedup path, which still returns `201` with a new `document_id` pointing at the existing S3 object.)
 
 **`GET /v1/documents/{id}/download`** returns a `302 Redirect`, not bytes. This surprises most candidates who expect `200 OK` with a file body. The redirect to a 15-minute pre-signed S3 URL is the standard pattern: your API service is stateless, the CDN caches the file at the edge, and the URL auto-expires so sharing it doesn't grant permanent access. Every access that generates a pre-signed URL is logged in `audit_logs` — the act of generating the URL counts as a "download attempt," even if the client never follows the redirect.
 
@@ -197,17 +199,17 @@ Validation check: every FR maps to an endpoint. The "compliance → 7-year reten
 - Total: 50M docs × 5 MB = 250 TB
 - Versions: assume avg 2.5 versions per document → 125M document objects = 625 TB with history
 - Metadata DB: 50M documents × 1 KB metadata = 50 GB (fits in single Postgres instance)
-- Audit logs: 100M reads/day × 200 bytes/log = 20 TB/year (archive after 1 year; S3 Glacier for compliance — AWS cold storage tier: ~$0.004/GB/month vs $0.023/GB for S3 Standard, but retrieval takes 3-12 hours; ideal for compliance archives you almost never need to read)
+- Audit logs: 100M reads/day × 200 bytes/log = **20 GB/day = 7.3 TB/year** (archive after 1 year; S3 Glacier for compliance — AWS cold storage tier: ~$0.004/GB/month vs $0.023/GB for S3 Standard, but retrieval takes 3-12 hours; ideal for compliance archives you almost never need to read)
 
 **Bandwidth:**
 - Inbound (uploads): 10K docs/day × 5 MB = 50 GB/day = 0.6 MB/sec
 - Outbound (downloads): 100M reads/day × 5 MB = 500 TB/day = 5.8 GB/sec (!!!all via S3 pre-signed URLs, app server NOT involved)
 
 **Key conclusions:**
-- At 0.12 writes/sec, single Postgres instance handles easily (typical: 1K writes/sec capacity)
-- At 1.16K reads/sec, DB reads would bottleneck — but we cache in Redis (metadata + recent versions)
+- **The real write rate is not 0.12/sec.** Document uploads are 0.12/sec, but *every download inserts an audit row* — so the Postgres write path is 1.16K INSERTs/sec baseline, 3.5K peak. Say this out loud: "the audit trail, not the upload path, is what sizes my database." A single Postgres primary sustains ~5K small INSERTs/sec on NVMe, so 3.5K peak is ~70% of one primary — which is exactly why `audit_logs` is monthly-partitioned (Section 12, Tier 3) rather than one flat table.
+- At 1.16K metadata reads/sec (3.5K peak) *plus* the 3.5K audit writes competing for the same primary, read replicas + Redis cache are required — not optional
 - S3 stores 250 TB comfortably (unlimited capacity); costs ~$5-6K/month
-- Audit logs at 20 TB/year require archival to Glacier (cheaper: $0.004/GB/month vs $0.023/GB/month for S3 standard)
+- Audit logs at 7.3 TB/year require archival to Glacier (cheaper: $0.004/GB/month vs $0.023/GB/month for S3 standard)
 - **Critical insight:** Downloads happen via S3 pre-signed URLs (direct S3 → client), NOT through app server. App server is only metadata + presigned URL generation.
 
 ---
@@ -254,13 +256,23 @@ Validation check: every FR maps to an endpoint. The "compliance → 7-year reten
                                      └────────────────────────────────┘
 
 BREAKING POINT 1:
-   Local disk: if the app server node fails, all documents are lost.
-   No replication, no HA. At 250 TB, local disk is not even viable.
+   Local disk exhausted at ~16 TB (largest single EBS gp3 volume) vs the
+   250 TB we need — so Stage 1 caps out at ~3.2M documents, not 50M.
+   Observable symptom: ENOSPC on upload → HTTP 500 on POST /v1/documents.
+   And a node failure loses every byte on that node: no replication, no HA.
 
 BREAKING POINT 2:
    Downloads stream through the app server: 100M downloads/day × 5 MB avg
-   = 5.8 GB/sec. No server farm can handle this bandwidth.
-   App server is a bandwidth bottleneck that kills the download path.
+   = 5.8 GB/sec = 46 Gbps sustained. A 10 Gbps NIC moves 1.25 GB/sec, so
+   at a safe 40% NIC utilisation each server carries 0.5 GB/sec → you need
+   ~12 servers doing nothing but proxying bytes, and 3× that at peak.
+   Exhausted resource: NIC bandwidth (not CPU — the threads are idle,
+   blocked on socket writes). Observable symptom: download P99 climbs past
+   30s and the thread pool fills with slow writers, so *metadata* API calls
+   on the same fleet start timing out too.
+   This is why Stage 2 takes the app server out of the byte path entirely:
+   it is not that 46 Gbps is impossible, it is that paying for 36 proxy
+   servers to duplicate what S3 already does is indefensible.
 ```
 
 **WHICH content storage?**
@@ -286,10 +298,11 @@ BREAKING POINT 2:
 
  ┌────────────┐  POST /v1/documents  ┌────────────────────────────────┐
  │   Client   │─────────────────────▶│          API Server            │
- └────────────┘                      │  1. PUT to S3 key:             │
-       ▲  {doc_id, version: 1}       │     docs/{owner}/{doc_id}/v1.pdf│
-       └─────────────────────────────│  2. INSERT metadata to Postgres │
-                                     │  3. Return doc_id              │
+ └────────────┘                      │  1. INSERT metadata, PENDING,  │
+       ▲  {doc_id, version: 1}       │     s3_key minted server-side  │
+       └─────────────────────────────│  2. PUT bytes to that S3 key   │
+                                     │  3. UPDATE PENDING → ACTIVE    │
+                                     │  4. Return doc_id              │
                                      └──────────────┬─────────────────┘
                                                     │ writes
                                      ┌──────────────▼─────────────────┐
@@ -337,6 +350,11 @@ BREAKING POINT 2:
 KEY INVARIANT:
    Metadata (Postgres) is source of truth for queries: who owns? version? deleted?
    Content (S3) is source of truth for bytes: immutable, versioned by key.
+   Postgres is also the NAMING authority: the row (and its s3_key) is committed
+   as PENDING before any byte is written, and flipped to ACTIVE after. So a
+   crash mid-upload leaves a PENDING row nobody can query — never a live row
+   pointing at bytes that never arrived. Both orphan classes are reaped by the
+   daily reconciliation job.
    Pre-signed URLs bypass the app server — S3 handles 5.8 GB/sec download bandwidth.
    Soft deletes preserve audit trail while hiding docs from user queries.
    S3 objects are NEVER deleted — legal holds and audit compliance require this.
@@ -366,10 +384,12 @@ KEY INVARIANT:
 
 ### Data Flow Walkthrough (say this out loud)
 
-**Flow 1 — Upload:**
-1. Client `POST /v1/documents`. API generates S3 key `docs/{owner_id}/{doc_id}/v1.pdf`, PUTs to S3.
-2. S3 returns ETag (entity tag — a checksum computed for the uploaded object; compare against local checksum to confirm no bit-rot in transit).
-3. API INSERTs metadata row: `(doc_id, owner_id, s3_key, version=1, is_latest=TRUE, status=ACTIVE)`. Returns `{doc_id, version: 1}`.
+**Flow 1 — Upload (metadata-first, two-phase):**
+1. Client `POST /v1/documents`. API mints the S3 key `docs/{owner_id}/{doc_id}/v1.pdf` and **commits the Postgres row first**: `(doc_id, owner_id, s3_key, version=1, is_latest=TRUE, status='PENDING')`.
+2. Bytes go to S3 (directly from the client via pre-signed PUT, or proxied for small files). S3 returns an ETag (entity tag — a checksum computed for the uploaded object; compare against the client-supplied SHA-256 to confirm no bit-rot in transit).
+3. API flips `status='PENDING' → 'ACTIVE'` and stores the checksum. Returns `{doc_id, version: 1}`.
+
+> **Why metadata-first and not bytes-first?** Both orderings can crash in the middle, so pick the ordering whose failure state is benign. Metadata-first leaves a `PENDING` row with no bytes — invisible to every user query (`WHERE status='ACTIVE'`) and reaped by the reconciliation job. Bytes-first leaves an S3 object with no row — a paid-for orphan nobody can find, and worse, the client may already hold a `doc_id` that was never persisted. A `PENDING` row is cheap; an unreferenced 500 MB object accumulating for years is not.
 
 **Flow 2 — Download (pre-signed URL):**
 1. Client `GET /download/{id}`. API checks Redis (`doc:{id}`, 1hr TTL) → cache miss → Postgres.
@@ -843,11 +863,11 @@ CREATE TRIGGER audit_immutable_trigger
 
 **Chose:** Redis cache with 1-hour TTL + DB fallback.
 
-**Gain:** At 3.5K reads/sec, Redis (100 microseconds per hit) scales easily; DB queries reduce to 350/sec (10% cache hit rate). Cache misses fall back to DB.
+**Gain:** At 3.5K reads/sec, Redis (100 microseconds per hit) scales easily; at a 90% hit rate the DB sees only the 10% that miss = 350 queries/sec. Cache misses fall back to DB.
 
 **Lose:** Stale metadata (up to 1 hour); if user updates a document's title, it takes up to 1 hour for the cache to reflect the change.
 
-**Failure mode if wrong:** If you bypass cache, 3.5K reads/sec hit the database. Postgres can handle ~1K sustained queries; DB becomes bottleneck, queries slow to 100ms+, users see timeouts. If you cache without fallback and Redis is down, API is broken (no fallback to DB). **Business impact:** For DocuSign: 3.5K document metadata reads/sec without cache causes the envelope listing API to time out — an enterprise legal team running an eDiscovery export of 10K envelopes finds the API non-responsive during a court deadline — a publicly traded company faces a discovery sanctions risk. If Redis fails without DB fallback, 100% of document access breaks, blocking all in-progress signing ceremonies until Redis recovers.
+**Failure mode if wrong:** If you bypass cache, 3.5K metadata reads/sec land on the primary *on top of* the 3.5K audit-log INSERTs/sec from Section 4 — 7K mixed ops/sec against a primary that sustains ~5K. Writes queue behind reads, `commit` latency climbs, and queries slow to 100ms+ until clients time out. If you cache without fallback and Redis is down, API is broken (no fallback to DB). **Business impact:** For DocuSign: 3.5K document metadata reads/sec without cache causes the envelope listing API to time out — an enterprise legal team running an eDiscovery export of 10K envelopes finds the API non-responsive during a court deadline — a publicly traded company faces a discovery sanctions risk. If Redis fails without DB fallback, 100% of document access breaks, blocking all in-progress signing ceremonies until Redis recovers.
 
 ---
 
@@ -970,7 +990,37 @@ s3Client.putObjectRetention(PutObjectRetentionRequest.builder()
 > Effect: File sits in S3 forever, consuming storage, never accessible.
 > Fix: Reconciliation job (runs daily) lists all S3 objects via `S3.listObjectsV2`, checks each key against the documents table. Orphaned keys (no row in documents) are flagged. For recently uploaded files (< 24h), auto-insert the metadata row (likely a crash recovery). For older orphans (> 7 days), move to a glacier bucket and alert ops for manual review.
 >
-> **In an interview:** "I'd make the upload idempotent: S3 write is the source of truth. Metadata INSERT only happens after S3 confirms the object exists. A daily reconciliation job catches any remaining discrepancies. This belt-and-suspenders approach means no data is ever truly lost — just temporarily inaccessible until reconciliation corrects it."
+> **In an interview:** "I'd commit the metadata row first with `status = 'PENDING'`, then upload, then flip to `ACTIVE`. Postgres stays the naming authority for S3 keys, so an interrupted upload leaves a `PENDING` row that no user query can see — never a live row pointing at missing bytes, and never an S3 key that no row claims. The **orphaned-blob reconciliation job** runs daily: `PENDING` rows older than 24h are deleted along with any partial object; S3 keys with no row at all are moved to a quarantine prefix and alerted on. That job is the part most candidates forget — without it, failed uploads silently accrue storage cost forever."
+
+---
+
+**Q: "Section 3 says documents range up to 500 MB. A signer on hotel Wi-Fi is uploading a 400 MB scanned contract and the connection drops at 380 MB. What happens, and what does your API look like?"**
+> A single `PUT` is all-or-nothing: 380 MB of transfer is discarded and the client restarts from byte 0. On a 5 Mbps uplink that's 11 minutes thrown away, and the retry has the same odds of failing. **S3 multipart upload** is the fix, and the API shape changes:
+>
+> 1. `POST /v1/documents` with `{size_bytes: 419430400}` — the server sees size > the 8 MB threshold and returns `{document_id, upload_id, part_size: 8388608, part_urls: [...]}` instead of a single pre-signed PUT. `upload_id` is S3's multipart upload ID; the Postgres row is `PENDING`.
+> 2. Client PUTs each 8 MB part to its own pre-signed URL, in parallel (4–8 at a time), collecting `(part_number, etag)` pairs. 400 MB = 50 parts.
+> 3. `POST /v1/documents/{id}/complete` with the full part list → server calls S3 `CompleteMultipartUpload` → flips the row to `ACTIVE`.
+>
+> **Resumability comes for free:** on reconnect the client calls `GET /v1/documents/{id}/parts`, the server proxies S3 `ListParts`, and the client re-uploads only the parts S3 didn't acknowledge. The signer resumes at part 48, not part 1.
+>
+> **Two details interviewers probe:**
+> - **Part size floor.** S3 requires every part except the last to be ≥ 5 MB, and caps an upload at 10,000 parts. 8 MB parts give a 80 GB ceiling — comfortable. If you pick 64 KB parts to "make retries cheap," you cannot upload anything over 640 MB.
+> - **Abandoned uploads cost money.** Parts of an incomplete multipart upload are billed even though no object exists and `ListObjectsV2` will never show them. You must set an S3 lifecycle rule `AbortIncompleteMultipartUpload: 7 days`. This is the same orphan class as the `PENDING` row, one layer down.
+>
+> **In an interview:** "Above ~8 MB I switch to multipart with per-part pre-signed URLs. That buys me three things at once: parallelism (50 parts in flight beats one serial stream), resumability (re-upload only the missing parts via ListParts), and a bounded blast radius on failure. Then I add the lifecycle rule to abort incomplete uploads after 7 days, because orphaned parts are invisible to object listings but still on the bill."
+
+---
+
+**Q: "DocuSign templates mean the same 5 MB master service agreement gets uploaded by 4,000 different customers. Are you storing 4,000 copies?"**
+> Not if you make storage **content-addressed**. The `checksum_sha256` column in the schema is already doing half the work — the other half is making the S3 key a function of the content rather than of the document:
+>
+> - Blob path becomes `blobs/{sha256[0:2]}/{sha256}` — the two-character prefix spreads keys across S3 partitions so 125M objects don't hot-spot one prefix.
+> - `documents.s3_key` points at that shared blob. Two document rows with the same checksum reference the same object; versions, ACLs, audit logs, and legal holds all stay per-document.
+> - Upload flow: client sends the SHA-256 up front; server does `HEAD blobs/{prefix}/{hash}`. **Hit** → skip the byte transfer entirely, create the metadata row, return `201` in ~20ms. **Miss** → issue the pre-signed URL as normal, and verify the ETag/SHA-256 on completion so a client cannot claim a hash it didn't upload.
+>
+> **Savings on our numbers:** 125M objects × 5 MB = 625 TB. If template reuse gives even a 30% duplicate rate, that's ~190 TB and ~$4.4K/month eliminated, plus the upload disappears for the deduped case — a genuinely better UX, not just a cost win.
+>
+> **The trap:** you can now never delete a blob just because one document referencing it was deleted. You need a reference count (or a periodic mark-and-sweep over `documents.s3_key`) before any blob is removed, and per-tenant KMS keys break dedup across tenants entirely — two tenants encrypting identical bytes with different keys produce different ciphertext, so dedup is only possible *within* a tenant's key scope. State that explicitly: at DocuSign, dedup is per-tenant, and the cross-tenant win is deliberately given up to keep envelope encryption boundaries intact.
 
 ---
 
@@ -1008,9 +1058,9 @@ s3Client.putObjectRetention(PutObjectRetentionRequest.builder()
 
 | Dimension | Relevant? | How your design addresses it |
 |---|---|---|
-| **Testability** | ✅ | Pre-signed URL generation is testable (mock S3 client). Version history is testable (insert version, query, verify order). Soft delete is testable (delete, verify status = DELETED, verify access denied). No end-to-end S3 dependency needed. |
-| **Usability** | ✅ | Users can upload, download, view versions, and delete. Version history UI shows who edited what when. Download is fast (pre-signed URL → direct S3, no app server latency). |
-| **Extensibility** | ✅ | New features (sharing, collaboration) are easy: add a `document_access` table with roles (OWNER, EDITOR, VIEWER). Tagging, comments, annotations are separate tables (don't modify core schema). |
+| **Testability** | ✅ | Pre-signed URL generation is a pure function of (bucket, key, expiry, signing key) — testable against a mocked S3 client with zero network. The high-risk paths get explicit tests: the `423 Locked` legal-hold branch (insert a hold, assert DELETE is refused), and the reconciliation job (write a `PENDING` row with no object, run the sweeper, assert the row is reaped). For DocuSign: the 7-year retention rule is asserted by unit-testing that `putObjectRetention` is called with `COMPLIANCE` mode and `retainUntilDate = signedAt + 2555 days` on every envelope that reaches `SIGNED` — a wrong retention date is not detectable in production until an SEC 17a-4 audit 7 years later, so it has to be caught in CI. |
+| **Usability** | ✅ | The `302`-to-pre-signed-URL contract means a signer's browser downloads a 5 MB completed contract straight from S3/CloudFront at edge latency, not through our fleet — P99 < 2s (Section 3) instead of the 30s+ a proxied path would give at 5.8 GB/sec aggregate. Uploads above 8 MB switch to resumable multipart, so a signer scanning a 400 MB contract on hotel Wi-Fi resumes at the failed part instead of restarting — the single most common upload-abandonment complaint. `GET /versions` gives the sender "draft → reviewed → countersigned" as three explicit rows with attribution, which is what they actually ask support for. |
+| **Extensibility** | ✅ | New access semantics are rows, not code: DocuSign's per-envelope roles (signer / viewer / approver / notary) drop into `document_access.role` with no schema migration. New retention regimes are S3 lifecycle + Object Lock policies keyed off `data_region`, so onboarding a customer under a 10-year FINRA rule instead of the default 7-year SEC rule is a config row, not a deploy. The content-addressed `blobs/{sha256}` layout means adding cross-document dedup for the 4,000 customers uploading the same MSA template required no change to the `documents` table at all — only the key-derivation function. |
 | **Security** | ✅ | Pre-signed URLs expire (15 min), so leaked URLs are time-limited. S3 encryption at rest (SSE-S3 or KMS). Per-document access control (RBAC). Audit logs capture every access. |
 | **Availability** | ✅ | S3 is multi-AZ (99.99% SLO). Postgres has read replicas (HA). Cache (Redis) reduces DB load. If S3 is down, app can return cached metadata, but downloads fail (acceptable). 99.9% SLO achievable. |
 | **Scalability** | ✅ | S3 scales infinitely (250 TB, 100M downloads/day — no problem). Postgres metadata table is 50GB with good indexes (scales fine). Redis cache handles 3.5K reads/sec. Pre-signed URL generation is stateless (load-balance across servers). |
@@ -1031,4 +1081,5 @@ s3Client.putObjectRetention(PutObjectRetentionRequest.builder()
 | June 24, 2026 | **D2-document-storage.md created.** Final solution file (8 of 8). Full 15-section solution framework for Type B Product Architecture. Covers: metadata schema design (one row per version), S3 blob storage pattern (immutable content + indexed metadata), pre-signed URL generation (security + scalability), soft deletes + legal holds (compliance), audit trail (immutable append-only), and multi-region GDPR compliance. Scale: 250 TB storage, 100M downloads/day, 10K uploads/day. Prerequisites: `14-document-blob-storage.md`, `03-caching.md`. |
 | Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **Quarantine bucket pattern for malware scanning** — uploads land in quarantine S3 bucket, Lambda runs ClamAV on upload completion, clean files copied to prod bucket + metadata inserted, infected files moved to hold bucket + status = QUARANTINED; presigned URL generation blocked for non-ACTIVE docs; adds 2–5s latency; (2) **S3/Postgres out-of-sync failure modes** — Mode 1 (row exists, no S3 object): `s3.headObject()` check before presigned URL + ops alert + restore from versioning; Mode 2 (S3 object exists, no row): daily reconciliation job via `listObjectsV2`, auto-insert for <24h orphans, glacier for >7-day orphans; (3) **Data residency for EU customers (GDPR)** — per-customer region assignment at account creation, `data_region` column routes S3 calls to Frankfurt or us-east-1 bucket; documents.data_region set at upload time; approach aligns with how DocuSign operates dedicated EU data centers. |
 | Jul 5, 2026 | **Section 6 restructured: single final-state diagram → 2-stage progressive HLD.** Stage 1 (App Server + Local/NFS Disk): single-node upload+download, no HA, downloads proxied through app server — BREAKING POINTs: disk failure = data loss; 5.8 GB/sec bandwidth saturates app server fleet. Stage 2 (S3 + Metadata DB + Pre-Signed URLs): separate upload/download/soft-delete flows, metadata in Postgres, content in S3, pre-signed URLs bypass app server entirely. Three inline decision tables added: (1) content storage — Local disk ❌ / SAN-NAS ⚠️ / S3 ✅; (2) download strategy — App proxy ❌ / CDN ⚠️ / Pre-signed URLs ✅; (3) versioning approach — Overwrite ❌ / One-row-per-version ✅ / Git-style delta ⚠️. Verdict alignment verified: all Section 6 verdicts match Section 7 deep-dive choices. |
+| Aug 2026 | **Audit pass — envelope math, upload ordering, and two new deep probes.** (1) **Fixed audit-log storage math**: 100M reads/day × 200 B = 20 GB/day = **7.3 TB/year**, not 20 TB/year (1000× unit slip), corrected in Section 4 storage and Key Conclusions. (2) **Fixed the write-rate conclusion**: "0.12 writes/sec, single Postgres handles easily" ignored that every download inserts an audit row — the real write path is 1.16K INSERTs/sec baseline / 3.5K peak (~70% of one primary), which is what actually justifies monthly partitioning and read replicas; Trade-off 3's failure mode now uses the combined 7K mixed ops/sec figure. (3) **Fixed Trade-off 3 cache math**: "DB reduces to 350/sec (10% cache hit rate)" → 350/sec is the *90%* hit-rate outcome. (4) **Quantified both Stage 1 breaking points**: 16 TB single-volume ceiling → caps at 3.2M docs with ENOSPC → 500 on upload; 46 Gbps download egress → ~12 servers at 40% NIC utilisation, exhausted resource named as NIC bandwidth (not CPU) with metadata-API timeouts as the observable side effect — and softened the overstated "no server farm can handle this" to the real argument (cost, not impossibility). (5) **Resolved the upload-ordering contradiction**: the endpoint story said metadata-first while the Section 12 probe said "S3 write is the source of truth" — unified on metadata-first two-phase (`PENDING` row → upload → `ACTIVE`), with the rationale for why a `PENDING` row is a benign failure state and an orphaned blob is not, plus the orphaned-blob reconciliation job made explicit. (6) **Named triggers for POST `400`/`409`** (content-type allow-list / 500 MB ceiling; `Idempotency-Key` replayed with a different body) — previously listed in the table with no cause. (7) **Two new Tier 2 probes**: S3 multipart/resumable upload for 500 MB files (per-part pre-signed URLs, `ListParts` resume, 5 MB/10,000-part constraints, `AbortIncompleteMultipartUpload` lifecycle rule) and content-addressed dedup via SHA-256 (`blobs/{sha256}` layout, HEAD-before-upload short circuit, reference counting, and why per-tenant KMS keys confine dedup to within a tenant). (8) **Section 14**: rewrote Testability / Usability / Extensibility cells, which were generic CRUD statements with no numbers — now carry the 7-year `retainUntilDate` CI assertion, the 8 MB multipart threshold and P99 < 2s download, and the FINRA-vs-SEC retention-as-config example. |
 | Jul 5, 2026 | **Section 10 business impact pass.** Added **Business impact:** to all 3 trade-offs — 24-hour pre-signed URL leaking to opposing counsel during litigation + 1-minute expiry causing 403 immediately after signing ceremony completes (URL lifetime), SEC 17a-4 7-year retention conflicting with GDPR right-to-erasure exposing regulatory fines in both jurisdictions simultaneously (compliance conflict), eDiscovery export non-responsive during court deadline + Redis failure blocking all document access including active signing ceremonies (cache dependency). |

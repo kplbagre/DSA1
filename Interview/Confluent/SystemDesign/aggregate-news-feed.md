@@ -132,7 +132,7 @@
 NOTE: RawArticle and FeedEntry are NOT persisted as rows.
   RawArticle  → lives only in Kafka raw-articles topic (ephemeral)
   FeedEntry   → computed on read from articles + subscriptions
-               (or pre-materialized in Redis cache / user_feed table at Stage 3)
+               (Stage 3 caches per SOURCE, never per user — see Deep Dive 3)
 
 KEY INVARIANT:
   The feed query crosses all three persisted tables:
@@ -238,80 +238,126 @@ Why cursor? Newly ingested articles shift the result set between pages — if a 
 ## 🏗️ Section 7 — High-Level Architecture
 
 > **Ingestion reliability comes first.** The system is only as good as its ability to handle unreliable publisher sources. HLD opens with the ingestion path.
+>
+> **Delivery note — build it up, don't draw the finished thing.** Present the Stage 1 single node first, then let the Section 4 numbers — 18 articles/sec, 70K peak reads/sec, 15M active fingerprints — force Stage 2 and Stage 3. The diagram below is the Stage 2 target design; the stage blocks that follow it are what you actually narrate, in order.
 
 ### 🎨 Visual — Ingestion Pipeline → Storage → Feed Read Path
 
 ```
-INGESTION PATH (the hard part — unreliable publishers)
-───────────────────────────────────────────────────────
+INGESTION PATH — the hard part (publishers are unreliable)
+══════════════════════════════════════════════════════════
 
-[Crawl Scheduler]
-  - Distributed job: one task per source, scheduled every crawl_interval_sec
-  - Uses conditional HTTP: If-Modified-Since / If-None-Match headers
-  - On 304 Not Modified → no-op (publisher hasn't updated)
-  - On 200 → emit to Kafka
-  - On 429 / 503 → exponential backoff, re-queue
-       |
-       | emit RawArticle (URL, raw_content, source_id, crawled_at)
-       v
-[Kafka: raw-articles topic]
-  - Partitioned by source_id (all articles from one source → same partition)
-  - At-least-once delivery guarantee
-  - 10 partitions for current scale → 10 Normalizer instances max parallelism
-       |
-       v
-[Normalizer Service]
-  - Parses RSS/Atom/JSON feed format → canonical Article schema
-  - Extracts: title, canonical_url, published_at, summary, full_text (optional)
-  - Computes: url_hash = SHA-256(canonical_url)
-  - Computes: content_hash = SimHash(title + first 500 chars of body)
-  - Checks Bloom filter: "have we seen this content_hash recently?"
-       |              \
-       | (Bloom says  | (Bloom says "definitely not seen")
-       | "maybe seen")|
-       v              v
-[Redis Bloom]   [Postgres: articles table]
-[Check exact]        INSERT if url_hash not exists
-[url_hash in DB]     (ON CONFLICT DO NOTHING — idempotent)
-       |                    |
-       | (duplicate         | (new article)
-       | confirmed)         v
-       | discard      [Redis: content_hash set — add to Bloom]
-       v              [Redis: feed invalidation cache — mark affected user feeds stale]
+ ┌──────────────────────────────────────────────────────┐
+ │  10,000 Publisher Feeds (RSS / Atom / JSON)            │
+ └────────────────────────┬─────────────────────────────┘
+                          │ conditional HTTP:
+                          │ If-Modified-Since / If-None-Match
+                          ▼
+ ┌──────────────────────────────────────────────────────┐
+ │  Crawl Scheduler  (1 task per source)                 │
+ │──────────────────────────────────────────────────────│
+ │   304 Not Modified ─▶ no-op  (~80% of all crawls)     │
+ │   429 / 503        ─▶ backoff 30s→30min, re-queue     │
+ │   200 OK           ─▶ emit RawArticle downstream      │
+ └────────────────────────┬─────────────────────────────┘
+                          │ 33 req/sec in, ~7/sec carry content
+                          ▼
+ ┌──────────────────────────────────────────────────────┐
+ │  Kafka: raw-articles · 10 partitions · key=source_id  │
+ │  at-least-once → 10 Normalizers max parallelism       │
+ └────────────────────────┬─────────────────────────────┘
+                          ▼
+ ┌──────────────────────────────────────────────────────┐
+ │  Normalizer Service (10 instances)                    │
+ │──────────────────────────────────────────────────────│
+ │  parse feed → canonical Article                       │
+ │  url_hash     = SHA-256(canonical_url)                │
+ │  content_hash = SimHash(title + first 500 chars)      │
+ │  ① ask Bloom: "seen this url_hash before?"            │
+ └───────┬──────────────────────────────────────────────┘
+         │ ① read-only probe
+         ▼
+ ┌──────────────────────┐
+ │  Redis Bloom Filter  │   17.5MB · 15M fingerprints · 1% FPR
+ │  (negative check)    │
+ └───┬──────────────┬───┘
+     │ ② says NO    │ ③ says MAYBE
+     │ definitively │ (new OR false positive)
+     │ new          │
+     │              ▼
+     │      ┌──────────────────────────────────────┐
+     │      │ Confirm in Postgres:                  │
+     │      │ SELECT 1 FROM articles                │
+     │      │ WHERE url_hash = ?                    │
+     │      └──────┬────────────────────────┬──────┘
+     │             │ row found              │ no row
+     │             │ → TRUE duplicate       │ → false
+     │             ▼   discard, no write     │   positive
+     │      ┌─────────────┐                 │
+     │      │  discarded  │                 │
+     │      └─────────────┘                 │
+     └──────────────┬────────────────────────┘
+                    ▼ ④ write (both surviving paths converge)
+ ┌──────────────────────────────────────────────────────┐
+ │  Postgres: articles                                   │
+ │  INSERT ... ON CONFLICT (url_hash) DO NOTHING         │
+ │  ← idempotent: THIS is the correctness guarantee,     │
+ │    not the Bloom filter                               │
+ └───────┬──────────────────────────────┬───────────────┘
+         │ ⑤ add url_hash to Bloom       │ ⑥ publish source_id
+         ▼                               ▼
+ ┌──────────────────────┐    ┌──────────────────────────┐
+ │  Redis Bloom Filter  │    │ Redis pub/sub: invalidate │
+ │  (now also a writer) │    │ cached feeds of that      │
+ │                      │    │ source's subscribers      │
+ └──────────────────────┘    └──────────────────────────┘
 
-FEED READ PATH (high throughput, low latency)
-─────────────────────────────────────────────
+FEED READ PATH — high throughput, low latency
+══════════════════════════════════════════════
 
-[Client]
-    |
-    | GET /v1/feed (If-None-Match: {etag})
-    v
-[API Gateway → Feed Service]
-    |
-    | 1. Check Redis feed cache: does user_id → {etag, feed_items} exist?
-    |    If yes AND If-None-Match matches: return 304 Not Modified
-    |    If yes AND cache is warm: return 200 with cached feed
-    |
-    v (cache miss or stale)
-[Feed Service: build feed on demand]
-    |
-    | SELECT articles.* FROM articles
-    | JOIN subscriptions ON subscriptions.source_id = articles.source_id
-    | WHERE subscriptions.user_id = ?
-    | AND articles.published_at > NOW() - INTERVAL '24 hours'
-    | ORDER BY articles.published_at DESC
-    | LIMIT 20
-    v
-[Postgres Read Replica Pool]
-    |
-    | → result cached in Redis (TTL = 2 minutes)
-    v
-[Client receives feed with ETag]
+ ┌──────────────┐
+ │    Client    │
+ └──────┬───────┘
+        │ GET /v1/feed   (If-None-Match: {etag})
+        ▼
+ ┌──────────────────────────────────────────────────────┐
+ │  API Gateway → Feed Service Pool                      │
+ └──────┬───────────────────────────────────────────────┘
+        │ ① check Redis feed cache for user_id
+        ▼
+ ┌──────────────────────────────────────────────────────┐
+ │  Redis Feed Cache   (user_id → {etag, items})         │
+ └───┬──────────────────┬───────────────────────────┬───┘
+     │ etag MATCHES     │ warm HIT                  │ MISS
+     │ ▼                │ ▼                         │ or stale
+  304 Not            200 + cached feed              ▼
+  Modified          (no DB touched)      ┌────────────────────┐
+  (no body)                              │ Build feed:         │
+                                         │ articles JOIN       │
+                                         │ subscriptions       │
+                                         │ WHERE user_id = ?   │
+                                         │ ORDER BY            │
+                                         │  published_at DESC  │
+                                         └─────────┬──────────┘
+                                                   ▼
+                              ┌──────────────────────────────┐
+                              │  Postgres Read Replica Pool  │
+                              │  7 replicas × ~10K reads/sec │
+                              └─────────┬────────────────────┘
+                                        │ populate cache, TTL 2min
+                                        ▼
+                                  200 + feed + ETag
 
 KEY INVARIANTS:
-  Ingestion is at-least-once (Kafka guarantees delivery) → dedup must be idempotent
-  Feed reads never touch the write primary → read replica pool absorbs 70K reads/sec
-  Bloom filter eliminates ~99% of duplicate-check Postgres reads (fast path for dedup)
+  Ingestion is at-least-once, so dedup must be IDEMPOTENT. The
+  ON CONFLICT DO NOTHING is the correctness guarantee; the Bloom
+  filter is only a read-optimisation and is allowed to be wrong.
+  Note the Bloom filter appears TWICE and the arrows differ: the
+  Normalizer READS it (①), the post-insert step WRITES it (⑤).
+  A Bloom "NO" is trustworthy (no false negatives) so it skips the
+  confirming read entirely; a "MAYBE" always costs one Postgres read.
+  Feed reads never touch the write primary — the replica pool absorbs
+  70K reads/sec, and a 304 costs zero DB I/O.
 ```
 
 ```
@@ -319,21 +365,56 @@ KEY INVARIANTS:
 STAGE 1 — Single Node (handles up to ~10K reads/sec)
 ══════════════════════════════════════════════════════
 
-[Crawl Scheduler — single instance, serial]
-      |
-[Kafka: raw-articles (3 partitions)]
-      |
-[Normalizer — single instance]
-      |
-[Postgres Primary — articles, sources, subscriptions]
+ INGESTION PATH (write)              READ PATH (the bottleneck)
+ ═══════════════════════             ══════════════════════════
 
-Crawler: 33 req/sec → 18 articles/sec — single Postgres handles writes fine.
-Reads: 10K reads/sec — single Postgres primary starts showing P99 > 50ms.
+ ┌───────────────────────┐           ┌───────────────────────┐
+ │ 10K Publisher Feeds   │           │   Mobile / Web        │
+ └───────────┬───────────┘           └───────────┬───────────┘
+             │ poll every 300s                   │ GET /v1/feed
+             ▼ 33 req/sec                        ▼
+ ┌───────────────────────┐           ┌───────────────────────┐
+ │ Crawl Scheduler       │           │  Feed Service         │
+ │ (1 instance, serial)  │           │  (1 instance)         │
+ └───────────┬───────────┘           └───────────┬───────────┘
+             ▼                                   │
+ ┌───────────────────────┐                       │ JOIN
+ │ Kafka: raw-articles   │                       │ subscriptions
+ │ 3 partitions          │                       │   × articles
+ └───────────┬───────────┘                       │ ~20ms warm
+             ▼                                   │
+ ┌───────────────────────┐                       │
+ │ Normalizer            │                       │
+ │ (1 instance)          │                       │
+ │  parse · SimHash      │                       │
+ └───────────┬───────────┘                       │
+             │ 18 articles/sec                   │ 10K reads/sec
+             └───────────────┬───────────────────┘
+                             ▼
+ ┌──────────────────────────────────────────────────────────┐
+ │            Postgres Primary  (ONE instance)               │
+ │   sources · articles · subscriptions                      │
+ │   ⚠ reads AND writes share the same CPU + buffer cache    │
+ └──────────────────────────────────────────────────────────┘
+
+Writes are trivial: 18 articles/sec. The problem is entirely on the
+read side — 10K feed reads/sec against the same primary, and the two
+paths contend for one buffer cache.
 
 BREAKING POINT: Stage 1 breaks at ~10K reads/sec
-  because Postgres primary CPU saturates serving concurrent reads + writes.
-  Observable symptom: P99 feed query time > 100ms; write latency increases
-  as connection pool fills (200 connections × 50ms avg = 10K concurrent req/sec max).
+  because the single Postgres primary is serving reads and writes from the
+  same CPU and buffer cache, and the failure compounds on itself:
+   (a) The feed query is a join (subscriptions × articles) that costs
+       ~20ms warm. A 200-connection pool therefore caps throughput at
+       200 ÷ 0.020s = 10K reads/sec. As CPU saturates the same query
+       slows to ~50ms, and capacity COLLAPSES to 200 ÷ 0.050s = 4K/sec —
+       so the ceiling moves down as you approach it.
+   (b) The Normalizer's inserts contend with those reads for the same
+       buffer cache, so ingestion latency rises exactly when read traffic
+       peaks — the 5-minute freshness target slips during peak hours.
+  Observable symptom: P99 feed query > 100ms; pg_stat_activity showing
+  connections pinned at max with most in "active" state; article
+  ingestion lag climbing in lockstep with the read-traffic curve.
   Why Stage 2 is needed: reads must be separated from writes.
 
 ══════════════════════════════════════════════════════
@@ -341,40 +422,167 @@ STAGE 2 — Read Replica Pool + Feed Cache
            (handles up to ~70K reads/sec)
 ══════════════════════════════════════════════════════
 
-[Crawl Scheduler Pool — 10 workers, one per 1K sources]
-      |
-[Kafka: raw-articles (10 partitions)]
-      |
-[Normalizer Pool — 10 instances, one per Kafka partition]
-      |
-[Postgres Primary — writes only: ~18 articles/sec]
-      |
-[Read Replica Pool — 7 replicas, ~10K reads/sec each = 70K total]
-      + [Redis Feed Cache — hot user feeds, TTL=2min; absorbs repeat refreshes]
+ INGESTION PATH (write)              READ PATH (now separated)
+ ═══════════════════════             ═════════════════════════
 
-From Section 4: 70K peak reads/sec. With 7 read replicas × 10K reads/sec/replica
-= 70K capacity. Redis cache with 30% hit rate reduces effective replica load to ~49K.
+ ┌───────────────────────┐           ┌───────────────────────┐
+ │ 10K Publisher Feeds   │           │   Mobile / Web        │
+ └───────────┬───────────┘           └───────────┬───────────┘
+             ▼ 33 req/sec                        ▼ 70K reads/sec
+ ┌───────────────────────┐           ┌───────────────────────┐
+ │ Crawl Scheduler Pool  │           │  Feed Service Pool    │
+ │ 10 workers            │           │  (N stateless)        │
+ │ (1 per 1K sources)    │           └───────────┬───────────┘
+ └───────────┬───────────┘                       │ ① try cache
+             ▼                                   ▼
+ ┌───────────────────────┐           ┌───────────────────────┐
+ │ Kafka: raw-articles   │           │ Redis Feed Cache      │
+ │ 10 partitions         │           │ TTL 2min · 30% hit    │
+ └───────────┬───────────┘           └───────────┬───────────┘
+             ▼                          ② miss    │  ~49K/sec
+ ┌───────────────────────┐              reaches   │  survives
+ │ Normalizer Pool       │              replicas  ▼
+ │ 10 instances          │           ┌───────────────────────┐
+ │ (1 per partition)     │           │  Read Replica Pool    │
+ └───────────┬───────────┘           │ ┌────┐┌────┐   ┌────┐ │
+             │ 18 articles/sec       │ │ R1 ││ R2 │···│ R7 │ │
+             ▼                       │ └──▲─┘└──▲─┘   └──▲─┘ │
+ ┌───────────────────────┐           └────┼─────┼────────┼───┘
+ │ Postgres PRIMARY      │                │     │        │
+ │ writes only           │────────────────┴─────┴────────┘
+ │ ~18 articles/sec      │   ③ WAL streaming, fan-out to all 7
+ └───────────┬───────────┘
+             │ ④ on new article: invalidate affected user feeds
+             └──────────────────▶ Redis (pub/sub)
 
-BREAKING POINT: Stage 2 breaks at ~500K reads/sec
-  because 50 read replicas would be needed; replication lag grows as write WAL
-  grows faster than replicas can apply it. Symptom: replica lag > 30s, feeds
-  showing articles from 30+ seconds ago.
-  Why Stage 3 is needed: precompute user feeds (fan-out-on-write) to eliminate
-  per-read DB queries entirely.
+From Section 4: 70K peak reads/sec. 7 replicas × ~10K/sec = 70K capacity.
+The Redis cache at a 30% hit rate means only ~49K/sec actually reaches
+the replicas — so the replica pool has headroom, which is why Stage 2
+holds for the stated requirement.
+
+BREAKING POINT: Stage 2 breaks at ~500K reads/sec because 10K reads/sec
+  per replica means 50 read replicas. The exhausted resource is NOT WAL
+  throughput — at 18 articles/sec the WAL is ~36KB/sec, which 50 replicas
+  stream without noticing. It is that each replica is a FULL COPY of the
+  database, provisioned solely to serve reads of data that is ~99.99%
+  identical for every user. Fifty full copies is the cost and ops
+  ceiling, and each new replica needs a full base backup before it can
+  serve traffic, so the pool cannot scale reactively during a spike.
+  Observable symptom: read capacity can only be added in ~30-minute
+  base-backup increments while p99 feed latency is already breaching;
+  storage spend grows linearly with read rate for zero new data.
+  Why Stage 3 is needed: stop handing every replica a private copy of
+  shared data. Cache the shared articles ONCE and assemble each user's
+  feed at read time.
 
 ══════════════════════════════════════════════════════
-STAGE 3 — Precomputed Feeds (Fan-out on Write)
+STAGE 3 — Per-Source Cache + Read-Time Merge
            (handles 500K+ reads/sec)
 ══════════════════════════════════════════════════════
 
-On new article ingestion:
-  Fan-out to all N subscribers of the source → write to each user's feed queue
-  18 articles/sec × 50K avg subscribers/source = 900K fan-out writes/sec → use Cassandra
-  High-fan-out source (10M subscribers) publishing 1 article = 10M writes in a burst.
-  (wide-column: row key = user_id, columns = article_ids sorted by published_at)
+ WRITE SIDE (stays trivial)        READ SIDE (does the work)
+ ══════════════════════════        ═════════════════════════
 
-Feed read becomes a key-value lookup: GET user_feed[user_id] → O(1)
-No DB query at read time.
+ ┌───────────────────────────┐
+ │ Normalizer Pool           │
+ └─────────────┬─────────────┘
+               ▼ 18 articles/sec
+ ┌───────────────────────────┐
+ │ Kafka: new-articles       │
+ │ key = source_id           │
+ └─────────────┬─────────────┘
+               ▼
+ ┌────────────────────────────────────────┐
+ │  Cache Updater consumer group          │
+ │────────────────────────────────────────│
+ │  ZADD          source:{id}:recent      │
+ │  ZREMRANGEBYRANK → keep newest 50      │
+ └─────────────┬──────────────────────────┘
+               │ 18 writes/sec
+               │ FAN-OUT FACTOR = 1, not 50,000
+               ▼
+ ┌──────────────────────────────────────────────────────────┐
+ │  Redis: 10K keys  source:{source_id}:recent  (ZSET)      │
+ │──────────────────────────────────────────────────────────│
+ │  score = published_at    member = article_id             │
+ │  10K sources × 50 articles × ~200B  =  ~100 MB TOTAL     │
+ │  ONE copy of each article, shared by ALL its subscribers │
+ └──────────────────────────┬───────────────────────────────┘
+                            │ pipelined ZREVRANGE
+                            │ ~50 keys per request
+                            ▼
+            ┌─────────────────────────────┐    ┌──────────────┐
+            │   Feed Service Pool         │◀───│  Mobile/Web  │
+            │─────────────────────────────│    │ GET /v1/feed │
+            │  ① read sub list (cached)   │    └──────────────┘
+            │  ② pipeline ~50 ZREVRANGE   │     500K+ reads/sec
+            │  ③ k-way merge → top 20     │
+            │  ④ hydrate from shared      │
+            │     article cache           │
+            └─────────────────────────────┘
+
+THE TRADE IN ONE LINE:
+  Stage 2 gave every replica a private copy of shared data.
+  Stage 3 keeps ONE copy of each source's recent articles and merges
+  ~50 short pre-sorted lists per request. Write cost does not move.
+
+WHY NOT FAN-OUT-ON-WRITE HERE (this is the probe — get it right):
+  The reflex answer is "precompute per-user feeds into Cassandra."
+  It is wrong for THIS domain, and saying why scores better than
+  reaching for it:
+   1. No cheap majority. Twitter fans out on write because the median
+      account has ~200 followers and ByteByteGo's canonical version
+      caps friends at 5,000 — push is cheap for ~99.9% of writes and
+      only celebrities need the pull carve-out. Here a SOURCE is a
+      publisher: 10K sources against 100M DAU × ~20 subscriptions is
+      ~50K-200K subscribers on the AVERAGE source. Every source is a
+      celebrity, so there is no cheap majority for push to exploit.
+   2. The data is shared, not per-user. A materialized user_feed row
+      is <article_id, user_id> — no per-user content whatsoever. At
+      200K subscribers that is 200K ID rows describing ONE article.
+      Twitter materializes because each timeline is a unique merge;
+      our feed is assembled from a shared pool of 10K sources.
+   3. The bet does not pay. Fan-out-on-write pays N writes now to save
+      reads later, and only wins if the rows get read. At 100M DAU
+      against a much larger registered base, most precomputed feeds
+      are never opened — ByteByteGo lists exactly this as a con of the
+      push model.
+  Cost of the two, side by side:
+      fan-out-on-write   900K writes/sec (2.7M with RF=3), ~60 nodes
+      per-source cache   18 writes/sec, ~100MB, 3-5 Redis nodes
+
+BE HONEST ABOUT THE READ COST (do not oversell this):
+  Read-merge is not free. 70K reads/sec × ~50 sources = ~3.5M Redis
+  key lookups/sec, though pipelining collapses that into ~70K round
+  trips. The k-way merge is ~2,500 elements down to 20 per request —
+  microseconds of CPU on a stateless tier you scale horizontally.
+  Roughly 1,000× cheaper than the write path it replaces, not zero.
+
+CEILING OF STAGE 3: ~500K-1M reads/sec, and it breaks on breadth, not
+  volume:
+   (a) Power users. A user subscribed to 1,000+ sources turns one
+       request into 1,000 ZREVRANGEs plus a 50,000-element merge. The
+       exhausted resource is per-request fan-out latency, not cluster
+       throughput — p99 for those users detaches from the median.
+   (b) Redis read fan-out. Past ~1M reads/sec the ~50× key
+       amplification saturates the cluster's network and single-thread
+       command loop before it saturates memory.
+  Observable symptom: p99 feed latency tracking subscription count
+  rather than traffic; Redis CPU pinned on a subset of shards holding
+  the most-subscribed sources.
+  Next moves, in order:
+   1. INVERT Twitter's hybrid. Materialize per-user feeds ONLY for the
+      few power users (>500 subscriptions), where merge cost finally
+      exceeds fan-out cost. Twitter carves out the huge-FOLLOWER case;
+      we carve out the huge-SUBSCRIPTION case. The expensive dimension
+      is flipped, so the exception flips with it.
+   2. Cache the assembled feed per user with a ~2-minute TTL, so the
+      repeat pull-to-refresh within a session skips the merge entirely.
+   3. Shard Redis by source_id hash so the most-subscribed sources
+      spread across shards instead of pinning one.
+   4. Add a hot-item tier to the article hydration cache (ByteByteGo's
+      Figure 8 split) so breaking-news articles do not stampede one
+      shard during a spike.
 ```
 
 ---
@@ -521,18 +729,25 @@ public boolean isNearDuplicate(long hashA, long hashB) {
 ### Deep Dive 3: Feed Generation — Pull-on-Read vs Fan-out-on-Write
 
 **Why this is the critical scale decision:**
-At 100M DAU, how you generate the feed determines whether reads are fast O(1) lookups or expensive O(subscribers) queries.
+At 100M DAU, how you generate the feed determines whether reads are cheap merges over shared data or expensive precomputation nobody reads.
+
+**The trap:** the reflex answer is "fan-out-on-write, like Twitter." That reflex is *wrong here*, and knowing why is the whole point of this deep dive. Fan-out-on-write is cheap only when the fan-out factor has a **small majority case**. Twitter's median account has ~200 followers; ByteByteGo's canonical news-feed chapter caps friends at **5,000**. Push is cheap for ~99.9% of writes, and celebrities get the pull carve-out.
+
+**Our domain has no such majority.** A *source* is a publisher, not a person: 10K sources against 100M DAU × ~20 subscriptions ≈ **50K–200K subscribers on the average source.** Every source is a celebrity. There is no cheap majority for push to exploit, so the standard hybrid rescues nothing.
 
 **Options considered:**
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Pull-on-read (our choice for Stage 2)** | No write amplification; users with no activity get no writes; simple | 70K reads/sec must hit DB or cache; cache invalidation required |
-| **Fan-out-on-write (Stage 3)** | Read = O(1) cache lookup; supports 500K+ reads/sec | Write amplification: 1 article × 10M subscribers = 10M writes; users with millions of followers need async fan-out |
+| **Per-source cache + read merge (our choice)** | Fan-out factor = 1; ~100MB total; inactive users cost zero; a mega-source publish is one cache write | ~50 key lookups per request; merge cost grows with subscription count |
+| **Fan-out-on-write into `user_feed`** | Read is one partition slice | 900K writes/sec (2.7M at RF=3), ~60 Cassandra nodes; one 10M-subscriber publish stalls the cluster ~11s; most rows never read |
+| **Pull-on-read straight from Postgres (Stage 2)** | Simplest; no cache tier | Needs 50 full DB replicas at 500K reads/sec — 50 private copies of shared data |
 
-**Decision for this design target:** Pull-on-read with Redis feed cache.
+**Decision for this design target:** per-source cache with read-time merge (Stage 3 in Section 7).
 
-At 100M DAU / 70K reads/sec, a Redis feed cache with 2-minute TTL absorbs the spike. The underlying query (articles from subscribed sources, last 24 hours, sorted by `published_at DESC`) is served by 7 read replicas. Pull-on-read is the right call at this scale — fan-out-on-write is only needed above ~500K reads/sec (see Stage 3 in Section 7).
+The structural reason, in one line: **a Twitter timeline is a unique merge, so materializing it buys you something; a news feed is assembled from a shared pool of 10K sources, so materializing per-user duplicates shared data.** A `user_feed` row is `<article_id, user_id>` — zero per-user content. At 200K subscribers that is 200K ID rows describing one article.
+
+**When fan-out-on-write would become correct:** if the feed stopped being assemblable from shared per-source lists — i.e. per-user ML ranking, where each user's ordering is unique and expensive to compute. That is explicitly out of scope this session (Section 2 assumption: recency ranking only). Say this out loud; it shows the rejection is conditional, not dogmatic.
 
 **Cache invalidation:** When a new article is ingested, the Normalizer emits the `source_id` to a Redis pub/sub channel. Feed Service instances subscribed to that channel invalidate the cached feed for all users subscribed to that source. This ensures users see new articles within seconds of ingestion, not 2 minutes (the TTL).
 
@@ -627,13 +842,13 @@ CREATE INDEX idx_subscriptions_user ON subscriptions (user_id)
   - [Technical]: If we use Kafka's `enable.idempotence=true` + transactional producer for exactly-once but forget the Postgres upsert: Kafka guarantees the producer doesn't duplicate, but a Normalizer crash after producing but before committing the DB transaction still causes re-processing from the last committed Kafka offset → duplicate insert without `ON CONFLICT`.
   - [Streaming impact]: Tableflow uses at-least-once Kafka delivery with Iceberg's `MERGE INTO` for dedup (the same pattern). If a Tableflow pipeline loses the at-least-once + idempotent-sink guarantee, Iceberg tables accumulate duplicate rows — downstream analytics over-counts article impressions in A/B test results.
 
-### Trade-off 2: Pull-on-Read vs Fan-out-on-Write for Feed Generation
+### Trade-off 2: Per-Source Shared Cache vs Fan-out-on-Write for Feed Generation
 
-- **Chose:** Pull-on-read with Redis feed cache (TTL = 2 minutes, invalidated on new article ingestion)
-- **Gain:** No write amplification at ingestion time; users with zero activity generate zero writes; a source with 100 subscribers vs 10M subscribers costs the same at write time
-- **Lose:** First read after cache miss hits the DB; users with many subscriptions generate large queries (JOIN articles + subscriptions, potentially 1K sources)
+- **Chose:** Per-source recent-article cache (Redis ZSET, newest 50 per source) with k-way merge at read time — explicitly **rejecting** fan-out-on-write
+- **Gain:** Fan-out factor is 1 instead of 50K–200K; ~100MB of cache total instead of ~2TB/day of derived rows; inactive users cost exactly zero; a mega-source publishing costs one `ZADD`, so the head-of-line stall that a 10M-subscriber publish causes in a materialized design cannot happen
+- **Lose:** ~50 key lookups per feed request (pipelined into one round trip) plus a ~2,500-element merge on the app tier; a user with 1,000+ subscriptions has p99 latency that tracks their subscription count rather than system load
 - **Failure mode if wrong:**
-  - [Technical]: If we chose fan-out-on-write at Stage 2 (before we needed it): at 18 articles/sec × average 50K subscribers/source = 900K feed writes/sec — Postgres write throughput is exceeded (~5K-10K writes/sec). Connection pool exhausts; article ingestion backs up in Kafka.
+  - [Technical]: If we chose fan-out-on-write: 18 articles/sec × ~50K avg subscribers = 900K feed writes/sec, 2.7M at RF=3 — Postgres (~5K–10K writes/sec) is exceeded by two orders of magnitude, and even Cassandra needs ~60 nodes. Worse, the failure is *silent waste*: most of those rows are for users who never open the app, so we would be buying 60 nodes to precompute feeds nobody reads.
   - [Streaming impact]: Backpressure from fan-out writes blocks Kafka consumer progress — `raw-articles` topic consumer lag grows unbounded. Tableflow observes this when a high-fan-out table update triggers too many downstream materialized view refreshes in a single transaction, stalling the Iceberg snapshot commit.
 
 ### Trade-off 3: SimHash Near-Dup Detection vs URL-Only Dedup
@@ -731,7 +946,7 @@ Feed sorted by published_at DESC     Iceberg time-travel: SELECT * AS OF
 | Axis | Relevant? | How this design addresses it |
 |---|---|---|
 | **API Design Precision** | ✅ | `POST /v1/sources` returns `202 Accepted` (not 201) because the resource exists but articles aren't crawled yet; `GET /v1/feed` returns `304 Not Modified` on matching `If-None-Match` ETag — reducing 70K read payload to a header-only response for unchanged feeds; cursor pagination on `(published_at DESC, id DESC)` is stable under concurrent inserts |
-| **Trade-off Defense** | ✅ | Three defended decisions: at-least-once + idempotent sink (correctness without Kafka transactions), pull-on-read vs fan-out-on-write (Stage 2 right-sizing), SimHash Hamming-3 threshold (balanced dedup vs false-dup risk) — each stated with gain/lose/failure |
+| **Trade-off Defense** | ✅ | Three defended decisions: at-least-once + idempotent sink (correctness without Kafka transactions), **per-source shared cache over fan-out-on-write** (rejecting the reflex answer because a news feed is assembled from a shared pool while a Twitter timeline is a unique merge — with the condition under which the rejection reverses), SimHash Hamming-3 threshold (balanced dedup vs false-dup risk) — each stated with gain/lose/failure |
 | **SQL / Data Modeling** | ✅ | Full DDL with 5 tables, 6 indexes; `ON CONFLICT (url_hash) DO NOTHING` for idempotent insert; partial index on `sources` (`WHERE status = 'active'`) for crawl scheduler efficiency; soft-delete on subscriptions to preserve invalidation audit trail |
 | **Distributed Systems** | ✅ | Kafka partition-by-source guarantees ordering within source for dedup; Bloom filter rebuild every 24 hours avoids unbounded memory growth; crawl scheduler uses exponential backoff with jitter to prevent thundering-herd on publisher recovery; Redis pub/sub for feed cache invalidation on new article ingestion |
 | **Pipeline Resilience** | ✅ | Ingestion is at-least-once Kafka with idempotent Postgres sink (redelivery = safe no-op); HTTP 304 Not Modified reduces 80% of crawler requests to no-ops; publisher failure → degraded status + exponential backoff (no avalanche); Bloom filter miss → graceful fallback to Postgres read (never a 500) |
@@ -741,7 +956,7 @@ Feed sorted by published_at DESC     Iceberg time-travel: SELECT * AS OF
 
 ## 🧾 Section 15 — TL;DR Answer Summary
 
-> "The aggregate news feed is architecturally an ingestion reliability problem first: publisher sources are unreliable, Kafka delivers at-least-once, and the dedup must therefore be idempotent at the storage layer — `ON CONFLICT (url_hash) DO NOTHING` is the correctness guarantee, not the Bloom filter (which is a read-optimization for the 99% of re-crawls that are exact duplicates). The API precision point is `POST /v1/sources` returning `202 Accepted` not `201 Created`, because the source is registered but articles haven't been crawled yet — 201 would mislead clients into expecting immediate article availability. Near-duplicate detection uses SimHash at Hamming distance ≤ 3 to collapse same-story articles from multiple publishers; this is the same locality-sensitive hashing principle that Iceberg's `MERGE INTO` uses for row-level upserts in Tableflow's table sink. The pipeline itself — crawler → Kafka `raw-articles` topic → Normalizer → Postgres hot + Iceberg cold — IS the Tableflow connector architecture made domain-specific: a Kafka Source Connector, a Streams/SMT processor, and an Iceberg table sink. The trade-off I'd defend first is pull-on-read over fan-out-on-write at Stage 2: 18 articles/sec × 50K avg subscribers = 900K fan-out writes/sec, which would blow Postgres write capacity before we'd even needed to; pull-on-read with a 2-minute Redis feed cache handles 70K reads/sec at current scale cleanly."
+> "The aggregate news feed is architecturally an ingestion reliability problem first: publisher sources are unreliable, Kafka delivers at-least-once, and the dedup must therefore be idempotent at the storage layer — `ON CONFLICT (url_hash) DO NOTHING` is the correctness guarantee, not the Bloom filter (which is a read-optimization for the 99% of re-crawls that are exact duplicates). The API precision point is `POST /v1/sources` returning `202 Accepted` not `201 Created`, because the source is registered but articles haven't been crawled yet — 201 would mislead clients into expecting immediate article availability. Near-duplicate detection uses SimHash at Hamming distance ≤ 3 to collapse same-story articles from multiple publishers; this is the same locality-sensitive hashing principle that Iceberg's `MERGE INTO` uses for row-level upserts in Tableflow's table sink. The pipeline itself — crawler → Kafka `raw-articles` topic → Normalizer → Postgres hot + Iceberg cold — IS the Tableflow connector architecture made domain-specific: a Kafka Source Connector, a Streams/SMT processor, and an Iceberg table sink. The trade-off I'd defend first is rejecting fan-out-on-write, which is the reflex answer and is wrong for this domain: Twitter fans out on write because the median account has ~200 followers, so push is cheap for 99.9% of writes and only celebrities need the pull carve-out. Here a source is a publisher — 10K sources against 100M DAU means ~50K–200K subscribers on the *average* source, so every source is a celebrity and there is no cheap majority to exploit. More fundamentally, a `user_feed` row is `<article_id, user_id>` with zero per-user content: a Twitter timeline is a unique merge worth materializing, while a news feed is assembled from a shared pool of 10K sources, so materializing per-user just duplicates shared data 200,000 times and mostly for users who never open the app. So I cache per *source* — 10K ZSETs of the newest 50 articles, ~100MB total — and merge ~50 pre-sorted lists at read time. That is 18 writes/sec instead of 900K. It reverses only if ranking becomes per-user ML, where the feed stops being assemblable from shared lists."
 
 ---
 
@@ -750,3 +965,6 @@ Feed sorted by published_at DESC     Iceberg time-travel: SELECT * AS OF
 | Date | Change |
 |---|---|
 | Aug 2026 | File created. Type 2 Full System Design, 15 sections per `solution-notes-standards.md`. Ingestion-first framing per research (ranking-first candidates were dinged). Covers: conditional HTTP (If-Modified-Since/ETag for 80% 304-rate on crawls), Bloom filter sizing for 15M active fingerprints (17.5MB), SimHash near-dup with Java implementation sketch, idempotent ON CONFLICT insert for Kafka at-least-once safety, 202 vs 201 API precision, 304 Not Modified on feed GET. Section 11 centerpiece: this pipeline IS Tableflow's connector architecture. |
+| Aug 2026 | **Section 7 stage transitions tightened; Stage 3 now has a ceiling.** Added a build-it-up delivery note. Stage 3 gained an ASCII diagram of the fan-out path (Kafka `new-articles` keyed by `source_id` → fan-out consumer group → Cassandra `user_feed` partitioned by `user_id`, clustered on `published_at DESC`), a `WHY CASSANDRA EARNS ITS PLACE HERE` block, and a `CEILING OF STAGE 3` naming both ceilings — ~60-node cluster width at 900K writes/sec with RF=3, and head-of-line blocking where one 10M-subscriber source consumes ~11 seconds of whole-cluster capacity and breaches the 5-minute freshness target — plus four ordered next moves (cap partitions at ~500 items, hybrid fan-out for >1M-subscriber sources per Deep Dive 3, lazy fan-out for users inactive > 30 days, raise Kafka partition count and key on `(source_id, subscriber_shard)`). Stage 1→2 and 2→3 breaking points rewritten to name the exhausted resource explicitly: Stage 1 now shows the connection-pool ceiling collapsing from 10K to 4K reads/sec as query time degrades from 20ms to 50ms (the old line read "200 connections × 50ms avg = 10K req/sec", which was arithmetically wrong — 200 ÷ 50ms is 4K); Stage 2 now names single-primary WAL replay throughput, not replica count, as the limit. |
+| Aug 2026 | **Stage 3 architecture reversed — fan-out-on-write was the wrong answer for this domain.** Caught by Kapil reading the file: "fan-out on write we use when followers are low, but here we are writing every time for users which are not active." Correct. Two distinct errors were present. (1) **Inverted celebrity logic.** Fan-out-on-write is cheap only when the fan-out factor has a small majority case — Twitter's median account has ~200 followers, and ByteByteGo's canonical news-feed chapter caps friends at 5,000, so push is cheap for ~99.9% of writes with a celebrity carve-out. In an aggregator a *source is a publisher*: 10K sources against 100M DAU × ~20 subscriptions is ~50K–200K subscribers on the **average** source. Every source is a celebrity, so the old "Next moves item 2: exempt the top 0.1%" rescued nothing. (2) **Materializing shared data.** A `user_feed` row is `<article_id, user_id>` with zero per-user content — a Twitter timeline is a unique merge worth materializing, but a news feed is assembled from a shared pool, so per-user materialization duplicates shared data 200,000× and mostly for users who never open the app (ByteByteGo lists this exact con of the push model). Stage 3 replaced with **per-source Redis ZSET cache (10K keys × newest 50 articles ≈ 100MB) + k-way merge at read time** — fan-out factor 1 and 18 writes/sec, against 900K writes/sec and ~60 Cassandra nodes. Added a `WHY NOT FAN-OUT-ON-WRITE HERE` block, an honest `BE HONEST ABOUT THE READ COST` block (~3.5M Redis key lookups/sec pipelined into ~70K round trips — cheaper, not free), and a ceiling that breaks on *breadth* not volume, whose first next-move **inverts Twitter's hybrid**: materialize only for power users with >500 subscriptions, because the expensive dimension is huge-SUBSCRIPTION not huge-FOLLOWER. Deep Dive 3, Trade-off 2, Section 14 and the TL;DR rewritten to match, each carrying the condition under which the rejection reverses (per-user ML ranking). **Also corrected the Stage 2 breaking point**, which had claimed the exhausted resource was "single-primary WAL replay throughput" — not credible at 18 articles/sec (~36KB/sec of WAL, which 50 replicas stream without noticing). The real ceiling is that each replica is a full private copy of data that is ~99.99% identical across users, and new replicas need a full base backup before serving, so the pool cannot scale reactively. |
+| Aug 2026 | **All Section 7 diagrams redrawn — same defect class as the tempmail Stage 2 fix.** (1) The main HLD (ingestion + feed read path) was pure ASCII outline: boxes held 5-line bullet lists, so it read as a text document rather than a diagram. Redrawn in box-drawing with the bullets compressed to the branch-relevant lines. (2) **Semantic bug in the dedup branch:** the "Bloom says maybe seen" arrow pointed at `[Redis Bloom]`, but the Bloom probe had *already happened* one box earlier in the Normalizer — that branch must go to Postgres for the confirming read. The Bloom filter now appears twice with deliberately different arrows (Normalizer READS it at ①, post-insert step WRITES it at ⑤), and both surviving paths visibly converge on the single idempotent `ON CONFLICT DO NOTHING` write, which is the actual correctness guarantee. (3) The three stacked boxes `[Redis Bloom]`/`[Check exact]`/`[url_hash in DB]` were one logical step split across three boxes — merged. (4) **Stage 1 had no read path at all**, despite its entire BREAKING POINT being about read contention; it now draws ingestion and feed reads converging on the one primary with the shared-buffer-cache warning marked. (5) Stage 2's replicas hung off the primary in a linear chain implying sequential replication — now drawn as WAL fan-out to all 7, with the Redis cache on the read path and the invalidation pub/sub edge shown. (6) Stage 3 redrawn to make the write-side/read-side cost inversion visible, with a one-line statement of the trade. |

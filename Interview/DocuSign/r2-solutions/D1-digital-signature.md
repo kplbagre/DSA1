@@ -197,7 +197,7 @@ Validation check: each FR maps to an endpoint. The "webhook notification on sign
 
 **`POST /v1/documents`** is where the signing workflow is configured, not started. The document is created in `DRAFT` status. Including `signer_user_ids` and `signing_order` at creation time (not in a separate "start workflow" call) keeps the API simple: one POST creates and configures. The `409 Conflict` case: the document already exists (if caller retries with the same idempotency key). `400 Bad Request` if `signing_order = "sequential"` but `signer_user_ids` is empty.
 
-**`POST /v1/documents/{id}/sign`** carries the cryptographic payload. `signature_bytes` is the RSA/ECDSA signature of the document hash, base64-encoded. The server verifies it using the public key from `UserCertificate` matching `certificate_serial`. Two interesting status codes: `403 Forbidden` means it's not your turn (sequential order, the previous signer hasn't signed yet) — you're an authorized user but not authorized for this action right now. `409 Conflict` means you already signed — the idempotency check. The `Idempotency-Key` header is mandatory on this endpoint: if the client POSTs, the server signs the document, but the response is lost in transit, the retry must return the same `{document_id, status}` without signing twice. Implementation: cache response in Redis for 24 hours keyed by `Idempotency-Key`.
+**`POST /v1/documents/{id}/sign`** carries the cryptographic payload. `signature_bytes` is the RSA/ECDSA signature of the document hash, base64-encoded. The server verifies it using the public key from `UserCertificate` matching `certificate_serial`. `400 Bad Request` has three named triggers here, all of them "your request is malformed, retrying won't help": `signature_bytes` is not valid base64 or decodes to the wrong length for the algorithm, `certificate_serial` is absent or references no certificate for this user, or the `Idempotency-Key` header is missing. Note what is deliberately *not* a 400 — a well-formed signature that fails cryptographic verification is `422 Unprocessable Entity` in a stricter reading, but this design returns `400` with error code `SIGNATURE_VERIFICATION_FAILED`; the interviewer may push on that, and the defensible answer is that the *body* was syntactically fine, so 422 is more correct. Two more interesting status codes: `403 Forbidden` means it's not your turn (sequential order, the previous signer hasn't signed yet) — you're an authorized user but not authorized for this action right now. `409 Conflict` means you already signed — the idempotency check. The `Idempotency-Key` header is mandatory on this endpoint: if the client POSTs, the server signs the document, but the response is lost in transit, the retry must return the same `{document_id, status}` without signing twice. Implementation: cache response in Redis for 24 hours keyed by `Idempotency-Key`.
 
 **`POST /v1/documents/{id}/reject`** is the failure path. In sequential signing, if signer #2 rejects, the workflow can reset to signer #1 for revision — the `reset_to_signer` field in the response tells the creator who to contact. The probe: "What if rejection happens in parallel signing when two signers have already signed?" This is a business rule question, not a technical one — document the assumption ("rejection invalidates all previous signatures and resets to DRAFT") and move on.
 
@@ -227,7 +227,7 @@ Validation check: each FR maps to an endpoint. The "webhook notification on sign
 
 **Key conclusions:**
 - At 35 sig/sec, a **single Postgres instance handles easily** (typical write capacity ~1K/sec), but **replication for HA is mandatory** (signatures can't be lost)
-- At 5.5 TB/year, **sharding by customer_id will be needed** within 18 months to avoid slow queries on the audit log
+- At **~550 GB/year** (5.5 TB by year 10, not per year), **sharding by customer_id becomes necessary around year 2**, when the audit table passes ~1 TB and its composite indexes stop fitting in RAM — that's the real trigger, not the raw table size
 - At 11.6 audit queries/sec, **caching the "who signed" status** (Redis) helps, but the immutable audit log must hit disk for legal compliance
 - **Strong consistency required** → no eventual consistency for signing state, but webhooks can be async
 
@@ -289,9 +289,16 @@ Validation check: each FR maps to an endpoint. The "webhook notification on sign
                          └────────────────────────────────────────────┘
 
 BREAKING POINT 1:
-   Step 6 — synchronous webhook: if the customer's server is slow or down,
-   the signing HTTP response is blocked or times out. A webhook failure
-   fails the signing — external system availability controls signing availability.
+   Step 6 — synchronous webhook. The exhausted resource is the API server's
+   request thread pool, not the DB. A 200-thread Tomcat pool with a 30s HTTP
+   client timeout is fully occupied once 200 requests are parked on a dead
+   customer endpoint — at 35 sig/sec that takes under 6 seconds. Because the
+   threads only free at the timeout, sustained throughput collapses to
+   200 threads / 30s = 6.6 sig/sec, i.e. one unresponsive customer webhook
+   endpoint caps the ENTIRE signing service at 19% of its peak rate.
+   Observable symptom: P99 on POST /sign jumps from ~150ms to the full 30s
+   timeout, then 503s from the load balancer as the accept queue fills —
+   for every tenant, not just the one whose endpoint is down.
 
 BREAKING POINT 2:
    Step 2 — cert lookup on every sign request hits the DB directly.
@@ -471,14 +478,31 @@ public class SignatureVerificationService {
         if (userCert == null) {
             throw new SignatureInvalidException("Certificate not found or revoked");
         }
-        
-        // Step 2: Check certificate validity (not expired, not revoked)
-        if (userCert.isExpired() || userCert.isRevoked()) {
+
+        // Step 2a: Validate the chain up to a trusted root BEFORE trusting the
+        // public key. A certificate is only meaningful if our CA issued it:
+        // check each issuer signature up to the trust anchor, and check
+        // basicConstraints (only a CA cert may sign others) and keyUsage
+        // (this leaf must assert digitalSignature / nonRepudiation).
+        // Skipping this is how a self-signed cert with subject "CN=John Doe"
+        // gets accepted as John.
+        certStore.validateChainToTrustedRoot(userCert);
+
+        // Step 2b: Validity window. THIS IS THE SIGNING PATH — the cert must be
+        // valid RIGHT NOW, because we are creating a new signature.
+        // Do NOT reuse this method to re-verify an old signature: an RSA cert
+        // typically lives 1-3 years, so checking `isExpired()` against
+        // wall-clock time would declare every signature over 3 years old
+        // invalid. Historical verification goes through
+        // verifyArchivedSignature() below, which evaluates validity as of the
+        // trusted timestamp instead.
+        if (userCert.isExpiredAt(Instant.now()) || userCert.isRevoked()) {
             throw new SignatureInvalidException("Certificate expired or revoked");
         }
-        
+
         // Step 3: Extract the public key from the certificate
-        PublicKey publicKey = userCert.getPublicKey();  // RSA public key
+        // RSA public key
+        PublicKey publicKey = userCert.getPublicKey();
         
         // Step 4: Verify the signature (this re-hashes the document and compares)
         // SHA256withRSA: first hash the document with SHA-256 (produces a 256-bit fingerprint),
@@ -516,6 +540,40 @@ public class SignatureVerificationService {
     }
 
     /**
+     * Re-verify a signature that was created years ago (dispute, eDiscovery,
+     * audit). This is a DIFFERENT question from "can this user sign now?".
+     *
+     * The legal question is: was the certificate valid AT THE MOMENT OF
+     * SIGNING? So validity is evaluated as of the trusted timestamp, using
+     * the revocation data archived at signing time — not today's CRL, which
+     * may no longer even list a long-expired certificate.
+     */
+    public boolean verifyArchivedSignature(SignedDocument doc)
+            throws SignatureInvalidException {
+
+        // Step 1: The RFC 3161 timestamp token is the clock we trust — not our
+        // DB's signed_at column, which we could have backdated.
+        Instant signingTime = timestampAuthority.verifyAndExtractTime(doc.getTimestampToken());
+
+        // Step 2: Chain must have been valid at signingTime, not now.
+        Certificate signerCert = doc.getEmbeddedSignerCertificate();
+        certStore.validateChainAsOf(signerCert, signingTime);
+
+        // Step 3: Revocation as of signingTime, from the CRL/OCSP response we
+        // archived with the signature. "Not revoked today" is not the question;
+        // "not revoked when they signed" is.
+        if (doc.getArchivedRevocationData().wasRevokedAt(signerCert, signingTime)) {
+            throw new SignatureInvalidException("Certificate was revoked before signing");
+        }
+
+        // Step 4: Only now does the cryptographic check mean anything.
+        Signature verifier = Signature.getInstance("SHA256withRSA");
+        verifier.initVerify(signerCert.getPublicKey());
+        verifier.update(doc.getSignedByteRanges());
+        return verifier.verify(doc.getSignatureBytes());
+    }
+
+    /**
      * Cache user certificates in Redis for fast lookups.
      * TTL = certificate expiry + 1 day (after expiry, the cert is no longer usable).
      */
@@ -532,6 +590,8 @@ public class SignatureVerificationService {
 - The certificate lookup path (Redis → DB) must be fast (< 20ms) because it's on the critical path.
 - Revocation checks must be present (if a user's cert is compromised, they can't sign anymore).
 - The audit log is written AFTER verification succeeds, so you're only logging valid signatures.
+- **Chain validation is not optional and is not the same as "the cert is in our database."** A certificate is a claim; the issuer's signature over it is the proof. Without walking the chain to a trusted root and checking `basicConstraints` and `keyUsage`, a self-signed certificate whose subject reads `CN=John Doe` verifies perfectly against its own key — you have cryptographically confirmed that whoever made the key signed the document, which is not the same as confirming John did.
+- **Two different verification questions — conflating them is the single most common PKI error in this interview.** *Signing path:* "may this user sign right now?" → the certificate must be valid **now**. *Verification path:* "is this three-year-old signature still good?" → the certificate must have been valid **at signing time**, proven by the RFC 3161 timestamp, checked against the revocation data archived alongside the signature. Certificates live 1–3 years; signed contracts live 7+. A verifier that checks `notAfter` against wall-clock time marks every legitimate signature invalid the day the signer's certificate expires. Section 11 item 9 covers the long-term-validity machinery this requires.
 
 ---
 
@@ -565,12 +625,12 @@ CREATE TABLE signing_sessions (
     signature_hash CHAR(64),  -- SHA-256 of the signature bytes (for audit proof)
     status VARCHAR(20) CHECK (status IN ('PENDING', 'SIGNED', 'REJECTED')),
     rejection_reason TEXT,
-    tenant_id UUID NOT NULL,
-    
-    -- For UI queries: "who has signed?"
-    INDEX idx_doc_status (document_id, status),
-    INDEX idx_signer_pending (signer_user_id, status)
+    tenant_id UUID NOT NULL
 );
+
+-- For UI queries: "who has signed?"
+CREATE INDEX idx_doc_status      ON signing_sessions (document_id, status);
+CREATE INDEX idx_signer_pending  ON signing_sessions (signer_user_id, status);
 
 -- The append-only audit trail (immutable legal record)
 -- This table ONLY has INSERT operations. No UPDATE, no DELETE.
@@ -597,18 +657,17 @@ CREATE TABLE audit_signature_events (
     event_timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     
     -- For integrity checks
-    event_hash CHAR(64),  -- HMAC(previous_event_hash + this_event_data, secret_key)
-    
-    tenant_id UUID NOT NULL,
-    
+    event_hash CHAR(64)  -- HMAC(previous_event_hash + this_event_data, secret_key)
+
     -- Append-only enforcement: via trigger below (see prevent_audit_modification)
     -- DO NOT add a CHECK constraint here — Postgres has no native append-only constraint;
     -- the trigger is the correct mechanism.
-
-    INDEX idx_doc_audit (document_id, event_timestamp),
-    INDEX idx_signer_audit (signer_user_id, event_timestamp),
-    INDEX idx_tenant_audit (tenant_id, event_timestamp)
 );
+
+-- Indexes are separate statements in Postgres (inline INDEX is MySQL syntax).
+CREATE INDEX idx_doc_audit    ON audit_signature_events (document_id, event_timestamp);
+CREATE INDEX idx_signer_audit ON audit_signature_events (signer_user_id, event_timestamp);
+CREATE INDEX idx_tenant_audit ON audit_signature_events (tenant_id, event_timestamp);
 
 -- Trigger: prevent updates and deletes on the audit table
 CREATE OR REPLACE FUNCTION prevent_audit_modification() RETURNS TRIGGER AS $$
@@ -856,14 +915,14 @@ CREATE TABLE documents (
     
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     fully_signed_at TIMESTAMP WITH TIME ZONE,
-    expires_at TIMESTAMP WITH TIME ZONE,  -- e.g., 30 days from creation
-    
-    tenant_id UUID NOT NULL,
-    
-    INDEX idx_tenant_created (tenant_id, created_at DESC),
-    INDEX idx_tenant_status (tenant_id, status),
-    INDEX idx_tenant_creator (tenant_id, created_by_user_id)
+    expires_at TIMESTAMP WITH TIME ZONE  -- e.g., 30 days from creation
 );
+
+-- Postgres has no inline INDEX clause inside CREATE TABLE — that is MySQL
+-- syntax and fails to parse. Indexes are always separate statements.
+CREATE INDEX idx_tenant_created ON documents (tenant_id, created_at DESC);
+CREATE INDEX idx_tenant_status  ON documents (tenant_id, status);
+CREATE INDEX idx_tenant_creator ON documents (tenant_id, created_by_user_id);
 
 CREATE TABLE signing_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -881,10 +940,12 @@ CREATE TABLE signing_sessions (
     
     tenant_id UUID NOT NULL,
     
-    INDEX idx_doc_order (document_id, signer_order),
-    INDEX idx_signer_pending (signer_user_id, status),
-    UNIQUE (document_id, signer_user_id)  -- one entry per signer per doc
+    -- one entry per signer per doc
+    UNIQUE (document_id, signer_user_id)
 );
+
+CREATE INDEX idx_doc_order       ON signing_sessions (document_id, signer_order);
+CREATE INDEX idx_signer_pending  ON signing_sessions (signer_user_id, status);
 
 -- Append-only audit log (immutable legal record)
 CREATE TABLE audit_signature_events (
@@ -905,11 +966,19 @@ CREATE TABLE audit_signature_events (
     
     event_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
     event_hash CHAR(64),  -- HMAC for tamper detection
-    
-    INDEX idx_doc_audit (document_id, event_timestamp),
-    INDEX idx_signer_audit (signer_user_id, event_timestamp),
-    INDEX idx_tenant_audit (tenant_id, event_timestamp)
+
+    -- Archived validation material for long-term validity (Section 11 item 9):
+    -- the RFC 3161 token, the chain as presented, and the revocation data as of
+    -- signing. Without these, this signature stops being verifiable the day the
+    -- signer's certificate expires.
+    timestamp_token BYTEA,
+    certificate_chain_pem TEXT,
+    revocation_snapshot BYTEA
 );
+
+CREATE INDEX idx_doc_audit    ON audit_signature_events (document_id, event_timestamp);
+CREATE INDEX idx_signer_audit ON audit_signature_events (signer_user_id, event_timestamp);
+CREATE INDEX idx_tenant_audit ON audit_signature_events (tenant_id, event_timestamp);
 
 -- Trigger to prevent modifications to audit table
 CREATE OR REPLACE FUNCTION prevent_audit_modification() RETURNS TRIGGER AS $$
@@ -937,10 +1006,11 @@ CREATE TABLE user_certificates (
     revoked_at TIMESTAMP WITH TIME ZONE,  -- NULL if not revoked
     revocation_reason VARCHAR(255),
     
-    INDEX idx_user_certs (user_id, expires_at),
-    INDEX idx_serial (certificate_serial),
     UNIQUE (user_id, certificate_serial)
 );
+
+CREATE INDEX idx_user_certs ON user_certificates (user_id, expires_at);
+CREATE INDEX idx_serial     ON user_certificates (certificate_serial);
 ```
 
 ### Key Schema Decisions
@@ -965,11 +1035,11 @@ CREATE TABLE user_certificates (
 
 **Chose:** Store signature_hash (SHA-256), not the full signature bytes.
 
-**Gain:** Storage efficiency (256 bits vs 256+ bytes for RSA signature); faster queries; audit table stays small (~550 GB/year vs 5.5 TB/year if we stored raw signatures).
+**Gain:** The audit row stays narrow and fixed-width. A `CHAR(64)` hex hash is 64 bytes; the raw signature is 256 bytes for RSA-2048 and 512 for RSA-4096. At Section 4's 365M signature events/year that is the difference between ~23 GB/year and ~93 GB/year of signature payload inside the hottest, most-indexed table in the system — and because Postgres stores rows in 8 KB pages, wider rows mean fewer rows per page and proportionally more I/O for every audit scan.
 
-**Lose:** Can't re-verify signatures without the original signature bytes. If a dispute arises, we'd need to ask the user for the original signature bytes to re-verify.
+**Lose:** The audit table alone cannot re-verify a signature — it can only prove that a signature with this digest was recorded. Re-verification requires the actual signature bytes, which is why they live where they belong: embedded in the signed PDF in S3 (PAdES, Section 11 item 6). The audit row's hash is what binds the two together.
 
-**Failure mode if wrong:** If you store the full signature bytes and you have 1B signature events/year at 256 bytes each, you're at 256 TB storage. Your S3 bill and query latency become untenable. Postgres can't handle 100GB+ audit tables efficiently. **Business impact:** Audit log queries for a specific envelope's signing history time out (>30s) as the table grows past 100GB — for DocuSign this means a compliance officer investigating a disputed signature cannot retrieve the event trail during a live legal hearing, must escalate to a DBA, and the delay is measured in hours instead of seconds — creating a discovery response failure.
+**Failure mode if wrong:** **Technical:** duplicating signature bytes into `audit_signature_events` adds ~93 GB/year of payload to a table that already carries three composite indexes; index bloat, not raw size, is what hurts — every index page holding the tenant/document/timestamp keys gets pushed further apart, `idx_doc_audit` lookups start missing shared_buffers, and the table becomes the dominant cost of every vacuum and every logical-replication slot. **Business impact:** For DocuSign, an audit query is a legal-discovery query with a clock on it. Once `GET /v1/documents/{id}/audit` degrades past a few seconds, a compliance officer responding to a subpoena during a live hearing cannot produce the signing trail on the call and must escalate to a DBA — turning a sub-second lookup into an hours-long discovery response, which is the failure mode of the exact product feature the customer bought. **The deeper point:** the choice is not "hash vs bytes", it's *where the bytes live* — S3 with the signed PDF (immutable, cheap, self-verifying, retrievable for the rare dispute) rather than in the row you read on every audit request.
 
 ---
 
@@ -1101,6 +1171,52 @@ DocuSign's embedded signing flow is a specific design question interviewers prob
 
 **In an interview:** "For embedded signing confirmation I use three signals: returnUrl for fast UI feedback, Envelopes:get REST call for authoritative backend confirmation, and the Connect webhook for audit trail. I never treat the returnUrl alone as sufficient — it can be spoofed, and the network can drop the callback before the backend processes it."
 
+9. **Long-term validity (PAdES-LTV) — why a signature must outlive its own certificate:**
+
+This is the gap that separates candidates who have read about PKI from candidates who have shipped it. Everything above describes how to *create* a valid signature. LTV answers a harder question: **a mortgage signed today must still verify in 2040, but the signer's certificate expires in 2029.** Naively, every DocuSign signature would become "invalid" a year or two after signing — and a signature that cannot be verified is not evidence.
+
+**Why expiry doesn't invalidate the signature (but naive verification says it does):** The maths never stops working — the hash still matches, the key pair is still mathematically bound. What stops working is the *trust evaluation*: a verifier asks "was this certificate valid?", compares `notAfter` to today, sees it's in the past, and returns INVALID. The certificate expiring is not evidence of anything wrong; it's just the CA declining to vouch for the key any longer. The fix is to freeze the evidence at signing time so the verifier can evaluate validity **as of then** rather than as of now.
+
+**The four things you must archive at signing time** (a signature file that carries only the signature bytes is not long-term valid):
+
+| Artifact | Why it must be archived | What breaks without it |
+|---|---|---|
+| **RFC 3161 timestamp token** | Independent cryptographic proof of *when* the signature existed | You cannot prove the signature predates the certificate's expiry — or predates a later revocation |
+| **The full certificate chain** (leaf + intermediate + root) | CAs retire intermediates; the issuing intermediate may not be fetchable in 2040 | Chain cannot be rebuilt → "issuer unknown" → INVALID |
+| **Revocation data as of signing** (CRL or signed OCSP response) | CAs stop publishing revocation data for expired certs — an expired cert simply drops off the CRL | You cannot prove the cert wasn't revoked at signing; a verifier must assume the worst |
+| **Document timestamps, renewed periodically** (PAdES-LTA) | The TSA's *own* certificate expires, and SHA-256 will eventually weaken | The timestamp that protects the signature becomes unverifiable — the proof chain rots from the outside in |
+
+**The renewal chain — the part almost nobody says out loud:** each new document timestamp covers everything before it, including the previous timestamp. So the archive is a chain of overlapping proofs: signature ← signature timestamp ← document timestamp (2029) ← document timestamp (2039) ← … Each link is added **while the previous link's certificates are still valid**, so validity is carried forward indefinitely without ever re-signing the document. In PAdES this material lives in the PDF's DSS (Document Security Store) dictionary and is appended by incremental update — the original signed byte ranges are never touched.
+
+```
+Signed 2026 ────────────────────────────────────────────────────▶ verified 2040
+
+  [doc + Alice's signature]
+        │ covered by
+        ▼
+  [signature timestamp — TSA cert valid 2026-2029]
+        │ covered by
+        ▼
+  [document timestamp added 2028 — TSA cert valid 2028-2031]
+        │ covered by
+        ▼
+  [document timestamp added 2030 — TSA cert valid 2030-2033]   … renewed on
+
+KEY INVARIANT:
+   Every link is added BEFORE the previous link's certificate expires.
+   Verification never asks "is this cert valid today?" — it asks
+   "was it valid at the timestamp of the link that covers it?"
+   Break one link (miss a renewal window) and every proof after it
+   is unanchored: the signature is still mathematically intact but
+   is no longer legally verifiable without expert testimony.
+```
+
+**For DocuSign specifically:** this is a product feature with a retention SLA behind it. Envelopes are retained 7+ years for SOC 2 and for statutory record-keeping, and eIDAS defines exactly these levels — **PAdES-B-T** (signature + trusted timestamp) and **PAdES-B-LTA** (long-term with archival timestamps), where LTA is what an EU Qualified Electronic Signature relies on for long-term admissibility. Without archived validation material, a compliance officer pulling a 2019 envelope during litigation gets "signature validity unknown — issuer certificate expired" from any standards-compliant PDF reader, and DocuSign is in the position of asking a court to trust its own database instead of the cryptography it sold.
+
+**In an interview:** "Signature creation is the easy half — the hard half is that the signature has to remain verifiable for 7+ years while the signer's certificate is valid for 2. So at signing time I archive the whole validation set: the RFC 3161 timestamp, the full chain, and the CRL or OCSP response as of that instant, in the PDF's DSS dictionary. Then a background job appends a fresh document timestamp before the previous timestamp's certificate expires. That's PAdES-LTA, and it's the difference between a signature that's evidence and a signature that's just a blob that used to verify."
+
+---
+
 **Your answer should include:**
 
 > "The audit trail is immutable at the database level — a trigger prevents any UPDATE or DELETE. This ensures non-repudiation: John can't deny signing because the audit_signature_events table is tamper-proof. The timestamp is UTC (never local), and we store the certificate serial number, which proves which key was used. If John disputes the signature, we produce: (1) the audit log entry, (2) the certificate chain (proving his cert was issued by our CA), (3) the signature hash (proving it's cryptographically valid), and (4) the context (IP, user-agent, browser). This is legally defensible under ESIGN Act and acceptable in court."
@@ -1115,7 +1231,9 @@ DocuSign's embedded signing flow is a specific design question interviewers prob
 
 **Q: "How do you ensure that a signature was actually created by the user, not forged by someone else?"**
 
-> The signature is created by encrypting a SHA-256 hash of the document with the user's private key. Only John has access to his private key (it's stored in our HSM, and the database/system design ensures only John's auth session can trigger a signing operation). The signature is mathematically linked to that specific private key — anyone can verify it with John's public key, but only John's private key could have created it. This is the essence of non-repudiation.
+> The signature is created by hashing the document with SHA-256 and applying John's private key to that hash — never to the document itself, because RSA can only operate on a block smaller than the modulus, and hash-then-sign is what makes signing a 500 MB contract the same cost as signing a 5 KB one. Only John has access to his private key (it's stored in our HSM, and the design ensures only John's authenticated session can trigger a signing operation). The signature is mathematically bound to that specific key pair — anyone can verify it with John's public key, but only the holder of the private key could have produced it. This is the essence of non-repudiation.
+>
+> **Say the precise version if they push:** signing is *not* "encrypting the hash with the private key," even though every tutorial says so. RSA signing applies a padding scheme first (PKCS#1 v1.5, or preferably PSS, which adds a random salt so signing the same document twice yields different signatures) and then the private-key operation — and for ECDSA there is no encryption anywhere in the algorithm at all. "Encrypting the hash" is a workable teaching analogy that happens to be true only for textbook RSA; a DocuSign interviewer probing PKI depth will notice which version you reach for.
 
 ### Tier 2 — Deep Probe (Do you understand the failure modes?)
 
@@ -1185,7 +1303,11 @@ DocuSign's embedded signing flow is a specific design question interviewers prob
 
 - **Mistake 2:** "I'll store full signature bytes in the audit table." → **Why it's wrong:** At 1M signatures/day × 256 bytes = 256 MB/day = 93 GB/year. At 10 years, you're at 930 GB. Queries on a 930 GB table time out. → **What to say instead:** "I'll store the SHA-256 hash of the signature (256 bits) in the audit table for proof of signing. The full signature bytes are optionally stored in cold storage (S3) for later re-verification if disputed."
 
-- **Mistake 3:** "Eventual consistency is fine for signing — if it takes a few seconds to show 'fully signed,' that's OK." → **Why it's wrong:** Signing is a legal transaction. If a user signs, the system must immediately show "signed" (strong consistency). Eventual consistency could lead to race conditions: user A thinks doc isn't signed, clicks "sign" again, creating duplicate signatures. → **What to say instead:** "Signing transitions must be strongly consistent. When a user signs, the signing_sessions row must be immediately updated and visible to all other signers and the initiator. I'll use a single Postgres instance with replication (HA) to achieve this, and I'll shard by customer_id at 18 months when storage approaches 5 TB."
+- **Mistake 3:** "Eventual consistency is fine for signing — if it takes a few seconds to show 'fully signed,' that's OK." → **Why it's wrong:** Signing is a legal transaction. If a user signs, the system must immediately show "signed" (strong consistency). Eventual consistency could lead to race conditions: user A thinks doc isn't signed, clicks "sign" again, creating duplicate signatures. → **What to say instead:** "Signing transitions must be strongly consistent. When a user signs, the signing_sessions row must be immediately updated and visible to all other signers and the initiator. I'll use a single Postgres instance with replication (HA) to achieve this, and I'll shard by customer_id around year 2, when the audit table passes ~1 TB at 550 GB/year and its indexes no longer fit in memory."
+
+---
+
+- **Mistake 4:** "The signature is valid because the certificate is valid." → **Why it's wrong:** It ties the lifetime of the evidence to the lifetime of the credential. Signing certificates live 1–3 years; a signed mortgage or lease is evidence for 7–30. A verifier that compares the certificate's `notAfter` to today's date declares every signature invalid the day the signer's certificate expires — and CAs stop publishing revocation data for expired certificates, so you can no longer even prove the certificate wasn't revoked at signing time. Candidates fall into this in code, not in words: `if (cert.isExpired()) return INVALID` on the verification path is the bug. → **What to say instead:** "Validity is evaluated **as of the signing time**, proven by an RFC 3161 timestamp from an independent TSA, not by my own database's `signed_at` column. At signing time I archive the full validation set — timestamp token, complete certificate chain, and the CRL or OCSP response as of that instant — and a background job appends a fresh document timestamp before the previous one's certificate expires. That's PAdES-LTA, and it's why a 2019 envelope still verifies in 2040."
 
 ---
 
@@ -1193,13 +1315,13 @@ DocuSign's embedded signing flow is a specific design question interviewers prob
 
 | Dimension | Relevant? | How your design addresses it |
 |---|---|---|
-| **Testability** | ✅ | Signature verification is deterministic (same doc + same key = same signature hash). Test by generating test certificates, creating test documents, signing, verifying. Audit trail is queryable for validation. State machine transitions are unit-testable. |
-| **Usability** | ✅ | API is REST with clear 201/200 status codes. Error messages are specific ("SIGNATURE_VERIFICATION_FAILED" vs generic "400"). Sequential signing is guided (each signer knows whose turn it is via next_signer response). Webhook notifications tell external systems when to act. |
-| **Extensibility** | ✅ | Multi-party signing (sequential + parallel) is configurable per document. Webhook URL is customer-provided (customer can change notif targets without re-deploying). Audit events are extensible (new action types can be added to audit_signature_events without breaking queries). |
-| **Security** | ✅ | JWT auth on every endpoint. RSA-2048 signatures (industry standard). Immutable audit trail (DB trigger prevents tampering). Tenant isolation (tenant_id on every query). Certificate revocation (revoked_at check on every signature). Keys stored in HSM (not disk). |
-| **Availability** | ✅ | Postgres with HA replication (2 replicas). If one replica fails, signing still works. API is stateless (load-balance across N instances). Message queue (SQS/Kafka) for webhook fanout (retries, not lost). 99.9% SLO achievable with this design. |
-| **Scalability** | ✅ | At 35 sig/sec, single Postgres instance handles easily. At 100M users (10× scale), shard by customer_id (each customer's signing_sessions + documents on a separate shard). Audit table indexed by document_id + event_timestamp, so "show me this document's audit trail" is O(log N + K) where K = number of signings. |
-| **Observability & Traceability** | ✅ | Every request has X-Request-ID header (traced through logs). Signature verification logs include timestamp, user, certificate, client_ip. Audit trail is queryable (GET /audit endpoint). State transitions are logged (audit_signature_events tracks every status change). Can trace: "did John sign this? When? From where?" |
+| **Testability** | ✅ | Signature verification is a pure function of (document bytes, signature bytes, certificate) — testable with a fixture CA: generate a throwaway root, issue a leaf, sign a 5 KB PDF, assert verify passes; then flip one byte of the document and assert it fails. The tests that actually matter are the ones DocuSign's domain requires and that unit tests usually skip: a certificate that expired *after* signing must still verify (fixed clock at the RFC 3161 timestamp, not `Instant.now()`), and a certificate revoked *before* signing must fail. The 60-second CRL refresh window is testable by injecting the Redis `revoked_serials` set directly. The state machine's 5 statuses × 5 transitions is a 25-cell truth table — exhaustively unit-testable with no infrastructure. |
+| **Usability** | ✅ | For a DocuSign sender chasing a 3-signer NDA, the API answers "who is blocking this?" in one call: `GET /v1/documents/{id}` returns every signer's status, and `POST /sign` returns `next_signer` so the sender's CRM can send the nudge without polling. Errors are specific enough to act on — `403` means "not your turn in the sequential order" (wait), `409` means "you already signed" (safe to ignore, the retry succeeded). At 50K documents/day, that distinction is the difference between a support ticket and a self-service resolution. |
+| **Extensibility** | ✅ | `signing_order` is per-document data, not code, so DocuSign's parallel-signing and sequential-signing products share one code path. The state machine's `VALID_TRANSITIONS` map is where new product features land: adding DocuSign's real-world `EXPIRED → PENDING` re-send and legal-hold freeze is a map entry plus a timer, not a schema migration. `audit_signature_events.action` is an open string, so a new event type (`ENVELOPE_CORRECTED`, `SEALED`) appends to the 1M events/day stream without breaking the `GET /audit` contract that customers' compliance integrations depend on. |
+| **Security** | ✅ | The 60-second CRL refresh window is the sharpest security trade-off in the design and should be named as a number: an employee terminated at 14:00:00 can still produce a valid signature until 14:01:00. For DocuSign that window is the difference between a clean offboarding and a signed contract the customer must litigate to void — so the answer is 60s for commercial signing, 10s for regulated financial customers, and OCSP-stapled hard checks for the handful of tenants who pay for it. Layered underneath: chain validation to a trusted root (not just "the cert is in our table"), private keys in a FIPS 140-2 Level 3 HSM, `tenant_id` on every query so customer A never reads customer B's envelopes, and a DB trigger making the audit trail immutable to the application, a bad migration, and a malicious DBA alike. |
+| **Availability** | ✅ | The 99.9% SLO (≈9 hours/year) is spent where it matters: signing must stay up, delivery need not be instant. Kafka is what makes that true — a dead customer webhook endpoint parks messages in a topic instead of parking 200 request threads (Section 6 Stage 1's breaking point, where one unresponsive endpoint capped the whole service at 6.6 sig/sec). Redis is a cache, never a dependency: a cold cert cache costs one 10–20ms Postgres read per signature, so at 35 sig/sec a full Redis outage degrades P99 by ~20ms rather than failing signings. What is *not* survivable is HSM loss — no signing at all — so it's active-active across two regions, because "DocuSign is down" during a quarter-end contract rush is the incident that reaches the customer's CEO. |
+| **Scalability** | ✅ | 35 sig/sec peak is small; the growth problem is storage, not throughput. At 550 GB/year the audit table passes ~1 TB around year 2, and the trigger for sharding by `customer_id` is when its three composite indexes stop fitting in RAM — not the raw table size. Sharding by customer is the natural cut because every query is already tenant-scoped and it doubles as GDPR data residency (EU tenants on EU shards). The audit read path stays O(log N + K) via `idx_doc_audit (document_id, event_timestamp)`, which is what keeps a 7-year eDiscovery pull on one envelope sub-second even as the global table reaches 5.5 TB by year 10. |
+| **Observability & Traceability** | ✅ | Two distinct needs, deliberately not conflated. *Operational:* `X-Request-ID` propagated through gateway → signature service → Kafka → webhook service, so "why did this envelope's webhook arrive 40 minutes late" is one trace query. *Legal:* the audit trail is the product, not telemetry — it is queried by compliance officers under subpoena, so it lives in Postgres with an immutability trigger and a 7-year retention, never in a log aggregator with a 30-day window. The alerts that matter are domain-specific: signature verification failure rate above baseline (a tenant's integration is signing with a stale certificate), CRL refresh age > 120s (the revocation window has silently doubled), and any `UPDATE`/`DELETE` attempt caught by the audit trigger (which should be exactly zero, forever — a single occurrence is a security incident, not a bug). |
 
 ---
 
@@ -1213,6 +1335,7 @@ DocuSign's embedded signing flow is a specific design question interviewers prob
 
 | Date | Change |
 |---|---|
+| Aug 2026 | **Audit pass — long-term validity gap closed + PKI correctness fixes.** (1) **The big one: `verifySignature()` checked `userCert.isExpired()` against wall-clock time on the verification path.** Since signing certificates live 1–3 years and signed contracts are evidence for 7+, that code marks every legitimate signature invalid the day the signer's cert expires. Split into two paths with the distinction stated explicitly: signing-time validation (cert must be valid *now*) vs `verifyArchivedSignature()` (validity evaluated *as of the RFC 3161 timestamp*, against the revocation data archived at signing). (2) **Certificate chain validation added** — the original code looked the cert up and read its public key without ever verifying the issuer chain, `basicConstraints`, or `keyUsage`; a self-signed cert with subject `CN=John Doe` would have verified perfectly. (3) **Section 11 item 9 added — long-term validity (PAdES-LTV/LTA):** the four artifacts that must be archived at signing time (timestamp token, full chain, revocation snapshot, renewed document timestamps), the overlapping renewal chain with a Picture + Invariant diagram, the DSS dictionary, and the eIDAS B-T / B-LTA levels. Corresponding columns added to `audit_signature_events`. (4) **Trade-off 1 math corrected:** claimed "1B events/year × 256 bytes = 256 TB" (off by 1000× — it's ~93 GB) and "550 GB/year vs 5.5 TB/year", which contradicted Section 13's own correct figure; rewritten around the real cost (row width, index bloat, page density) and the real answer (bytes belong in the PAdES PDF in S3, not in the hot audit table). (5) **Section 4 + Mistake 3 fixed:** "at 5.5 TB/year" was the 10-year total, not annual; the sharding trigger is now ~1 TB around year 2 when the audit indexes stop fitting in RAM. (6) **DDL fixed:** `documents` and Deep Dive 2's `audit_signature_events` each declared `tenant_id` twice (would not create), and every table used MySQL's inline `INDEX ... (...)` clause inside `CREATE TABLE`, which does not parse on Postgres — all converted to `CREATE INDEX`. (7) **Stage 1 breaking point 1 quantified:** thread-pool exhaustion math (200 threads / 30s timeout = one dead customer endpoint caps the entire service at 6.6 sig/sec, 19% of peak) replacing "response is blocked or times out". (8) **Named the `400` triggers** on `POST /sign` and noted the 422-vs-400 defence. (9) **Tier-1 probe made cryptographically precise** — added the hash-then-sign rationale and the correction that RSA signing is not "encrypting the hash" (padding: PKCS#1 v1.5 / PSS; ECDSA involves no encryption at all). (10) **Mistake 4 added** (signature validity tied to certificate validity). (11) **Section 14 rewritten** — all 7 cells were boilerplate with no numbers; each now names a figure from Section 4 (35 sig/sec, 1M events/day, 550 GB/year, 60s CRL window, 200-thread pool) and a concrete DocuSign scenario (terminated-employee revocation window, quarter-end signing rush, 7-year eDiscovery pull, subpoena response). |
 | June 24, 2026 | **D1-digital-signature.md created.** Full 15-section solution framework for Mixed A+B interview type. Covers: PKI infrastructure (cert management, signature verification), audit trail immutability (append-only + DB triggers), multi-party signing state machine (sequential + parallel), GDPR/compliance angles, and DocuSign-specific depth (non-repudiation guarantees). Scale: 1M users, 35 sig/sec peak. Prerequisite: `13-security-pki.md`. |
 | Jul 4, 2026 | **4 new Q&As added to Section 12.** (1) **Certificate revocation check latency** — OCSP is 50–200ms (unusable on critical path); CRL cached as Redis HashSet, refreshed every 60s; O(1) `SISMEMBER` check under 1ms; 60-second revocation window is explicit trade-off; (2) **Temporal as alternative to custom state machine** — custom FSM works for MVP at 35 sig/sec; Temporal handles expiry timers, escalation, conditional routing, and legal hold natively with full execution history; migration decision: Temporal at DocuSign's actual workflow complexity; (3) **UTC timestamp strategy for multi-jurisdiction legal compliance** — `TIMESTAMP WITH TIME ZONE` in Postgres always stores UTC; log user's declared timezone alongside UTC; court-presentable via UTC + timezone derivation. |
 | Jul 5, 2026 | **Section 6 restructured into 2-stage progressive HLD.** Stage 1 (monolith + direct DB) — identifies two breaking points: sync webhook couples external system availability to signing success; uncached cert lookup hits DB on every sign request. Stage 2 (service split + Redis + Kafka) — cert cache in Redis (sub-ms CRL check + cert PEM TTL); Kafka decouples webhook delivery (signing returns immediately after publish); PKI infrastructure separated. Four decision tables added: key management (Hosted CA ✅ vs BYOK ❌ vs Hybrid ⚠️), audit trail immutability (DB trigger ✅ vs application-only ❌ vs blockchain ❌), signing workflow (state machine ✅ vs set ❌ vs event-sourced ⚠️), webhook delivery (Kafka ✅ vs Redis pub/sub ❌ vs sync HTTP ❌). Verdict alignment verified: all Section 6 table verdicts match Section 7 deep dive choices (Hosted CA ✅, DB trigger ✅, state machine ✅). |

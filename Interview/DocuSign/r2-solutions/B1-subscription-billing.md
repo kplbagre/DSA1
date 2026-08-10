@@ -147,7 +147,7 @@ Then immediately go to Section 2. Do NOT start drawing.
 - Organizations can subscribe to a plan (Individual, Business Pro, Business Premium, Enterprise)
 - Subscriptions renew automatically at the end of each billing cycle (monthly or annual)
 - Users can upgrade or downgrade their plan; proration applied on next invoice
-- Failed payments enter a grace period (`PAST_DUE`) with up to 3 retry attempts over 7 days before cancellation
+- Failed payments enter a grace period (`PAST_DUE`) with up to 4 retry attempts over 7 days before cancellation
 - Organizations can cancel a subscription; access continues until end of current period
 - Downstream systems (entitlement, notification, analytics) are notified on every subscription lifecycle event
 - Payment API must be idempotent — retrying a failed payment never double-charges
@@ -160,7 +160,7 @@ Then immediately go to Section 2. Do NOT start drawing.
 
 ### Non-Functional Requirements
 
-- **Scale:** DocuSign has ~1.6M paying customers; ~100K renewals/day = ~1.2 writes/sec (renewal) + read-heavy entitlement checks (~150 req/sec peak)
+- **Scale:** ~1.6M paying organizations; ~53K renewals/day steady state (0.6 writes/sec), ~100K on the 1st-of-month peak day, jitter-spread into a 60-minute window = ~28 charges/sec peak; read-heavy entitlement checks at ~1,850 req/sec average and ~5,500 req/sec peak (these are the Section 4 numbers — state them consistently)
 - **Latency:** POST /payments P99 < 2s (payment gateway round-trip dominates); GET /subscriptions P99 < 50ms
 - **Availability:** 99.9% SLO — billing must be highly available; a billing outage means no new sign-ups and no renewals
 - **Consistency:** Eventual consistency acceptable — entitlement granted within 500ms of payment success (Kafka consumer lag)
@@ -197,24 +197,32 @@ Read your Section 3 FR list. Each "organizations can X" or "system must Y" is te
 | GET | /v1/subscriptions/{id} | JWT Bearer | — | `{id, status, plan, tenant_id, current_period_end}` | 200, 404 |
 | PUT | /v1/subscriptions/{id}/plan | JWT Bearer (admin) | `{new_plan_id}` | `{subscription_id, old_plan, new_plan, proration_credit_cents}` | 200, 400, 409 |
 | DELETE | /v1/subscriptions/{id} | JWT Bearer (admin) | — | `{subscription_id, status: "CANCELLED", access_until}` | 200, 404 |
-| POST | /v1/payments | JWT Bearer + `Idempotency-Key` header | `{subscription_id, amount_cents, currency_code}` | `{payment_id, charge_id, status}` | 200, 400, 402, 409 |
+| POST | /v1/payments | JWT Bearer + `Idempotency-Key` header | `{subscription_id, amount_cents, currency_code}` | `{payment_id, charge_id, status}` | 201, 200, 400, 402, 409 |
 | GET | /v1/subscriptions/{id}/payments | JWT Bearer | — | `[{payment_id, amount, status, created_at}]` (paginated) | 200, 404 |
+| POST | /v1/webhooks/stripe | `Stripe-Signature` HMAC (no JWT — Stripe is not a logged-in user) | Stripe Event object | `{received: true}` | 200, 400 |
 
 ---
 
 ### 🔍 Endpoint Stories — Why Each One Exists
 
-**`POST /v1/subscriptions`** — Entry point for a new customer. The `409` matters: if an org already has an active subscription, a second POST must conflict, not silently create a duplicate. Without it you'd have two active subscriptions for one org with no way to enforce the one-per-org rule.
+**`POST /v1/subscriptions`** — Entry point for a new customer. The `409` matters: if an org already has an active subscription, a second POST must conflict, not silently create a duplicate — this is the `idx_subscriptions_org` partial unique index surfacing as an HTTP code. Without it you'd have two active subscriptions for one org with no way to enforce the one-per-org rule. The `400` fires on exactly two conditions: `plan_id` does not exist in `subscription_plans` (or has `is_active = false`), or `billing_cycle` is not one of `MONTHLY`/`ANNUAL`.
 
 **`GET /v1/subscriptions/{id}`** — This is the entitlement check endpoint. It's called 5,500 times/sec at peak — every DocuSign API request verifies the org has an active plan. Don't let the simplicity fool you. The interviewer will ask "how does this scale?" Answer: Redis cache, TTL, not a DB read. This is the highest-traffic endpoint in the system.
 
-**`PUT /v1/subscriptions/{id}/plan`** — Plan upgrade/downgrade. The response returns `proration_credit_cents` so the UI can show the customer exactly what they'll pay next cycle before they confirm. If you return only a bare `200`, the customer has no visibility into the financial impact — bad UX and a likely follow-up probe. The `409` handles the race: two org admins trying to change the plan simultaneously.
+**`PUT /v1/subscriptions/{id}/plan`** — Plan upgrade/downgrade. The response returns `proration_credit_cents` so the UI can show the customer exactly what they'll pay next cycle before they confirm. If you return only a bare `200`, the customer has no visibility into the financial impact — bad UX and a likely follow-up probe. The `409` has two named triggers: the subscription is not in `ACTIVE` state (you cannot change the plan of a `CANCELLED` or `PAST_DUE` subscription), or a concurrent plan change already bumped the row version — two org admins clicking Upgrade at the same time. The `400` fires when `new_plan_id` equals the current `plan_id` (a no-op change is a client bug, not a success).
 
-**`DELETE /v1/subscriptions/{id}`** — Cancel. Returns `access_until` because the subscription isn't destroyed immediately — the org retains access until period end. The interviewer will ask "why not `204`?" Because the caller needs to know when access ends to update the UI and communicate to the customer.
+**`DELETE /v1/subscriptions/{id}`** — Cancel. Returns `access_until` because the subscription isn't destroyed immediately — the org retains access until period end. The interviewer will ask "why not `204`?" Because the caller needs to know when access ends to update the UI and communicate to the customer. The `404` trigger is specifically a subscription_id that does not belong to the caller's tenant — return `404`, not `403`, so you don't leak the existence of another tenant's subscription ID.
 
-**`POST /v1/payments`** — The most critical endpoint. Charges Stripe. The `Idempotency-Key` header is the entire reason this is safe to retry. The `402` status code (Payment Required) is specifically for "gateway declined your card" — distinct from `400` (malformed request) and `500` (system failure). Name this distinction; most candidates collapse card declines into a 400 and lose a point.
+**`POST /v1/payments`** — The most critical endpoint. Charges Stripe. The `Idempotency-Key` header is the entire reason this is safe to retry. Four codes, four distinct triggers, and naming them precisely is the point:
+- `201` — first successful charge; a new `payments` row was created.
+- `200` — idempotent replay: same `Idempotency-Key`, same body, cached response returned, **no** second Stripe call. Distinguishing 201 from 200 lets the client tell "I created this" from "this already existed."
+- `402` (Payment Required) — Stripe declined the card (`insufficient_funds`, `card_expired`). This is a *valid business outcome*, not a system error: distinct from `400` and `500`. Most candidates collapse card declines into a 400 and lose a point.
+- `400` — the request is malformed: `amount_cents` is absent/non-integer/negative, `currency_code` isn't a valid ISO-4217 code, or the `Idempotency-Key` header is missing entirely.
+- `409` — the same `Idempotency-Key` was replayed with a **different** request body (e.g., a different `amount_cents`). That is a client bug, and silently returning the cached response would hide a real defect. Stripe itself behaves this way.
 
-**`GET /v1/subscriptions/{id}/payments`** — Payment history, paginated. Cursor-based, not offset — an org could have years of payment records and `OFFSET 10000` scans 10K rows on every page. The nested path `/subscriptions/{id}/payments` makes ownership clear: these payments belong to this subscription.
+**`GET /v1/subscriptions/{id}/payments`** — Payment history, paginated. Cursor-based, not offset — an org could have years of payment records and `OFFSET 10000` scans 10K rows on every page. The nested path `/subscriptions/{id}/payments` makes ownership clear: these payments belong to this subscription. `404` trigger: same tenant-scoping rule as DELETE.
+
+**`POST /v1/webhooks/stripe`** — The endpoint most candidates forget, and the one a Commerce Backend interviewer will absolutely ask about. Stripe is the *source of truth for money*, and it tells you about money asynchronously: a 3-D Secure authentication completes minutes later, a bank reverses an ACH debit days later, a dispute opens weeks later. None of those events come back on your original `POST /v1/payments` response. Three non-obvious properties: (1) auth is HMAC signature verification over the raw request body — so this route must read the **raw bytes**, not a parsed-and-re-serialized JSON body, or the signature never matches; (2) `400` has exactly one trigger — signature verification failed or the timestamp is outside the 5-minute tolerance window (replay attack); (3) you return `200` **before** doing any work — persist the raw event and process it asynchronously, because Stripe retries any non-2xx for up to 3 days and a slow handler turns into a retry storm. See Deep Dive 3.
 
 ---
 
@@ -239,12 +247,42 @@ Read your Section 3 FR list. Each "organizations can X" or "system must Y" is te
 }
 ```
 
-**Proration formula (plan upgrade):**
+**Proration — upgrade and downgrade are NOT symmetric.** This is the single most probed piece of billing math, so know both directions and the rounding rule.
+
 ```
-proration_credit = old_plan_price × (days_remaining / days_in_cycle)
-new_invoice = new_plan_price - proration_credit
+Let  r = days_remaining / days_in_cycle          (the unused fraction of the paid period)
+     unused_credit  = round(old_plan_cents × r)  (what the customer already paid for and won't use)
+     new_period_fee = round(new_plan_cents × r)  (cost of the new plan for the rest of the period)
+
+UPGRADE (new_plan > old_plan) — takes effect IMMEDIATELY:
+     delta_due_now = new_period_fee - unused_credit
+     Next invoice = full new_plan_cents.
+
+DOWNGRADE (new_plan < old_plan) — takes effect at PERIOD END:
+     Nothing is charged or refunded now. `pending_plan_id` is set; the renewal
+     job swaps the plan at current_period_end. delta = 0 for the current period.
 ```
-This credit is applied on the next invoice, not as an immediate refund. Simpler to implement; matches Stripe's default behavior.
+
+**Worked example — upgrade, Business Pro ($25/mo) → Business Premium ($50/mo), day 15 of a 30-day cycle:**
+
+```
+r              = 15 / 30                     = 0.5
+unused_credit  = round(2500 × 0.5)           = 1250 cents  ($12.50)
+new_period_fee = round(5000 × 0.5)           = 2500 cents  ($25.00)
+delta_due_now  = 2500 - 1250                = 1250 cents  ($12.50)
+
+Sanity check: customer pays 2500 (already) + 1250 (now) = 3750 cents for the
+period = 15 days of Pro + 15 days of Premium. The math balances.
+Next invoice on day 31 = 5000 cents, full price.
+```
+
+**Why downgrades wait for period end:** an immediate downgrade would owe the customer `unused_credit - new_period_fee` — a *negative* invoice. You cannot invoice a negative amount, and refunding to the card reopens PCI/chargeback surface for a customer who is still active. Deferring to `current_period_end` makes the delta exactly zero. This is also Stripe's default (`proration_behavior: none` on downgrade).
+
+**Rounding and currency correctness (say this out loud — it is a free senior signal):**
+- Money is **integer minor units** (`amount_cents INT`) everywhere — never `float`/`double`. `0.1 + 0.2 != 0.3` in IEEE-754, and a half-cent error across 1.6M subscriptions is a real reconciliation break.
+- Round **once, at the end**, half-up, and always in the invoice's currency. Never round intermediate factors like `r`.
+- Currencies have different exponents: USD/EUR = 2 decimals, JPY/KRW = 0, KWD/BHD = 3. Store the exponent on the currency, not in code, or a ¥1,000 plan silently becomes ¥10.00.
+- The residual cent from a proration split is assigned to the **invoice line item**, not spread — so the sum of line items always equals the invoice total exactly.
 
 **Pagination on /payments:** Cursor-based (see C3 solution). Cursor encodes `(created_at, payment_id)`. Avoids OFFSET performance degradation on large payment histories.
 
@@ -261,10 +299,14 @@ Assumptions:
   - Renewals peak: first 3 days of month (DocuSign billing cycles cluster on the 1st)
 
 Traffic — write path:
-  - Renewals/day (steady state): 1.6M ÷ 30 = ~53K/day = ~0.6/sec
-  - Renewals peak (3-day cluster): 53K × 3 = 159K in 3 days, spread over 8 working hours = ~5.5/sec peak
+  - Renewals/day (steady state): 1.6M ÷ 30 = ~53K/day → 53,000 ÷ 86,400 = ~0.6/sec
+  - Peak day: the 1st of the month is the most popular billing anchor date — assume ~2× the
+      uniform average renews that day = ~100K renewals
+  - The renewal scheduler jitters those 100K charges across a 60-minute window (Deep Dive 4):
+      100,000 ÷ 3,600 = ~28 charges/sec for that hour  ← this is the design peak
   - New subscription creates: assume 5K/day = 0.06/sec (negligible)
-  - Payment API writes: ~0.6/sec steady, ~6/sec peak (safe for a single Postgres writer)
+  - Payment API DB writes: ~0.6/sec steady, ~28/sec peak; each charge writes 2 rows
+      (payments + outbox) plus 1 subscription UPDATE = ~85 row-writes/sec peak
 
 Traffic — read path:
   - Entitlement checks (every API call to DocuSign checks subscription status): 1.6M orgs × 100 API calls/day = 160M reads/day = 1,850/sec
@@ -278,11 +320,12 @@ Storage:
   - Audit log: 1.6M × 12 events/year × 2 KB = 38 GB/year — archive to S3 after 90 days
 
 Bandwidth:
-  - Inbound (payment requests): 6 req/sec × 2 KB = 12 KB/sec — negligible
+  - Inbound (payment requests): 28 req/sec × 2 KB = 56 KB/sec — negligible
   - Outbound (entitlement reads): 5,500 req/sec × 1 KB = 5.5 MB/sec — handled by cache hit, not DB
 
 Key conclusions:
-  - "At 6 writes/sec peak, a single Postgres primary handles writes comfortably — no sharding needed."
+  - "At ~28 charges/sec peak (~85 row-writes/sec), a single Postgres primary — good for roughly
+     5,000 writes/sec — is at under 2% of write capacity. No sharding needed."
   - "At 5,500 entitlement reads/sec, Redis cache is mandatory. DB cannot serve this volume raw."
   - "Outbox table stays tiny — processed rows deleted, negligible storage impact."
   - "Storage is not a concern at DocuSign's scale — the complexity is in correctness, not capacity."
@@ -333,17 +376,29 @@ STAGE 1 — Sync REST, No Idempotency  (MVP, single-service)
   [Postgres]
 
 
-  BREAKING POINT 1: Client times out at step 1 → retries POST /payments
-    → BillingService charges Stripe AGAIN → double-charge.
-    No idempotency key = real money lost.
+  BREAKING POINT 1: Stage 1 breaks at ~28 charges/sec (the 1st-of-month peak)
+    the moment the Stripe round-trip exceeds the client's socket timeout.
+    Exhausted resource: the client's HTTP read timeout, not a server resource —
+    Stripe P99 is ~1.8s and clients typically time out at 2s. Assume a
+    conservative 0.5% timeout rate on 100K peak-day charges → ~500 client
+    retries → 500 duplicate Stripe charges in one day.
+    Observable symptom: 500 rows in `payments` with the same subscription_id and
+    two distinct stripe_charge_id values within 5 minutes; Stripe dashboard shows
+    a duplicate-charge dispute rate spike. No idempotency key = real money lost.
+    Why Stage 2 is needed: the retry must be made safe, not made rarer.
 
-  BREAKING POINT 2: Entitlement service is down at step 3
-    → Payment succeeds, status='ACTIVE', but user can't access DocuSign.
-    BillingService has no rollback for a completed Stripe charge.
-    Support ticket volume spikes; manual intervention required.
+  BREAKING POINT 2: Entitlement service is down at step 3.
+    Exhausted resource: none — this is a correctness failure, not a capacity one.
+    At 28 charges/sec, a 60-second entitlement outage strands ~1,700 paid-but-
+    unentitled organizations with no compensating action available (the Stripe
+    charge cannot be rolled back by a DB rollback).
+    Observable symptom: `subscriptions.status='ACTIVE'` while the entitlement
+    service returns 403 for the same tenant; support ticket volume spikes.
 
   BREAKING POINT 3: Adding a fourth downstream (analytics) requires
     touching BillingService code → OCP (Open/Closed Principle) violated.
+    Observable symptom: payment API P99 = sum of all downstream latencies —
+    at 4 downstreams averaging 80ms each, P99 grows 320ms per added consumer.
 
 ══════════════════════════════════════════════════════════════════════
 STAGE 2 — Idempotency Key + State Machine + Sync Downstream
@@ -369,16 +424,20 @@ STAGE 2 — Idempotency Key + State Machine + Sync Downstream
 
   State machine transitions:
     PENDING ──[payment_succeeded]──► ACTIVE
+    ACTIVE  ──[payment_succeeded]──► ACTIVE    ← renewal self-transition.
+                                                 Forgetting this row makes EVERY
+                                                 monthly renewal throw.
     ACTIVE  ──[payment_failed]────► PAST_DUE
+    PAST_DUE──[payment_failed]────► PAST_DUE   ← retry #2..#4 also fail
     PAST_DUE──[payment_succeeded]──► ACTIVE
     PAST_DUE──[retries_exhausted]──► CANCELLED
     ACTIVE  ──[cancelled]──────────► CANCELLED
-    ACTIVE  ──[upgraded]───────────► ACTIVE (new plan_id)
+    ACTIVE  ──[plan_changed]───────► ACTIVE (new plan_id)
 
   > 📖 Full: `SystemDesignConcepts/Production-Grade/System-Design-Patterns/49-state-machines-workflows.md`
 
-  BREAKING POINT 1: Idempotency is now safe — duplicate retries
-    hit Redis and return the same 200. But state is still correct.
+  FIXED IN STAGE 2: Idempotency is now safe — duplicate retries
+    hit Redis and return the same 200. State stays correct.
 
   BREAKING POINT 2: Entitlement service 503 at step 5:
     Payment succeeded (Stripe charged), DB committed, but HTTP call
@@ -504,7 +563,7 @@ STAGE 3 — Outbox Pattern + Kafka Fanout  (Production design)
 
 ## Section 7 — 🔬 Core Component Deep Dives (Minutes 20–38)
 
-Pick these two — they are the riskiest components and the ones DocuSign interviewers push on most.
+Pick Dives 1–3 — they are the riskiest components and the ones DocuSign interviewers push on most. Dive 1 makes the *synchronous* money path safe; Dive 3 makes the *asynchronous* money path safe. Skipping Dive 3 is the most common way to look like you've only ever read about Stripe rather than integrated it.
 
 ---
 
@@ -615,12 +674,15 @@ public void processOutbox() {
     List<OutboxEvent> pending = outboxRepository.findUnprocessed(100);
     for (OutboxEvent event : pending) {
         try {
-            // Publish to Kafka — at-least-once (Kafka producer acks=all)
+            // Publish to Kafka — at-least-once (Kafka producer acks=all).
+            // Partition key is the aggregate id (subscription_id) so all events for
+            // one subscription land on one partition and stay ordered.
+            // .get(...) blocks until the broker acks.
             kafkaTemplate.send(
                 "subscription-events",
-                event.getAggregateId().toString(),    // partition key: subscription_id
+                event.getAggregateId().toString(),
                 event.getPayload()
-            ).get(5, TimeUnit.SECONDS);               // block for ack
+            ).get(5, TimeUnit.SECONDS);
 
             // Mark processed only after successful Kafka ack
             outboxRepository.markProcessed(event.getId());
@@ -662,10 +724,135 @@ public void onSubscriptionEvent(ConsumerRecord<String, String> record) {
 
 ---
 
-### Deep Dive 3 (if time permits): Renewal Scheduler
+### Deep Dive 3: Stripe Webhook Ingestion — Duplicates and Out-of-Order Events
+
+**Why this is the most critical component:**
+`POST /v1/payments` is only *half* of the money path. The other half is Stripe telling you what happened after the fact — and Stripe's delivery contract is **at-least-once, with no ordering guarantee**. Two independent failure modes fall out of that, and both silently corrupt subscription state. Candidates who only handle the synchronous charge path get pushed here and have nothing to say.
+
+**Failure mode A — duplicates.** Stripe retries any webhook that doesn't get a 2xx within 20 seconds, with backoff, for up to 3 days. It also legitimately re-sends after a delivery-endpoint outage. So `invoice.paid` for the same invoice will arrive twice. If your handler is `subscription.retryCount = 0; grantEntitlement()`, running twice is harmless — but `ledger.append(+$50)` running twice books $100 of revenue that does not exist.
+
+**Failure mode B — out-of-order.** This is the subtler one and it is the classic DocuSign Commerce probe. Stripe fans webhooks out from multiple workers; `invoice.paid` and `customer.subscription.updated` for the *same* plan upgrade are independent deliveries and can arrive in either order. The damaging sequence:
+
+### 🎨 Visual — the webhook out-of-order problem and how a version guard fixes it
+
+```
+Real order of truth at Stripe (what actually happened):
+   t0  customer.subscription.updated   plan: Pro → Premium   (stripe seq 41)
+   t1  invoice.paid                    amount: $12.50 delta  (stripe seq 42)
+
+  ❌ NAIVE HANDLER — events arrive reversed over the network
+  ┌──────────────────────────────────────────────────────────────────┐
+  │  t0+80ms   invoice.paid  arrives FIRST                           │
+  │              handler: status = ACTIVE, entitle(plan = Pro)       │
+  │                                        └─ reads the OLD plan ─┐  │
+  │  t0+310ms  subscription.updated arrives SECOND                │  │
+  │              handler: plan_id = Premium                       │  │
+  │                                                              ▼  │
+  │  FINAL STATE:  subscriptions.plan_id = Premium  ✓               │
+  │                entitlement cache      = Pro     ✗  ← DIVERGED   │
+  │  Customer paid for Premium, is entitled to Pro. No error logged. │
+  └──────────────────────────────────────────────────────────────────┘
+
+  ✅ VERSION-GUARDED HANDLER — apply only if the event is not stale
+  ┌──────────────────────────────────────────────────────────────────┐
+  │  Every webhook carries Stripe's object version. Guard the write: │
+  │                                                                  │
+  │    UPDATE subscriptions                                          │
+  │       SET plan_id = ?, status = ?, provider_version = ?          │
+  │     WHERE id = ? AND provider_version < ?                        │
+  │                                                                  │
+  │  t0+80ms   invoice.paid (v42)  → 42 > 0   → APPLIED, version=42  │
+  │  t0+310ms  sub.updated  (v41)  → 41 < 42  → 0 rows, DROPPED      │
+  │                                   (stale — re-read the object    │
+  │                                    from Stripe to reconcile)     │
+  └──────────────────────────────────────────────────────────────────┘
+
+KEY INVARIANT:
+   A webhook handler is a CONDITIONAL write, never an unconditional one.
+   Dedup on event.id makes it safe to run twice; the provider_version
+   guard makes it safe to run in the WRONG ORDER. You need both —
+   idempotency alone does not buy you ordering.
+```
+
+**The three-layer defence (say all three out loud):**
+
+| Layer | Mechanism | What it protects against |
+|---|---|---|
+| Authenticity | HMAC verify `Stripe-Signature` over the **raw** body, reject if timestamp is >5 min old | Forged webhooks minting free Enterprise entitlements |
+| Duplicates | `INSERT INTO provider_events(event_id) ` with a UNIQUE constraint; unique violation → return 200 and stop | Double-booked revenue on Stripe retries |
+| Ordering | `WHERE provider_version < :incoming_version` on every state write | Silent plan/entitlement divergence |
+
+**Implementation sketch:**
+
+```java
+/**
+ * Webhook entry point. Returns 200 as fast as possible, then processes async.
+ * Stripe retries any non-2xx for up to 3 days — a slow handler becomes a retry storm.
+ */
+@PostMapping(value = "/v1/webhooks/stripe", consumes = "application/json")
+public ResponseEntity<String> handleStripeWebhook(
+        @RequestBody byte[] rawBody,
+        @RequestHeader("Stripe-Signature") String signature) {
+
+    // Layer 1 — authenticity. MUST use the raw bytes; a re-serialized body breaks the HMAC.
+    StripeEvent event;
+    try {
+        event = signatureVerifier.verifyAndParse(rawBody, signature, webhookSecret);
+    } catch (SignatureVerificationException e) {
+        // Only trigger for a 400 on this route: bad HMAC or timestamp outside tolerance
+        return ResponseEntity.badRequest().body("invalid signature");
+    }
+
+    // Layer 2 — dedup. UNIQUE(event_id) makes this the atomic "have I seen you?" check.
+    boolean firstTimeSeen = providerEventRepo.insertIfAbsent(event.getId(), rawBody);
+    if (!firstTimeSeen) {
+        // Stripe retry of an event already durably stored — acknowledge, do nothing
+        return ResponseEntity.ok("{\"received\":true}");
+    }
+
+    // Durable, so acknowledge now and let a worker apply it
+    webhookQueue.enqueue(event.getId());
+    return ResponseEntity.ok("{\"received\":true}");
+}
+```
+
+```java
+/**
+ * Applied by the async worker. Layer 3 — the version guard.
+ * The UPDATE is conditional, so a stale (out-of-order) event affects 0 rows.
+ */
+@Transactional
+public void applySubscriptionUpdated(StripeEvent event) {
+    UUID subscriptionId = resolveLocalId(event.getObject().getId());
+    long incomingVersion = event.getObject().getVersion();
+
+    int rowsAffected = subscriptionRepo.updateIfNewer(
+        subscriptionId,
+        event.getObject().getPlanId(),
+        event.getObject().getStatus(),
+        incomingVersion
+    );
+
+    if (rowsAffected == 0) {
+        // Stale event: a newer version already landed. Do NOT apply it.
+        // Re-read the authoritative object from Stripe and reconcile once.
+        reconciler.scheduleReconcile(subscriptionId);
+        return;
+    }
+
+    // Only a winning write emits a downstream event — otherwise consumers flap
+    outboxRepo.insert(subscriptionId, "SUBSCRIPTION_PLAN_CHANGED", buildPayload(event));
+}
+```
+
+**The reconciliation backstop (name this — it is what separates a designed system from a hopeful one):** webhooks are best-effort even with all three layers, so a nightly job pages through Stripe's `subscriptions.list` and diffs `(status, plan_id, current_period_end)` against the local table. Any drift is logged as a `BILLING_DRIFT` metric and auto-corrected from Stripe, because **Stripe is the source of truth for money and we are the source of truth for entitlement**. At 1.6M subscriptions this is a ~30-minute paged job, run off a read replica.
+
+---
+
+### Deep Dive 4 (if time permits): Renewal Scheduler
 
 **Why this matters:**
-100K renewals/day cannot run as a cron job that fires at midnight and tries to charge 100K subscriptions simultaneously. That's a thundering herd — Stripe rate limits, DB lock contention, and memory pressure all spike at once.
+The ~100K renewals that land on the 1st-of-month peak day cannot run as a cron job that fires at midnight and tries to charge 100K subscriptions simultaneously. That's a thundering herd — Stripe rate limits, DB lock contention, and memory pressure all spike at once.
 
 **Decision: Distributed scheduler with jitter + queue-based execution**
 
@@ -689,7 +876,7 @@ public void onSubscriptionEvent(ConsumerRecord<String, String> record) {
 
 > 📖 Full: `SystemDesignConcepts/Production-Grade/System-Design-Patterns/47-job-scheduling-at-scale.md`
 
-**Why random jitter:** spreading 100K renewals over 60 minutes = ~27/sec instead of 100K/second spike. Stripe's API rate limit (100 req/sec per account) is not breached.
+**Why random jitter:** spreading 100K renewals over 60 minutes = ~28/sec instead of a single-minute spike. Stripe's API rate limit (100 req/sec per account) is not breached, and Postgres sees ~85 row-writes/sec instead of a lock stampede on the `subscriptions` table.
 
 ---
 
@@ -731,6 +918,7 @@ CREATE TABLE subscriptions (
     cancelled_at        TIMESTAMPTZ,           -- NULL if not cancelled
     pending_plan_id     UUID REFERENCES subscription_plans(id), -- for period-end plan change
     retry_count         SMALLINT NOT NULL DEFAULT 0,
+    provider_version    BIGINT NOT NULL DEFAULT 0, -- Stripe object version; guards out-of-order webhooks
     last_charge_id      VARCHAR(100),          -- Stripe charge_id of last successful payment
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -795,6 +983,21 @@ CREATE TABLE outbox (
 CREATE INDEX idx_outbox_unprocessed
     ON outbox(created_at)
     WHERE processed_at IS NULL;               -- OutboxProcessor query: only unprocessed rows
+
+-- Inbound webhook log — the mirror image of `outbox`. Outbox = events we publish;
+-- provider_events = events we receive. Both exist for the same reason: exactly-once effect.
+CREATE TABLE provider_events (
+    event_id        VARCHAR(100) PRIMARY KEY,  -- Stripe's evt_... id; PK IS the dedup guard
+    event_type      VARCHAR(50) NOT NULL,      -- 'invoice.paid', 'customer.subscription.updated'
+    raw_payload     JSONB NOT NULL,            -- stored verbatim for replay and dispute forensics
+    received_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at    TIMESTAMPTZ,               -- NULL = queued; set after the handler applies it
+    outcome         VARCHAR(20)                -- 'APPLIED', 'DROPPED_STALE', 'FAILED'
+);
+
+CREATE INDEX idx_provider_events_unprocessed
+    ON provider_events(received_at)
+    WHERE processed_at IS NULL;
 ```
 
 ### Key Schema Decisions
@@ -803,6 +1006,9 @@ CREATE INDEX idx_outbox_unprocessed
 - **`status` CHECK constraint:** The DB enforces the valid set of states. The application state machine enforces transitions. Defense in depth — a bug that writes an invalid status fails at the DB layer.
 - **`pending_plan_id`:** Plan downgrade at period end. Renewal job reads `pending_plan_id`, applies the new plan at `current_period_end`, clears the column. Avoids complexity of immediate proration credits.
 - **`outbox.processed_at` partial index:** Only unprocessed rows appear in the OutboxProcessor query. As processed rows are cleaned up, the index stays tiny — no performance degradation over time.
+- **`provider_events.event_id` as the primary key:** Deduplication of Stripe webhook retries is not application logic — it's a primary-key constraint. A duplicate delivery raises a unique violation, which the handler translates into "already seen, return 200." Free, atomic, and impossible to forget.
+- **`subscriptions.provider_version`:** The out-of-order guard. Every webhook-driven write is `... WHERE provider_version < :incoming`, so a late-arriving stale event affects 0 rows instead of overwriting newer truth. See Deep Dive 3.
+- **Money is `INT` cents, never `NUMERIC` and never `FLOAT`:** `amount_cents` is integer minor units. Float would introduce IEEE-754 representation error into a financial record; `NUMERIC` is exact but invites accidental fractional-cent arithmetic. Integer cents makes the illegal state unrepresentable. Pair every amount with its `currency_code` in the same row — an amount without a currency is a bug waiting to happen.
 - **SQL, not NoSQL:** Subscription data is highly relational (org → subscription → payment → plan). Transactional correctness (ACID) is mandatory for billing. Postgres is the right choice; NoSQL would sacrifice the transaction guarantees we need for the outbox pattern.
 
 > 📖 Full: `SystemDesignConcepts/Foundations/Data-Fundamentals/12-data-modeling.md`
@@ -828,7 +1034,7 @@ CREATE INDEX idx_outbox_unprocessed
 ### Trade-off 3: Single Postgres Writer vs Sharded DB
 
 - **Chose:** Single Postgres primary with read replicas
-- **Gain:** Simpler operations; no cross-shard transaction complexity; no re-sharding risk; 6 writes/sec (steady state) is trivially within single Postgres primary capacity (can handle ~5,000 writes/sec)
+- **Gain:** Simpler operations; no cross-shard transaction complexity; no re-sharding risk; ~28 charges/sec on the 1st-of-month peak (~85 row-writes/sec) is under 2% of a single Postgres primary's ~5,000 writes/sec capacity
 - **Lose:** Single point of write failure (mitigated by RDS Multi-AZ automatic failover with ~30s RTO); no horizontal write scaling if DocuSign grows 100×
 - **Failure mode if wrong (premature sharding):** Proration transactions span plan table and subscription table — cross-shard transactions require distributed 2PC (two-phase commit), which reintroduces availability vs consistency trade-offs unnecessarily at this scale. **Business impact:** A mid-cycle plan upgrade (plan changes require prorated billing calculation across subscription + plan tables) fails due to 2PC coordinator timeout → customer is charged the wrong amount for the next billing cycle — for DocuSign this means an incorrect invoice goes to an enterprise customer's finance team, triggering a manual dispute process and eroding trust in the billing system.
 
@@ -870,14 +1076,40 @@ DocuSign's Commerce Backend team owns the subscription lifecycle for all paid eS
 Dunning (the process of systematically retrying failed payments before cancelling a subscription) is a first-class business concern at any SaaS company. Most candidates stop at "retry 3 times" — the full dunning lifecycle is:
 
 ```
-Day 0:   Payment fails → PAST_DUE → retry #1 immediately
-Day 3:   retry #2 (exponential backoff)
-Day 5:   retry #3
-Day 7:   retry #4 (final attempt) + warning email to org admin
+Day 0:   Payment fails → ACTIVE transitions to PAST_DUE → retry #1 immediately
+Day 1:   retry #2   (gap = 1 day)
+Day 3:   retry #3   (gap = 2 days)
+Day 7:   retry #4, final attempt (gap = 4 days) + warning email to org admin
 Day 8:   retries_exhausted → CANCELLED → access revoked → churn event published
+
+Gaps double: 1 → 2 → 4 days. THAT is what makes it exponential backoff.
+(A common bad answer is "Day 0/3/5/7" — gaps of 3/2/2 shrink, so calling
+ it exponential backoff is wrong and an interviewer who knows the pattern
+ will notice. Say the gaps out loud, not just the days.)
 ```
 
-**Implementation detail:** `retry_count` in the `subscriptions` table tracks attempts. Each retry is scheduled as a `renewal_jobs` row with its future `scheduled_at`. If a retry succeeds, the subscription reverts to `ACTIVE` and `retry_count` resets to 0. The dunning schedule is a configuration parameter (not hardcoded) — finance teams adjust it based on customer segment (enterprise gets longer grace periods).
+**Why the ladder grows rather than hammers:** the dominant decline reason is `insufficient_funds`, which resolves on the customer's payroll cycle — days, not minutes. Retrying every hour burns Stripe rate budget and, worse, some issuers treat repeated declines on the same card as a fraud signal and hard-block it. Growing gaps track the real-world event you're waiting for.
+
+**Implementation detail:** `retry_count` in the `subscriptions` table tracks attempts and increments on *every* failed attempt — note that the transition to `PAST_DUE` happens on the **first** failure, not on retry exhaustion; exhaustion is what moves `PAST_DUE → CANCELLED`. Each retry is scheduled as a `renewal_jobs` row with its future `scheduled_at`. If any retry succeeds, `PAST_DUE → ACTIVE` and `retry_count` resets to 0. The schedule is a configuration parameter (not hardcoded) — finance teams adjust it per customer segment (enterprise gets longer grace periods; the FR's "4 attempts over 7 days" is the default, not a law).
+
+**Invoice immutability + the credit-note pattern (a finalized invoice is never mutated):**
+
+An invoice moves `DRAFT → OPEN → PAID | VOID | UNCOLLECTIBLE`. Once it leaves `DRAFT` it is a **legal financial document** and every row on it is frozen. If the amount was wrong, you do *not* run `UPDATE invoices SET amount_cents = ...`. You issue a **credit note** — a separate, signed, negative-amount document that references the original invoice.
+
+```
+WRONG (what most candidates say):
+    UPDATE invoices SET amount_cents = 3750 WHERE id = 'inv_123';
+    → the $5,000 invoice the customer's AP department already filed
+      and paid against no longer exists. The audit trail is destroyed.
+      Under SOX this is a material weakness, not a bug.
+
+RIGHT:
+    invoices        inv_123   OPEN   5000 cents   (frozen forever)
+    credit_notes    cn_456    →inv_123   -1250 cents   reason='PRORATION_CREDIT'
+    Net owed = 5000 - 1250 = 3750 cents, and BOTH documents are retrievable.
+```
+
+Why this matters here specifically: the proration credit from Section 8 **is** a credit note. That is how a mid-cycle downgrade or a service-credit SLA refund is represented without touching a finalized invoice. Say it in one sentence: *"Finalized invoices are immutable; corrections are additive credit notes that reference the original."* That single sentence covers immutability, auditability, and the proration mechanism at once.
 
 **Revenue recognition (ASC 606 / deferred revenue):**
 
@@ -943,7 +1175,7 @@ For a subscription billing system, every financial event creates two ledger entr
 > Yes — at-least-once delivery is the outbox guarantee. The outbox processor publishes to Kafka, then marks `processed_at`. If it crashes between those two steps, the row is reprocessed on restart and published again. This means every downstream consumer MUST be idempotent. For `EntitlementConsumer`, the idempotency check is: `SELECT 1 FROM processed_events WHERE event_id = ?`. If the event ID exists, skip. This is a standard at-least-once + idempotent consumer pattern — not a flaw in the outbox design.
 
 **Q: "How do you handle a Stripe API rate limit during a renewal burst?"**
-> The renewal scheduler uses random jitter (0–60 minutes) to spread 100K renewals over the hour rather than spiking at midnight. This limits peak Stripe throughput to ~28 req/sec (100K ÷ 3,600 seconds). Stripe's rate limit is 100 req/sec per account — we stay comfortably below. For failed renewals (Stripe returns 429), the worker retries with exponential backoff: 5s, 10s, 30s. Retries exceeding 3 attempts increment `subscriptions.retry_count` and transition to `PAST_DUE` state.
+> The renewal scheduler uses random jitter (0–60 minutes) to spread the ~100K peak-day renewals over the hour rather than spiking at midnight. This limits peak Stripe throughput to ~28 req/sec (100K ÷ 3,600 seconds). Stripe's rate limit is 100 req/sec per account — we stay comfortably below. Two different retry ladders exist here and you should not conflate them: a Stripe `429` is a *transport* failure, retried in-process with backoff 5s → 10s → 30s and no state change, because the customer's card was never touched. A Stripe `402` card decline is a *business* failure — it moves the subscription to `PAST_DUE` on the **first** decline and hands off to the multi-day dunning ladder (Day 0/1/3/7), incrementing `retry_count` per attempt. `PAST_DUE → CANCELLED` happens only when all 4 dunning attempts are exhausted.
 
 ### Cross-Concept Probe (Tier 3 — separates senior candidates)
 
@@ -964,18 +1196,21 @@ For a subscription billing system, every financial event creates two ledger entr
 
 - **Mistake 5: Thundering herd renewal** → **Why it's wrong:** Scheduling all renewals at midnight creates a spike of 100K simultaneous Stripe API calls, DB lock contention, and a single-pod renewal worker being overwhelmed. **What to say instead:** "The renewal scheduler uses random jitter — each subscription's renewal is scheduled with a random offset within a 60-minute window. This spreads 100K renewals evenly over the hour, keeping Stripe throughput at ~28 req/sec, well within rate limits."
 
+- **Mistake 6: Treating the Stripe webhook as an afterthought** → **Why it's wrong:** `POST /v1/payments` is only the synchronous half of the money path. 3-D Secure completions, ACH reversals, and disputes all arrive later as webhooks, at-least-once and **unordered**. A handler that unconditionally writes state will apply a stale `subscription.updated` on top of a newer `invoice.paid` and silently leave `plan_id` and entitlement divergent — no exception, no alert. **What to say instead:** "Webhooks get three layers: HMAC signature verification on the raw body, a UNIQUE constraint on `event_id` for dedup, and a `WHERE provider_version < :incoming` guard so out-of-order events affect zero rows. Plus a nightly reconciliation job that diffs local state against Stripe, because webhooks are best-effort even with all three."
+
 ---
 
 ## Section 14 — 🧭 DocuSign Dimensions Checklist
 
 | Dimension | Relevant? | How this design addresses it |
 |---|---|---|
-| Testability | ✅ | `IPaymentProcessor` interface enables unit tests with a mock processor (no Stripe calls in tests); outbox processor is a pure function — given a list of outbox rows, assert Kafka calls and `processed_at` updates; state machine transitions are pure functions — input state + event → output state |
-| Usability | ✅ | Standard REST API; `Idempotency-Key` header follows Stripe's widely-adopted convention; error responses include `decline_code` and `request_id` for debugging; proration amount is returned on plan change response so the UI can show the user exactly what they'll pay |
+| Testability | ✅ | `IPaymentProcessor` is the DIP seam: the whole 28-charges/sec peak-day renewal run is replayable in CI against a mock processor with zero real money moved. The state machine is a pure function, so all 9 `(status, event)` transitions — including the `ACTIVE + PAYMENT_SUCCEEDED → ACTIVE` renewal self-transition that a real DocuSign monthly renewal exercises 1.6M times a month — are table-driven unit tests with no DB. Out-of-order webhooks are testable by replaying two stored `provider_events` rows in reverse and asserting the v41 event is dropped |
+| Usability | ✅ | `Idempotency-Key` follows Stripe's own convention, so a DocuSign customer's existing Stripe-integration code needs no new mental model. `PUT /plan` returns `proration_credit_cents` — for the Business Pro → Business Premium upgrade in Section 8 that is the literal string "$12.50 due today" the admin sees before confirming, rather than an unexplained charge appearing later. Card declines return `402` with Stripe's `decline_code`, so the org admin is told "your card expired" instead of "an error occurred" — the difference between self-service recovery and a support ticket |
+
 | Extensibility | ✅ | Adding a new downstream consumer (Salesforce CRM sync) = new Kafka consumer group, zero changes to BillingService (OCP); adding a new plan type = new row in `subscription_plans`, zero code changes; swapping Stripe for Braintree = new `IPaymentProcessor` implementation, injected via Spring bean |
-| Security | ✅ | JWT Bearer on all endpoints; admin role check on mutation endpoints (plan change, cancel); Stripe customer ID never exposed in API responses; `subscription_events` is INSERT-only (no mutation, no deletion) to prevent audit trail tampering; idempotency keys are tenant-scoped (key from one tenant cannot satisfy request from another) |
-| Availability | ✅ | Postgres Multi-AZ (RDS) for automatic failover; Redis Sentinel for idempotency cache HA; Kafka replication factor 3; renewal job is idempotent — can be restarted safely; outbox processor restart re-processes any unpublished events |
-| Scalability | ✅ | Write path: 6 req/sec peak → single Postgres primary handles this trivially; Read path: 5,500 req/sec entitlement checks → Redis cache with TTL (not DB reads); Renewal: jitter spreads load over 60 minutes; horizontal scaling by adding BillingService pods (stateless) behind load balancer |
+| Security | ✅ | Zero cardholder data in any of the 7 tables — only Stripe tokens (`pm_`, `ch_`, `cus_`), which keeps DocuSign's PCI-DSS scope at SAQ-A instead of the quarterly-audit tier. `subscription_events` is INSERT-only across all ~19M events/year (1.6M orgs × 12), satisfying the SOC 2 Type II tamper-evidence control DocuSign certifies to. Idempotency keys are tenant-scoped, so a key harvested from one org's traffic cannot replay a charge against another org. The `/v1/webhooks/stripe` route is HMAC-verified with a 5-minute timestamp tolerance — without it, a forged `invoice.paid` mints free Enterprise entitlement for any account_id an attacker can guess |
+| Availability | ✅ | The 99.9% SLO allows ~43 min/month. RDS Multi-AZ failover is ~30s, so a single failover consumes 1.2% of the monthly budget. The riskiest window is the 1st-of-month billing run: a 60-minute outage there strands ~100K renewals, but every renewal carries idempotency key `"renewal:" + subId + ":" + date`, so the run is simply re-executed after recovery with zero double-charges — this is why the availability story for DocuSign billing is *recoverability*, not just uptime. Entitlement reads survive a Postgres outage entirely because they are served from Redis at 5,500 req/sec, so an in-progress signing ceremony is never blocked by a billing-DB failover |
+| Scalability | ✅ | Write path: ~28 charges/sec on the 1st-of-month peak (~85 row-writes/sec) against a ~5,000 writes/sec primary — under 2%, so no sharding; Read path: 5,500 req/sec entitlement checks → Redis cache with 30s TTL, since 5,500 req/sec of `SELECT status FROM subscriptions` would saturate the primary's CPU; Renewal: jitter spreads 100K peak-day charges across 60 minutes to stay under Stripe's 100 req/sec account limit; BillingService pods are stateless (all state in Postgres/Redis) so they scale horizontally behind the LB |
 | Observability & Traceability | ✅ | `request_id` in every API response; `subscription_events` table is a complete state history for any subscription; Kafka consumer lag metric (alert when EntitlementConsumer lag > 10s); outbox row age metric (alert when unprocessed rows older than 30s); payment failure rate by `decline_code` (Grafana dashboard) |
 
 ---
@@ -1065,7 +1300,7 @@ public enum SubscriptionStatus {
 }
 
 public enum SubscriptionEvent {
-    PAYMENT_SUCCEEDED, PAYMENT_FAILED, RETRIES_EXHAUSTED, CANCEL_REQUESTED, REACTIVATED
+    PAYMENT_SUCCEEDED, PAYMENT_FAILED, RETRIES_EXHAUSTED, CANCEL_REQUESTED, REACTIVATED, PLAN_CHANGED
 }
 ```
 
@@ -1085,9 +1320,16 @@ public class SubscriptionStateMachine {
     static {
         // key = "FROM_STATUS:EVENT" → value = TO_STATUS
         TRANSITIONS.put("PENDING:PAYMENT_SUCCEEDED",   SubscriptionStatus.ACTIVE);
+        // Self-transition: the monthly renewal charges an ALREADY-ACTIVE subscription.
+        // Omitting this row is the #1 bug in hand-written billing state machines —
+        // every renewal would throw InvalidTransitionException and roll back.
+        TRANSITIONS.put("ACTIVE:PAYMENT_SUCCEEDED",    SubscriptionStatus.ACTIVE);
         TRANSITIONS.put("ACTIVE:PAYMENT_FAILED",       SubscriptionStatus.PAST_DUE);
         TRANSITIONS.put("ACTIVE:CANCEL_REQUESTED",     SubscriptionStatus.CANCELLED);
+        // Plan change keeps the subscription ACTIVE; only plan_id moves
+        TRANSITIONS.put("ACTIVE:PLAN_CHANGED",         SubscriptionStatus.ACTIVE);
         TRANSITIONS.put("PAST_DUE:PAYMENT_SUCCEEDED",  SubscriptionStatus.ACTIVE);
+        TRANSITIONS.put("PAST_DUE:PAYMENT_FAILED",     SubscriptionStatus.PAST_DUE);
         TRANSITIONS.put("PAST_DUE:RETRIES_EXHAUSTED",  SubscriptionStatus.CANCELLED);
         TRANSITIONS.put("CANCELLED:REACTIVATED",       SubscriptionStatus.PENDING);
     }
@@ -1244,11 +1486,13 @@ public class OutboxProcessor {
 
         for (OutboxEvent event : pending) {
             try {
+                // Partition key = aggregate id (subscription_id) → per-subscription ordering.
+                // .get(...) blocks waiting for the Kafka ack before we mark the row processed.
                 kafkaTemplate.send(
                     "subscription-events",
-                    event.getAggregateId().toString(),   // partition key: subscription_id
+                    event.getAggregateId().toString(),
                     event.getPayload()
-                ).get(5, TimeUnit.SECONDS);              // block — wait for Kafka ack
+                ).get(5, TimeUnit.SECONDS);
 
                 outboxRepo.markProcessed(event.getId());
             } catch (Exception e) {
@@ -1311,4 +1555,5 @@ KEY INVARIANT:
 
 | Date | Change |
 |---|---|
+| Aug 2026 | **Audit pass — accuracy + 3 domain gaps closed.** (1) **Scale math reconciled:** Section 3 claimed "100K renewals/day = 1.2 writes/sec" and "~150 req/sec peak" while Section 4 derived 53K/day and 5,500 req/sec — three mutually contradictory numbers. Now one coherent set: 53K/day steady (0.6/sec), ~100K on the 1st-of-month peak day, jitter-spread to ~28 charges/sec (~85 row-writes/sec); the stale "6 writes/sec" figure removed from Trade-off 3 and Section 14. (2) **Stage 1 breaking points quantified** — previously narrative-only; now name the exhausted resource (client HTTP read timeout vs Stripe's ~1.8s P99), a number (~500 duplicate charges/day at 0.5% timeout on 100K peak-day charges), and an observable symptom. (3) **Proration rewritten** — the old single formula was upgrade/downgrade-agnostic and economically wrong; now shows the upgrade-immediate vs downgrade-at-period-end asymmetry, a worked $25→$50 mid-cycle example that balances, why a negative invoice forces deferral, plus integer-minor-units/rounding/currency-exponent rules. (4) **Stripe webhooks added** (was entirely absent — the biggest gap for a Commerce Backend interview): `POST /v1/webhooks/stripe` endpoint + story, new Deep Dive 3 covering the out-of-order problem with a Picture+Invariant visual, three-layer defence (HMAC on raw body / UNIQUE `event_id` dedup / `provider_version` guard), and the nightly reconciliation backstop. (5) **Invoice immutability + credit-note pattern** added to Section 11 — finalized invoices are never UPDATEd; the proration credit *is* a credit note. (6) **State machine bug fixed** — `TRANSITIONS` had no `ACTIVE:PAYMENT_SUCCEEDED` row, so every monthly renewal would have thrown `InvalidTransitionException`; added that plus `PAST_DUE:PAYMENT_FAILED` and `PLAN_CHANGED`. (7) **Dunning ladder corrected** — Day 0/3/5/7 has *shrinking* gaps and was mislabelled exponential backoff; now Day 0/1/3/7 (gaps 1→2→4), and the FR's "3 retries" reconciled to 4; probe answer no longer conflates the Stripe-429 transport retry with the 402-decline dunning ladder. (8) Every 4xx now has a named trigger in the Endpoint Stories; `POST /v1/payments` distinguishes 201 (first charge) from 200 (idempotent replay) and names the 409 trigger (same key, different body). (9) Section 14 Testability/Usability/Security/Availability cells rewritten to cite Section 4 numbers and specific DocuSign consequences. (10) Schema: added `provider_events` table and `subscriptions.provider_version`; end-of-line comments in the Kafka blocks moved above the statements per AGENTS.md. |
 | Jul 5, 2026 | File created. Full 15-section 60-min interview-ready solution. Type B (Product Architecture). PDF-confirmed question. Covers: 3-stage progressive HLD (sync/no-idempotency → state machine + sync downstream → outbox + Kafka fanout), 3 decision tables, full SQL schema (7 tables with indexes), SOLID breakdown for DocuSign, Tier 1/2/3 probe answers, 5 common mistakes. Cross-refs verified against actual SystemDesignConcepts files. |
