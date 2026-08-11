@@ -232,6 +232,8 @@ These appeared on prep-site TechPrep (2026) with no specific candidate report or
 | **Reliable Event Ingestion Pipeline** (handling out-of-order records) | TechPrep 2026 (domain-inferred) | ⚠️ LOW — no candidate attribution |
 | **Distributed Feature Flag System** (config propagation across microservices) | TechPrep 2026 (domain-inferred) | ⚠️ LOW — no candidate attribution |
 | **Metrics Monitoring and Alerting System** | TechPrep 2026 (as prep recommendation, not asked) | ⚠️ LOW — mentioned as prep material, not a reported question |
+| **WhatsApp / Chat Messaging System** | Blind thread (no date attribution) — design a real-time messaging system | ⚠️ LOW — mentioned in Blind Confluent design thread alongside KV Store and News Feed, no standalone dated report |
+| **API Rate Limiter** | One Blind/LeetCode mention in Confluent context | ⚠️ LOW — no dated primary candidate report; high domain relevance (Confluent Cloud APIs enforce rate limits) |
 
 ---
 
@@ -246,6 +248,8 @@ These were high-confidence questions from 2022-2024. Not counted in the 18-month
 | **Spotify-like System (API Design)** | 1 report (~2023, Staff/SSE LeetCode post 4188001) | API design round. Not seen in 18-month window |
 | **TinyURL** | 3+ reports (~2022-2024) | Now replaced by "Reliable URL Shortening Service" variant |
 | **Design YouTube** | 1 report (Glassdoor, old) | Not seen in recent window |
+| **Blockchain Indexer (HLD)** | 1 report (Sept 2024, LeetCode — "Uber\|Confluent Roller Coaster SDE-3") | HLD round at Confluent onsite. Design a system to index blockchain transactions and make them queryable. Core probe: immutable append-only log (maps to Kafka), indexing strategy, query latency vs. write throughput, eventual consistency. Interviewers described as "20+ years experience, very senior." Pre-window but high-signal. |
+| **Snake & Ladder (LLD)** | 1 report (Sept 2024, same thread as above) | LLD round at same Confluent onsite. OOP + game state management, board representation, player progression state machine. Pre-window. |
 
 ---
 
@@ -264,6 +268,9 @@ These were high-confidence questions from 2022-2024. Not counted in the 18-month
 | 9 | **Job Scheduling System** (concurrency round) | 1 | 2025 | ⭐ |
 | — | Reliable Event Ingestion Pipeline | 0 (domain-inferred) | — | ⚠️ unverified |
 | — | Distributed Feature Flag System | 0 (domain-inferred) | — | ⚠️ unverified |
+| — | WhatsApp / Chat Messaging System | 0 (Blind, no date) | — | ⚠️ unverified |
+| — | API Rate Limiter | 0 (1 mention, no date) | — | ⚠️ unverified |
+| — | Blockchain Indexer | historical (Sept 2024) | Sept 2024 | 📜 pre-window |
 
 ---
 
@@ -363,6 +370,10 @@ Based on 18-month data, prepare in this order:
 - [Blind — Confluent Interview Experience (Job Scheduling, Design)](https://www.teamblind.com/post/confluent-interview-experience-nedbv3m7)
 - [LinkedIn — Yogesh Baghel, Confluent System Design Lessons Learned 2025](https://www.linkedin.com/posts/yogesh-baghel_systemdesign-frontend-interviews-activity-7430148192043823104-yAPC)
 
+**Historical primary sources (pre-Feb 2025 window — used for historical section only):**
+- [LeetCode — Uber|Confluent Roller Coaster SDE-3 (Sept 2024)](https://leetcode.com/discuss/interview-experience/5833870/) — Blockchain Indexer (HLD) + Snake & Ladder (LLD) confirmed for Confluent onsite
+- [LeetCode — Confluent Senior/Staff SWE Experience (2023)](https://leetcode.com/discuss/interview-question/4188001/) — Spotify-like API design, Staff-level loop
+
 **Aggregator / Corroboration (not counted in frequency):**
 - [PracHub — Confluent System Design Questions (Updated 2026)](https://prachub.com/companies/confluent/categories/system-design)
 - [TechPrep — Confluent Interview Process 2026](https://www.techprep.app/blog/confluent-interview-process)
@@ -377,5 +388,22 @@ Based on 18-month data, prepare in this order:
 
 | Date | Change |
 |---|---|
+| Aug 2026 | **Second deep research pass.** 8 additional searches (LeetCode, Blind, Glassdoor, 1P3A, InterviewQuery, PracHub). Added to historical: Blockchain Indexer (HLD, Sept 2024) + Snake & Ladder (LLD, Sept 2024) — both from LeetCode Uber\|Confluent SDE-3 thread. Added to Tier 4: WhatsApp/Chat System (Blind thread, no date) + API Rate Limiter (one Confluent-context mention). Added historical primary source links. Appended LLD names reference section at bottom. HLD-only policy enforced — LLD kept as name-only list. |
 | Aug 2026 | **Deep research pass (18-month window).** Searched LeetCode, Glassdoor, 1Point3Acres, JoinTaro, Hack2Hire, Blind, PracHub, TechPrep, EngineBogie, LinkedIn. Added 4 new questions to tracker: URL Shortener (Jan 2026, promoted from raw-research), RSS+TempMail combo variant (Jan-Feb 2026), DB+SQL+API combined round (Apr 2026, from 1P3A), and Job Scheduling System (Blind, concurrency round). Added "Emerging Patterns" section. Applied strict methodology: frequency = distinct dated primary reports only; prep-sites treated as corroboration. Excluded: YouTube (frontend round), Spotify-like (pre-window only), TechPrep domain-inferred questions marked LOW-confidence. |
 | Jul 2026 | Research compiled. Strict Jun 2025+ filter. 10 confirmed questions, 3 borderline. |
+
+---
+
+## 📋 LLD Questions Surfaced During Research (Names Only — Not Preparing)
+
+> These came up during the research pass. Not in scope for prep but recorded for completeness.
+
+- LRU Cache with TTL (phone screen / coding round — not HLD)
+- Task Scheduler / Job Scheduler (concurrency round — code required)
+- Snake & Ladder (Sept 2024 onsite — OOP)
+- Circuit Breaker Pattern
+- Concurrent LRU Cache
+- Memory-optimized File Reader
+- Splitwise
+- Battleship Game
+- Multi-directory File System with Read-Write Permissions
