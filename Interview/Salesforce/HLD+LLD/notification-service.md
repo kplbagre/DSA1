@@ -9,7 +9,7 @@
 | **Problem** | Notification Service — multi-channel (email, SMS, push) event-driven delivery |
 | **Format** | HLD+LLD combined (Salesforce SMTS) |
 | **Time budget** | 35 min LLD → 45 min HLD → 10 min buffer |
-| **Frequency rank** | ⭐ **#1 overall** — confirmed as BOTH the #1 HLD question (5+ mentions) AND the #1 LLD question (4+ mentions). Roundz SMTS report confirms it asked in the exact HLD→LLD combined format in the same 90-min round. |
+| **Frequency rank** | Confirmed real and recently asked (CodingKaro, Jan 2025: "Design a Notification Service" covering HLD+LLD+DB+patterns in one round) plus two adjacent hits (Push Notification System at APNS/FCM scale, Aug 2025; a notification sub-question inside a Zomato HLD, Feb 2025). A deep Aug 2026 re-research pass (see `research-findings-2026-08.md`) found this sits in a tied cluster with Rate Limiter, Job Scheduler, and Booking systems rather than being uniquely #1 — the original Roundz-sourced "#1 overall" claim could not be re-verified (Roundz is now paywalled). Still fully worth knowing — just not to the exclusion of the other clusters. |
 | **Salesforce-specific angle** | Maps directly to **Platform Events** (Salesforce's Kafka-backed event bus). Multi-tenancy is the natural extension: 150K orgs sharing dispatch infrastructure. |
 
 ---
@@ -52,9 +52,28 @@ Design a system that sends notifications to users across multiple channels (emai
 
 ### 2.3  Class Design
 
+#### 2.3.1  Deriving the classes (say this out loud, minutes 2-6)
+
+Don't recite a class list from memory — derive it in front of them. Read each requirement, pull the noun, then justify why that noun deserves its own class instead of being a field on an existing one. **The justification is the scored part, not the class name.**
+
+| # | Requirement (verbatim from 2.2) | Noun / verb extracted | Becomes | Why it earns its own type (and what breaks if you inline it) |
+|---|---|---|---|---|
+| 1 | "Send notifications via email, SMS, push" | noun: *notification* | **`NotificationRequest`** (data holder) | The thing being sent needs identity so it can be retried, deduped, and audited. If it were just loose method params (`send(userId, text, channel)`), you'd have no single object to attach an idempotency key to — and idempotency is a stated NFR. |
+| 2 | same line — "via email, SMS, push" | verb: *send*, varying by channel | **`NotificationSender`** (interface) | This is the **variation point**. Three channels = three send algorithms. Inlining it as a field (`request.channelType` + `if/else` in one sender class) means every new channel edits that class — an OCP violation, and the `if/else` grows unbounded. Interface first, one impl per channel. |
+| 3 | same line — "email, SMS, push" as a closed set | the *set* of channels | **`ChannelType`** (enum) | Closed, known-at-compile-time set with no behavior of its own → enum, not a class. If channels became user-definable at runtime (plugin model), this would flip to a class/registry — flag that as the trigger for change. |
+| 4 | "Respect per-channel opt-in/out + do-not-disturb hours" | noun: *preferences* | **`UserPreferences`** (data holder) | Belongs to the **user**, not the **event**. One user has one preference set read across thousands of requests. Bolting `enabledChannels` onto `NotificationRequest` would duplicate the same preference data onto every request object and force a re-fetch per event — different lifetime, different owner, different class. |
+| 5 | same line — the *act* of deciding who's opted in | verb: *respect / check* | **`UserPreferenceService`** (interface) | The lookup is a swappable capability (Redis-cached today, direct DB tomorrow, gRPC to a Preferences team service later). Interface keeps `NotificationService` from knowing where preferences live — DIP. |
+| 6 | "Provide notification history per user" | verb: *provide* over persisted state | **`NotificationRepository`** (interface) | "History" implies a query surface over stored records, distinct from the in-flight request. Separate class because persistence is a different reason to change than dispatch logic — SRP. |
+| 7 | "Adding a new channel = one new class" (NFR) | the *selection* of a sender | **`ChannelRouter`** (interface) | Careful with the justification here — the OCP guarantee comes from the injected `List<NotificationSender>` collapsed into a map, **not** from this class existing. Inline that map into the orchestrator and Slack is still zero edits. The router earns its place for two other reasons: it's the home for selection logic that grows later (channel fallback, per-tenant overrides, provider sharding), and it maps 1:1 onto the Fan-out Service when you zoom out to HLD — which matters in a combined round. |
+| 8 | "At-least-once with idempotent sends" (NFR) | state of a send attempt | **`NotificationStatus`** (enum) | Terminal, behavior-free value → enum. See 2.5 for why this is *not* a State pattern. |
+
+**The one-liner to say after the table:** *"So: one data holder for the event, one for preferences, and three interfaces — routing, preference lookup, and sending — because those are my three variation points."*
+
+#### 2.3.2  Entity fields
+
 ```
 NotificationRequest
-  - eventId:    String        ← idempotency key
+  - eventId:    String        <- idempotency key
   - userId:     String
   - content:    String
   - channels:   List<ChannelType>
@@ -71,9 +90,24 @@ UserPreferences
   - quietHoursEnd:    LocalTime
 ```
 
-**Relationships:** `NotificationService` owns one `ChannelRouter` and one `UserPreferenceService`. `ChannelRouter` holds a `Map<ChannelType, NotificationSender>` — classic Strategy registry, not an if/else chain.
+#### 2.3.3  Relationships — with the composition-vs-aggregation call made explicit
 
-**ASCII Class Diagram — interfaces before implementations, always:**
+Saying "HAS-A" is only half an answer; the interviewer's follow-up is *"composition or aggregation?"* The distinction is **lifecycle ownership**, not syntax:
+
+- **Composition** (UML filled diamond) — the whole *creates and owns* the part. Part dies with the whole. Part is never shared.
+- **Aggregation** (UML hollow diamond) — the whole *holds a reference to* a part built elsewhere. Part outlives the whole and may be shared by several wholes.
+- **Rule of thumb to say out loud:** *"If I `new` it inside the constructor, it's composition. If it arrives through the constructor, it's aggregation."*
+
+| Relationship | Type | Composition or aggregation — and why that one |
+|---|---|---|
+| `EmailSender` — `NotificationSender` | **IS-A** (implements) | Neither — this is realization, not ownership. Justification is Liskov: the router invokes `.send()` through the interface and must never need to know the concrete type. |
+| `NotificationService` — `ChannelRouter` | **HAS-A** → **aggregation** | Honest answer: **aggregation**, because the router is constructor-injected, not `new`-ed inside the service. It's tempting to call this composition since the service is useless without a router, but *"can't function without it"* describes a **required dependency**, not ownership — those are different things. It'd only be composition if `NotificationService` did `this.router = new DefaultChannelRouter(...)` internally, which would also destroy testability (no way to inject a mock router). |
+| `DefaultChannelRouter` — `Map<ChannelType, NotificationSender>` | **HAS-A** → **composition of the map, aggregation of the senders** | Two different answers in one field, and saying so scores points. The `Map` object itself is created and owned by the router (composition — nobody else references that map instance). The `NotificationSender` values inside it are injected singletons shared with other components (aggregation — `EmailSender` survives the router being replaced). |
+| `NotificationService` — `NotificationRepository` | **USES** (dependency) | Not HAS-A at all, even though it's a field. It's a **collaborator**, not a part: the service calls it and forgets it, holds no meaningful state on it, and swapping Postgres for Cassandra changes nothing but DI wiring. Use USES when the relationship is "calls methods on," HAS-A when it's "is structurally made of." |
+| `NotificationRequest` — `List<ChannelType>` | **HAS-A** → **composition** | The list is created with the request and dies with it; no other object holds that list instance. Enum *values* are shared JVM-wide, but the collection holding them is exclusively the request's. |
+| `UserPreferences` — `UserPreferenceService` | no direct relationship | Deliberate: `UserPreferences` is a dumb data holder with no back-reference to the service that loaded it. Adding one would create a cycle and drag persistence concerns into a value object. |
+
+#### 2.3.4  ASCII class diagram — interfaces before implementations, always
 
 ```
                     NotificationService
@@ -81,32 +115,43 @@ UserPreferences
                     - preferenceService: UserPreferenceService
                     - repository: NotificationRepository
                     + notify(NotificationRequest): void
-                             │ uses
-              ┌──────────────┴───────────────┐
-              ▼                               ▼
+                             | uses
+              +--------------+---------------+
+              v                              v
     <<interface>>                    <<interface>>
     ChannelRouter                    UserPreferenceService
     + route(ChannelType):            + getPreferences(userId):
         NotificationSender               UserPreferences
-              ▲                               ▲
-              │ implements                    │ implements
+              ^                              ^
+              | implements                   | implements
     DefaultChannelRouter              RedisUserPreferenceService
     - senders: Map<ChannelType,
                     NotificationSender>
-              │ routes to
-              ▼
+              | routes to
+              v
     <<interface>>
     NotificationSender
     + getChannel(): ChannelType
     + send(NotificationRequest): void
-              ▲
-              │ implements
-    ┌─────────┼─────────────┐
-    │         │             │
+              ^
+              | implements
+    +---------+-------------+
+    |         |             |
 EmailSender  SmsSender   PushSender
 ```
 
-**Key invariant (same rule as the HLD dual-zoom map in Section 1):** every box that fans out to multiple behaviors is an interface first — `ChannelRouter` and `NotificationSender` are both `<<interface>>` before any concrete class touches them.
+**Key invariant (same rule as the dual-zoom map in Section 1):** every box that fans out to multiple behaviors is an interface first — `ChannelRouter`, `UserPreferenceService`, and `NotificationSender` are all `<<interface>>` before any concrete class touches them.
+
+#### 2.3.5  Follow-ups they will ask after this section — and your answers
+
+| Their question | Your answer (one breath) |
+|---|---|
+| "Composition or aggregation between the service and the router?" | "Aggregation — it's injected, not constructed internally. Composition would mean the service owns its lifecycle, which would also kill mock-injection in tests." |
+| "Why isn't `ChannelType` a class with a `send()` method on it?" | "That's the enum-with-behavior shortcut. It works for 3 fixed channels, but each channel then needs its own dependencies — SendGrid client, Twilio client — injected into an enum constant, which Java makes ugly and untestable. Separate sender classes keep dependency injection clean." |
+| "Could `UserPreferences` just be fields on `NotificationRequest`?" | "Different lifetime and different owner — preferences are per-user and long-lived, requests are per-event and ephemeral. Merging them means re-fetching and re-serializing preference data on every single event." |
+| "Why is `NotificationRepository` an interface if you only have one database?" | "Two reasons: it's the seam for testing without a DB, and Section 3 already plans a 30-day Postgres hot window with S3 archival — that second store lands behind this same interface with no change to the service." |
+| "You have both a router and a service — isn't that over-engineering?" | "I'd push back on that one. Note *where* the OCP guarantee actually comes from — it's the injected `List<NotificationSender>` collected into a map, not the router class itself. I could inline that map into `NotificationService` and adding Slack would still be zero edits. So the router isn't carrying the extensibility claim. What it carries is: (a) a home for selection logic that *will* grow — channel fallback, per-tenant overrides, provider-shard picking — none of which belong in an orchestrator, and (b) a clean 1:1 mapping when we zoom out, since this class becomes the Fan-out Service in the HLD. It's four lines. The cost of keeping it is near zero; the cost of threading routing logic back out of the orchestrator later isn't." |
+| "What if a notification needs to go to two users?" | "Today `NotificationRequest` is single-user by design so `userId` can be the Kafka partition key. Multi-recipient would be a separate fan-out step upstream that explodes one broadcast into N single-user requests — I'd keep this class single-user." |
 
 ### 2.4  Key Interfaces
 
@@ -140,12 +185,20 @@ public interface NotificationRepository {
 
 ### 2.5  Design Decisions
 
-| Decision | Pattern | Why |
-|---|---|---|
-| One class per channel implementing `NotificationSender` | **Strategy** | Behavior (how to send) is runtime-swappable based on `ChannelType`. Interviewer probe: "add Slack tomorrow" → one new class, zero existing code touched. |
-| `ChannelRouter` holds a `Map<ChannelType, NotificationSender>` built via constructor injection | **Registry / DI** | Avoids an if/else chain that violates OCP — new channel means editing the router otherwise |
-| `NotificationRepository` interface, not a direct DB call | **Repository** | `NotificationService` doesn't know or care if storage is Postgres or Cassandra — SRP: persistence logic isolated |
-| Failures in one channel are caught per-channel, not propagated | **Fail-isolation** | SMS provider outage must not block the email send in the same fan-out — SRP again, one channel's failure is one channel's problem |
+**The question you must be ready for: "Isn't multi-channel fan-out just Observer?"**
+
+Yes, partially — and the honest answer names both patterns instead of picking one and hoping the interviewer doesn't probe. One `NotificationRequest` firing to N channels is Observer-shaped ("multiple listeners reacting to one event" — the exact trigger phrase for Observer in the pattern-map). But *how* each channel actually sends is Strategy-shaped (swappable algorithm per `ChannelType`). This is **Observer meets Strategy**: the fan-out loop in `NotificationService.notify()` is the Observer half (iterate and notify all interested channels); `NotificationSender` is the Strategy half (each channel's send algorithm is interchangeable). Say this out loud — it pre-empts the follow-up instead of getting caught by it.
+
+**Why not pure Observer (a `List<NotificationSender>` iterated with no router)?** Because Observer alone doesn't give you *selective* dispatch — you'd iterate every registered sender and each one would need its own internal check for "is this channel enabled for this user," duplicating that logic N times. The router centralizes the lookup: filter enabled channels once in `NotificationService`, then route only to those. Rejected because it pushes filtering logic into every sender implementation — violates DRY.
+
+**Why not State pattern for `NotificationStatus`?** State pattern earns its cost when *transitions* carry behavior (e.g., a subscription's `CANCELLED` state rejects new charges). Here, `PENDING → SENT/FAILED/SKIPPED` is a one-shot terminal write with no transition logic attached — a plain enum is correct. Introducing a State class per status would be over-engineering for a value that's written once and never transitions again.
+
+| Decision | Pattern Chosen | Alternative Considered | Why Rejected |
+|---|---|---|---|
+| One class per channel implementing `NotificationSender` | **Strategy** | Single class with an if/else on `ChannelType` | If/else means editing one growing class every time a channel is added — violates OCP; the class becomes a merge-conflict magnet as channels grow |
+| `ChannelRouter` holds a `Map<ChannelType, NotificationSender>` via constructor injection | **Registry / DI** | The strongest alternative isn't a `switch` — it's **the same injected map inlined into `NotificationService`** | Be honest that the inlined map is *also* OCP-clean; the injected-list-to-map trick is what buys extensibility, not the extra class. The router is kept for cohesion (selection logic has somewhere to grow: fallback chains, per-tenant overrides, provider sharding) and for the clean LLD-class-to-HLD-service mapping in a combined round — not because the orchestrator would otherwise need editing. |
+| `NotificationRepository` interface, not a direct DB call | **Repository** | Active Record — `NotificationRequest.save()` calls JDBC directly | Active Record works for CRUD-simple entities, but couples the domain object to a specific storage engine. Section 3's HLD half already flags a future move from Postgres (30-day hot window) to Cassandra/S3 archival — Active Record would mean rewriting `NotificationRequest` itself for that migration; Repository isolates the blast radius to one class |
+| Failures in one channel are caught per-channel inside the fan-out loop, not propagated | **Fail-isolation (try/catch per iteration)** | Let exceptions propagate and fail the whole `notify()` call | Propagating means one dead SMS provider takes down email and push for that user too — unacceptable per NFR ("fail one channel without blocking others" is stated explicitly in Section 2.2) |
 
 ### 2.6  Visual — Object Interaction
 
@@ -327,28 +380,99 @@ public void send(NotificationRequest request, ChannelType channel) {
 
 ### 3.5 Architecture Diagram
 
+Don't draw the final architecture immediately — draw the naive version, break it with a number, then fix it. The evolution *is* the answer; the final box diagram is just where you stop.
+
+#### Stage 1 — Naive: synchronous inline dispatch
+
 ```
-[Upstream Services] ──▶ [Kafka: notification-requests] ──▶ [Fan-out Service]
-                          (partitioned by userId)                 │
-                                                                   ├─▶ [Redis: UserPreference cache, 5m TTL]
-                                                                   │
-                              ┌────────────────────────────────────┼────────────────────────┐
-                              ▼                                    ▼                          ▼
-                     [SQS: email-queue]                  [SQS: sms-queue]           [SQS: push-queue]
-                              │                                    │                          │
-                              ▼                                    ▼                          ▼
-                     [Email Worker Pool]                 [SMS Worker Pool]          [Push Worker Pool]
-                     → SendGrid (sharded)                → Twilio                   → FCM/APNs
-                              │                                    │                          │
-                              └──────────────┬─────────────────────┴──────────────────────────┘
-                                             ▼
-                                  [Postgres: NotificationHistory]
-                                  (30-day hot partitions; older → S3/Parquet)
+ +---------------------------------------------------+
+ |               Upstream Services                   |
+ |  Record Svc  |  Approval Svc  |  Case Svc         |
+ +-------------------------+-------------------------+
+                           | POST /v1/notify  (blocking)
+                           v
+              +--------------------------+
+              |   Notification Service   |
+              |  1. INSERT history row   |
+              |  2. call SendGrid  -----------> 50ms  (email)
+              |  3. call Twilio    -----------> 200ms (SMS, sequential)
+              |  4. call FCM       -----------> 30ms  (push)
+              +--------------------------+
 ```
 
-**Data flow:** upstream event → Kafka (durable, partitioned by `userId` for per-user ordering) → Fan-out Service checks preferences (Redis cache) → enqueues to per-channel SQS (decouples our latency from provider latency) → workers call the provider with an idempotency check → status written to Postgres.
+**BREAKING POINT 1 — thread exhaustion (the quantified one).** Sequential provider calls cost 50 + 200 + 30 = **280ms of blocked thread time per notification**. A 200-thread pool therefore sustains 200 / 0.28s = **~714 notifications/sec**. We need **35,000/sec peak** — we are short by a factor of ~49. The pool saturates and inbound requests queue behind provider latency.
 
-**Breaking point:** a single SendGrid account tops out at low-thousands emails/sec; our 21K/sec peak email share **exceeds one account's realistic ceiling** — observable symptom: 429 rate-limit responses from the provider, queue backlog growing. This is why the design shards across multiple SendGrid subusers with a second ESP (SES) as failover, not a single account.
+**BREAKING POINT 2 — partial delivery with no recovery.** If Twilio times out at 30s, email already went out but SMS never retries. The user is partially notified and there's no record of what still owes delivery.
+
+**BREAKING POINT 3 — dual-write loss.** The history row is INSERTed and *then* providers are called. Crash in between = DB says "notification created," user got nothing.
+
+**DECISION — how do upstream events reach us?**
+
+| Option | Strength | Weakness | Verdict |
+|---|---|---|---|
+| Synchronous HTTP (Stage 1) | Simplest; caller gets an immediate ack | Caller blocks on provider health; ~714/sec ceiling; no retry or buffering | Rejected — breaks at 2% of required load |
+| Async to one shared queue | Durable; decouples caller from providers | One queue for all channels: an SMS backlog delays unrelated emails; channels can't scale independently | Better, but a known bottleneck |
+| **Kafka partitioned by `userId`** | 35K/sec is routine; per-user ordering; consumer groups scale horizontally | Extra infra; adds ~100ms | **Chosen** |
+
+#### Stage 2 — Kafka ingest + per-channel queues + fail isolation
+
+```
+ +---------------------------------------------------+
+ |               Upstream Services                   |
+ +-------------------------+-------------------------+
+                           | publish (or POST fallback)
+                           v
+            +-------------------------------+
+            |   Kafka: notification-events  |
+            |   partitioned by userId       |
+            |   (per-user ordering)         |
+            +---------------+---------------+
+                            | consume (consumer group)
+                            v
+            +-------------------------------+        +----------------------------+
+            |      Fan-out Service          |<------>| Redis: preference cache    |
+            |  - load prefs (cache-first)   |        | 5 min TTL, ~95% hit rate   |
+            |  - filter disabled channels   |        +----------------------------+
+            |  - drop if in quiet hours     |
+            |  - idempotency check (SETNX)  |
+            +--+---------------+---------+--+
+               |               |         |
+               v               v         v
+        +-----------+  +-----------+  +-----------+
+        | SQS       |  | SQS       |  | SQS       |
+        | email-q   |  | sms-q     |  | push-q    |
+        +-----+-----+  +-----+-----+  +-----+-----+
+              |              |              |
+              v              v              v
+        +-----------+  +-----------+  +-----------+
+        | Email     |  | SMS       |  | Push      |
+        | Workers   |  | Workers   |  | Workers   |
+        +-----+-----+  +-----+-----+  +-----+-----+
+              |              |              |
+              v              v              v
+        SendGrid pool     Twilio          FCM / APNs
+        (sharded subusers)
+              |              |              |
+              +--------------+--------------+
+                             v
+              +--------------------------------+
+              | Postgres: notification_history |
+              | 30-day hot partitions          |
+              |   older -> S3 / Parquet        |
+              +--------------------------------+
+```
+
+**What each hop buys us:**
+- **Kafka** absorbs the 3x peak burst; `userId` partitioning keeps one user's notifications ordered without global ordering cost.
+- **Redis preference cache** keeps the hot path off Postgres — at 35K/sec, an uncached preference read per event would itself be 35K read QPS against the primary.
+- **Per-channel SQS** is the fail-isolation boundary: enqueue is <5ms and never blocks on provider health, so a dead SMS provider cannot consume threads that email needs.
+- **Per-channel worker pools** scale independently — email needs ~21K/sec of capacity, push needs far less.
+
+**BREAKING POINT (Stage 2, and the one worth naming aloud) — the email provider ceiling.** At 35K/sec with ~60% email share, we need **~21,000 emails/sec**. A single SendGrid account realistically sustains low-thousands/sec, so we're over one account's ceiling by roughly an order of magnitude. Symptom: HTTP 429s from the provider and a growing `email-q` backlog with rising queue age. Mitigation already in the diagram: a **sharded pool of SendGrid subusers** plus **SES as a failover ESP**, with the worker pool round-robining across credentials and circuit-breaking a subuser that starts 429-ing.
+
+**Remaining known gap (say it before they find it):** Stage 2 still publishes to Kafka *after* the DB write, so Breaking Point 3 (dual-write) survives. The fix is the **outbox pattern** — write the event to an `outbox` table inside the same transaction as the business write, and let a poller publish to Kafka. That's Section 3.9's data model, and I'd add it before going to production.
+
+**Data flow in one sentence:** upstream event -> Kafka (partitioned by `userId`) -> Fan-out Service filters by cached preferences and dedups -> per-channel SQS -> channel workers call providers with retry/DLQ -> terminal status written to Postgres.
 
 ### 3.6 Deep Dive: Multi-Channel Fan-Out with Fail Isolation
 
@@ -395,7 +519,81 @@ public void send(NotificationRequest request, ChannelType channel) {
 
 Primary inbound path is **Kafka, not REST** — `POST /v1/notifications` is only the fallback for callers that can't produce events.
 
-### 3.9 Salesforce Multi-Tenancy Angle
+### 3.9 Data Model
+
+```sql
+-- Append-only delivery record. This is the "notification history" FR.
+CREATE TABLE notification_history (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id       UUID NOT NULL,              -- multi-tenancy: partition key
+    user_id      UUID NOT NULL,
+    event_id     VARCHAR(128) NOT NULL,      -- idempotency key from producer
+    event_type   VARCHAR(50),                -- "record.updated", "approval.requested"
+    content      TEXT,
+    created_at   TIMESTAMPTZ DEFAULT now(),
+
+    UNIQUE (org_id, event_id),               -- DB-level idempotency backstop
+    INDEX idx_user_recent (org_id, user_id, created_at DESC)
+) PARTITION BY RANGE (created_at);           -- 30-day hot partitions, older -> S3
+
+-- Per-channel outcome. Separate from history because one event has N outcomes:
+-- email can FAIL while SMS succeeds, and each has its own timestamp/retry count.
+CREATE TABLE notification_delivery (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    notification_id   UUID NOT NULL REFERENCES notification_history(id),
+    org_id            UUID NOT NULL,
+    channel           VARCHAR(10) NOT NULL,  -- EMAIL | SMS | PUSH
+    status            VARCHAR(10) NOT NULL,  -- PENDING | SENT | FAILED | SKIPPED
+    attempt_count     SMALLINT DEFAULT 0,
+    last_error        TEXT,
+    provider_msg_id   VARCHAR(128),          -- for provider-side reconciliation
+    updated_at        TIMESTAMPTZ DEFAULT now(),
+
+    UNIQUE (notification_id, channel),       -- one row per channel per event
+    INDEX idx_retry (status, updated_at) WHERE status = 'FAILED'
+);
+
+-- Small, relational, cache-backed. Read ~35K/sec, written rarely.
+CREATE TABLE user_preferences (
+    org_id             UUID NOT NULL,
+    user_id            UUID NOT NULL,
+    email_enabled      BOOLEAN DEFAULT TRUE,
+    sms_enabled        BOOLEAN DEFAULT FALSE,
+    push_enabled       BOOLEAN DEFAULT TRUE,
+    quiet_hours_start  TIME,
+    quiet_hours_end    TIME,
+    quiet_hours_tz     VARCHAR(40),          -- IANA tz; quiet hours are local, not UTC
+    updated_at         TIMESTAMPTZ DEFAULT now(),
+
+    PRIMARY KEY (org_id, user_id)
+);
+
+-- Outbox: fixes the dual-write gap called out in Stage 2.
+-- Written in the SAME transaction as the business change; poller publishes to Kafka.
+CREATE TABLE outbox (
+    id           BIGSERIAL PRIMARY KEY,
+    org_id       UUID NOT NULL,
+    aggregate_id UUID NOT NULL,              -- user_id
+    payload      JSONB NOT NULL,
+    status       VARCHAR(10) DEFAULT 'PENDING' CHECK (status IN ('PENDING','SENT','FAILED')),
+    created_at   TIMESTAMPTZ DEFAULT now(),
+
+    INDEX idx_pending (status, created_at) WHERE status = 'PENDING'
+);
+```
+
+**Schema decisions worth saying out loud:**
+
+| Decision | Why | What breaks otherwise |
+|---|---|---|
+| `notification_delivery` split from `notification_history` | One event fans out to N channels, each with its own status, retry count, and provider message ID | Cramming `email_status`/`sms_status`/`push_status` as columns on one row means adding Slack is a schema migration — the DB mirrors the same OCP violation the LLD avoided |
+| `UNIQUE (org_id, event_id)` | Idempotency backstop below Redis | Redis restart loses dedup keys; without this, a replayed Kafka event bills a duplicate SMS |
+| `PARTITION BY RANGE (created_at)` | 182 TB/year won't live in one hot table; drop/archive whole partitions cheaply | Unpartitioned, autovacuum can't keep up and the hot-path inbox query degrades for everyone |
+| `quiet_hours_tz` stored, not pre-converted to UTC | "No SMS after 10pm" means 10pm *where the user is*; DST shifts the UTC offset twice a year | Storing a fixed UTC offset silently sends 9pm messages after a DST change |
+| `org_id` on every table + leading every PK/index | Salesforce multi-tenancy — see 3.10 | Without it, no way to shard or rate-limit per tenant, and cross-tenant leakage is one missing WHERE clause away |
+| `INDEX ... WHERE status = 'FAILED'` (partial index) | The retry sweeper only ever scans failures, which are <1% of rows | A full index on `status` wastes space and write throughput on the 99% SENT rows |
+
+### 3.10 Salesforce Multi-Tenancy Angle
 
 > *"Since this runs on Salesforce's shared infrastructure across 150K orgs, I'd add `orgId` as a partition key on the Kafka topic, the NotificationHistory table, and a per-org token bucket on the dispatch queue — so one org blasting 50,000 notifications doesn't starve dispatch capacity for every other org sharing the same worker pool."*
 
