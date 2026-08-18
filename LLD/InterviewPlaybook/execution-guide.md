@@ -5,6 +5,7 @@
 > **Use this file:** Read it the morning of any LLD interview. Internalize the minute-by-minute rhythm.
 >
 > **Sources:** Informed by InMobi LLD round (Kapil's direct feedback), ashishps1/awesome-low-level-design, hellointerview.com delivery framework, Concept and Coding (Shreyansh) live walkthroughs.
+> **Part of the LLD Interview Playbook.** Index: **../README.md**
 
 ---
 
@@ -243,3 +244,4 @@ Name the principle when you apply it — this is the signal that separates SDE-3
 |---|---|
 | June 2026 | Guide created. Informed by InMobi LLD round gaps (no interfaces, no pattern naming, no concurrency). |
 | June 2026 | Three additions from multi-source review (hellointerview.com + ashishps1 + Shreyansh): (1) Explicit "Core Entities" step between requirements and design — identify nouns and IS-A/HAS-A relationships. (2) SOLID principle naming as a required callout alongside pattern naming. (3) Pre-coding use-case walkthrough added to design phase — validate flow before investing code time. Pattern-naming cheatsheet expanded to include explicit SOLID principle phrases. |
+| Aug 2026 | Moved to InterviewPlaybook/execution-guide.md during LLD folder restructure; cross-reference paths updated. |

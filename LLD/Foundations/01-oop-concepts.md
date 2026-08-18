@@ -2,7 +2,8 @@
 
 > **Read before any pattern note.** The 4 pillars of OOP — Encapsulation, Abstraction, Polymorphism, Inheritance — are the foundation everything else is built on. Interviewers ask "explain polymorphism with an example from your design" — this file gives you the prepared answer. It also covers the most important OOP decision in LLD interviews: **Composition vs Inheritance**.
 >
-> **Cross-reference:** Interface vs Abstract Class decision → `java-building-blocks-for-lld.md`
+> **Cross-reference:** Interface vs Abstract Class decision → `05-java-building-blocks.md`
+> **Part of LLD Foundations.** Index + reading order: **../README.md**
 
 ---
 
@@ -360,3 +361,4 @@ KEY INVARIANT:
 | Date | Change |
 |---|---|
 | June 2026 | File created. 4 OOP pillars with LLD-anchored examples. Composition vs Inheritance decision included as the key interview decision. |
+| Aug 2026 | Moved to Foundations/01-oop-concepts.md during LLD folder restructure; cross-reference paths updated. |

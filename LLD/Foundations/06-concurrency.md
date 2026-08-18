@@ -1,8 +1,10 @@
 # Concurrency Deep-Dive for LLD
 
-> **Read before any problem note.** `java-building-blocks-for-lld.md` tells you WHICH primitive to pick. This file tells you WHY — the root causes of race conditions, deadlock, and visibility bugs, and the coordination patterns to fix them.
+> **Part of LLD Foundations.** Index + reading order: **../README.md**
 >
-> **Scope:** This file covers the WHY and HOW. For the quick "which primitive when" decision table, see `java-building-blocks-for-lld.md` §Concurrency Primitives.
+> **Read before any problem note.** `05-java-building-blocks.md` tells you WHICH primitive to pick. This file tells you WHY — the root causes of race conditions, deadlock, and visibility bugs, and the coordination patterns to fix them.
+>
+> **Scope:** Part 1–2 cover **single-JVM** concurrency (the WHY + the in-process primitives). **Part 3 (near the end)** covers **distributed / multi-node** concurrency — DB row locks, Redis leases, optimistic vs pessimistic, and the "what it still doesn't guarantee" answer that scores at senior level. For the quick "which primitive when" table, see `05-java-building-blocks.md` §Concurrency Primitives.
 
 ---
 
@@ -671,9 +673,117 @@ KEY INVARIANT:
 
 ---
 
+## Part 3 — 🌐 Distributed / Multi-Node Concurrency
+
+> Everything above assumes **one JVM**. The moment your system runs on **more than one node
+> (pods, gateways, workers)**, `synchronized` and `ReentrantLock` stop working — each JVM has
+> its own copy of the lock object, so two pods can both "win." Correctness must move to a
+> place *all* nodes share: **the database, or a distributed lock in Redis.** This is the same
+> hot-resource race as `Movie Ticket` / `Parking Lot` / `Payment` in the HLD problems — just
+> named at the LLD tier.
+
+### The one race behind almost every concurrency question — check-then-act
+
+You read state, decide, then write — and something changed in between.
+
+```java
+if (spotIsFree(spot)) {      // thread/pod B also reads "free" right here
+    assign(spot, vehicle);   // both assign the same spot
+}
+```
+
+> **The sentence that answers most concurrency questions:** *"The read is never the
+> guarantee. Both requests can pass the check. The guarantee has to be at the **write** — so
+> I re-check **inside** the lock, or let the database arbitrate."*
+
+Same shape on booking (two users, one room), parking (two gates, one spot), scheduling (two pollers, one job), rate limiting (two pods, one counter).
+
+### Choosing the mechanism — the decision table
+
+| Situation | Use | Why this one |
+|---|---|---|
+| Two app nodes grab the same DB row | `SELECT ... FOR UPDATE SKIP LOCKED` | DB arbitrates; `SKIP LOCKED` lets node B take the *next* rows instead of blocking behind A. Scales with replicas |
+| Two workers might run the same job | Redis lease: `SET key owner NX PX ttl` | Atomic claim; **the TTL makes crash recovery automatic** — no human clears a stuck flag |
+| Read-modify-write across the network | **one atomic Lua script** | Two round trips leave a race window; Lua runs the whole check-decrement inside Redis in one hop |
+| In-process counter, high contention | CAS retry loop / `AtomicInteger` | Lock-free; `synchronized` would serialize every key through one monitor |
+| Two people edit the same single row | **version column** (optimistic) | Correct tool for *updates* — retry on conflict is cheap when conflicts are rare |
+| Insert-conflict (overlapping ranges) | **DB constraint** (e.g. `EXCLUDE USING gist`) | Optimistic locking can't guard rows that **don't exist yet** — there's no version to compare |
+| Two structures must agree (list + counter) | both inside the **same** critical section | Otherwise the displayed count drifts from reality |
+
+### Lock SCOPE — the senior signal
+
+> *"Lock exactly the resource whose invariant you're protecting — never the whole component."*
+
+| Problem | Scope | Why not global |
+|---|---|---|
+| Booking | per **room** | Two people booking *different* rooms must never block each other |
+| Parking | per **level / spot** | A 6-gate lot would behave like a 1-gate lot at rush hour |
+| Rate limiter | per **key** (CAS, no lock) | A monitor on the limiter serializes every request in the process |
+| Job scheduler | per **row** (`SKIP LOCKED`) | Pollers should take *different* work, not queue for the same work |
+
+**If asked "why not `synchronized` on the method?"**
+> *"That serializes every request in the process through one monitor — the component becomes
+> the bottleneck it exists to prevent. Correct but unusable. Per-key locking keeps contention
+> scoped to actual conflicts."*
+
+### Two-layer correctness (the strongest answer you have)
+
+Don't pick one mechanism — **layer two, with different jobs.** Booking is the best example:
+
+> *"The **lock** makes conflicts rare and gives a clean error path — 'room busy, here are
+> three alternatives.' The **DB constraint** underneath makes double-booking physically
+> impossible even if the lock is bypassed by a bug, a deploy, or direct SQL. If I had to
+> delete one, I'd keep the constraint: the lock protects the user experience, the constraint
+> protects the invariant — and only one of those is allowed to fail."*
+
+### Say what it does NOT guarantee (the biggest scoring opportunity)
+
+**Never claim exactly-once.**
+
+> *"A lease *narrows* the double-execution window; it doesn't close it. If a worker GC-pauses
+> past its TTL, the lease expires, another worker picks the job up, and both run. The only
+> complete answer is **idempotent handlers** keyed on a `runId` — the lease is a performance
+> optimisation for correctness, not a correctness guarantee."*
+
+### Optimistic vs pessimistic — pick correctly
+
+| | Optimistic (version column + retry) | Pessimistic (`FOR UPDATE`, lease) |
+|---|---|---|
+| Best when | conflicts are **rare** | conflicts are **likely** |
+| Cost of a conflict | wasted work + retry | waiting |
+| Example | editing one booking's attendees | booking a popular room at 9am |
+
+**The trap — optimistic retry under heavy contention:** *"With 50 people racing for one room,
+optimistic means ~50 attempts and ~49 failures — a retry storm that amplifies load exactly at
+the spike."* And: optimistic locking guards **updates**; for overlapping-interval **inserts**
+there's no existing row to version — that's why booking needs a constraint.
+
+### Two more one-liners that show depth
+
+- **Lease + TTL beats a boolean flag:** *"A `boolean isRunning` can't survive the owner
+  crashing — it stays `true` forever until a human clears it. A lease has an owner *and* an
+  expiry, so recovery is automatic. I'd renew via heartbeat at TTL/3 so long jobs don't lose a
+  lease they still hold."*
+- **One Lua script over GET-then-SET:** *"`GET` then `SET` is two round trips; between them
+  another pod can write and both read `tokens = 1`. The Lua script runs refill-check-decrement
+  atomically inside Redis — one hop, no window."*
+
+### The four-part answer template (distributed)
+
+```
+1. NAME THE RACE    "Check-then-act between the availability read and the insert."
+2. THE MECHANISM    "Per-room SELECT ... FOR UPDATE, re-checking inside the lock."
+3. THE SCOPE + WHY  "Per room, not global — different rooms must not block each other."
+4. WHAT REMAINS     "A DB constraint underneath, because app locks fail during deploys.
+                     Even then, handlers must be idempotent."
+```
+
+---
+
 ## 🔄 Changelog
 
 | Date | Change |
 |---|---|
-| June 2026 | File created. Covers race conditions, visibility, deadlock, wait/notify, BlockingQueue, Semaphore, ReadWriteLock — the depth that java-building-blocks-for-lld.md intentionally omits. |
+| June 2026 | File created. Covers race conditions, visibility, deadlock, wait/notify, BlockingQueue, Semaphore, ReadWriteLock — the depth that java-building-blocks intentionally omits. |
 | Jul 2026 | **Part 2 added** — 4 new coordination patterns: ExecutorService/thread pool (dispatcher+worker pattern), AtomicReference+CAS (single-field state machine), CopyOnWriteArrayList (snapshot semantics for pub-sub), CountDownLatch/CyclicBarrier (multi-phase coordination). Triggered by Job Scheduler and Pub-Sub notes using these primitives without coverage in this file. TL;DR Rule 3 (match tool to access pattern) added. 2 new interview answer templates added (cancel() CAS race, CopyOnWriteArrayList vs synchronized). |
+| Aug 2026 | **Moved to `Foundations/06-concurrency.md` and Part 3 (Distributed / Multi-Node Concurrency) added** during the LLD restructure. Part 3 synthesizes the distributed-tier content (check-then-act, mechanism decision table, lock scope, two-layer correctness, optimistic-vs-pessimistic, lease+TTL, one-Lua-script, "what it doesn't guarantee") that previously lived only in the company-specific `Interview/salesForce/04-why-this-lock.md`. Cross-references updated to new Foundations paths. |

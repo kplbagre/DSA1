@@ -1,6 +1,7 @@
 # UML for LLD Interviews
 
 > **Read this before any Problem note.** Class diagrams and sequence diagrams appear in every problem note in this folder. You don't need full UML mastery — you need enough to draw quickly on a whiteboard and speak to it confidently.
+> **Part of LLD Foundations.** Index + reading order: **../README.md**
 
 ---
 
@@ -39,6 +40,8 @@ Every class/interface is a rectangle with up to three sections:
 ---
 
 ### The 5 Relationships (learn all 5)
+
+> **Canonical treatment of relationships (composition vs aggregation, IS-A, reference-by-ID) is in `04-relationships.md`. This section covers only how to DRAW them in UML.**
 
 #### 1. Implements (Realization)
 **"This class fulfils this interface's contract."**
@@ -554,3 +557,4 @@ KEY INVARIANT:
 |---|---|
 | June 2026 | Created — prerequisite for reading Problem notes. Driven by parking-lot.md diagram confusion. |
 | June 2026 | Added practice diagrams for BookMyShow, Elevator, Splitwise, Rate Limiter — class + sequence. |
+| Aug 2026 | Moved to Foundations/07-uml-for-interviews.md during LLD folder restructure; cross-reference paths updated. |

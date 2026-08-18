@@ -1,8 +1,9 @@
 # Design Principles
 
-> **Read before any problem note.** These 5 principles — KISS, DRY, YAGNI, Separation of Concerns, and Law of Demeter — are the vocabulary interviewers expect you to drop naturally when explaining design decisions. You already know SOLID (see `DesignPatterns/00-solid-principles.md`). These are the non-SOLID principles that complete the picture.
+> **Read before any problem note.** These 5 principles — KISS, DRY, YAGNI, Separation of Concerns, and Law of Demeter — are the vocabulary interviewers expect you to drop naturally when explaining design decisions. You already know SOLID (see `02-solid-principles.md`). These are the non-SOLID principles that complete the picture.
 >
-> **Cross-reference:** SOLID principles → `DesignPatterns/00-solid-principles.md`
+> **Cross-reference:** SOLID principles → `02-solid-principles.md`
+> **Part of LLD Foundations.** Index + reading order: **../README.md**
 
 ---
 
@@ -286,3 +287,4 @@ public class ParkingSpot {
 | Date | Change |
 |---|---|
 | June 2026 | File created. 5 non-SOLID principles with LLD-specific code examples and interview drop-in phrases. |
+| Aug 2026 | Moved to Foundations/03-design-principles.md during LLD folder restructure; cross-reference paths updated. |

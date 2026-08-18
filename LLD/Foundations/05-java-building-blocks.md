@@ -1,6 +1,7 @@
 # Java Building Blocks for LLD
 
 > **Read before any Problem note.** Every LLD problem is built from these pieces. This note is a decision framework — for each building block: what it is in one line, and *when to choose it* over the alternatives.
+> **Part of LLD Foundations.** Index + reading order: **../README.md**
 
 ---
 
@@ -261,3 +262,4 @@ KEY INVARIANT:
 |---|---|
 | June 2026 | Created — Java coding foundations for LLD. |
 | June 2026 | Expanded — 9 Interface examples, 9 Abstract Class examples, Enum/Collection/Concurrency with LLD + real-world columns. |
+| Aug 2026 | Moved to Foundations/05-java-building-blocks.md during LLD folder restructure; cross-reference paths updated. |

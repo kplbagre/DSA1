@@ -614,13 +614,15 @@ class FileSystemNodeTest {
 
 | What you need | Where it lives |
 |---|---|
-| Encapsulation, Composition vs Inheritance | `../oop-concepts.md` |
-| SOLID principles (SRP, OCP, DIP) | `../DesignPatterns/00-solid-principles.md` |
+| Encapsulation, Composition vs Inheritance | `../Foundations/01-oop-concepts.md` |
+| Composition vs aggregation, IS-A | `../Foundations/04-relationships.md` |
+| SOLID principles (SRP, OCP, DIP) | `../Foundations/02-solid-principles.md` |
 | Strategy pattern note | `../DesignPatterns/01-factory-strategy.md` |
-| KISS, DRY, SoC drop-in phrases | `../design-principles.md` |
-| 60-min execution playbook | `../interview-execution-guide.md` |
+| Composite pattern note (for `ls -r`) | `../DesignPatterns/07-composite.md` |
+| KISS, DRY, SoC drop-in phrases | `../Foundations/03-design-principles.md` |
+| 60-min execution playbook | `../InterviewPlaybook/execution-guide.md` |
 
-> **⚠️ Gap — Composite pattern note missing:** The `ls -r` problem uses the Composite pattern (treating individual and composite objects uniformly). There is currently no `../DesignPatterns/07-composite.md`. If you need the Composite pattern internalized before the interview, use the skeleton in §3 above as your primary reference.
+> **✅ Composite pattern note now exists:** `../DesignPatterns/07-composite.md` covers the file-system / tree pattern the `ls -r` problem uses (leaf + container behind one interface). The skeleton in §3 above remains a good quick reference.
 
 ---
 
@@ -753,11 +755,13 @@ public class ProductController {
 |---|---|
 | Raw research — format, source index | `../../DSA/Interview/ebay-mts1-research.md` |
 | Full DSA solutions — Problem §2 (Parser), §5 (Grouping) | `../../DSA/Interview/ebay-mts1-dsa-problems.md` |
-| OOP pillars — Encapsulation, Composition vs Inheritance | `../oop-concepts.md` |
-| SOLID principles — SRP, OCP, DIP | `../DesignPatterns/00-solid-principles.md` |
+| OOP pillars — Encapsulation, Composition vs Inheritance | `../Foundations/01-oop-concepts.md` |
+| Relationships — composition vs aggregation, IS-A | `../Foundations/04-relationships.md` |
+| SOLID principles — SRP, OCP, DIP | `../Foundations/02-solid-principles.md` |
 | Strategy pattern | `../DesignPatterns/01-factory-strategy.md` |
-| Design principles — KISS, DRY, SoC | `../design-principles.md` |
-| 60-min execution playbook | `../interview-execution-guide.md` |
+| Composite pattern (`ls -r`) | `../DesignPatterns/07-composite.md` |
+| Design principles — KISS, DRY, SoC | `../Foundations/03-design-principles.md` |
+| 60-min execution playbook | `../InterviewPlaybook/execution-guide.md` |
 
 ---
 
