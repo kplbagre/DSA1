@@ -792,3 +792,71 @@ What I try to do early is identify the highest-risk unknowns — the things I've
 I also ask for a checkpoint pretty early — "let me get something in front of you in a week so we can verify I'm going in the right direction before I'm deep into it." That's not weakness, that's how you reduce the risk of wasted work.
 
 *Real grounding:* The CA V5 onboarding involved a completely new slot-fetching pipeline and a new Cassandra key structure I'd never built in this codebase. I front-loaded the parts with the most unknown surface area — the key generation logic and the integration with the new query structure — and got early eyes on those before finishing the full implementation.
+
+---
+
+## CATEGORY 10 — VALUES-ROUND ADDITIONS (candidate options — SELECT THE TRUE ONE)
+
+> ⚠️ **STATUS: DRAFT — NOT YET FINALIZED.** These four questions map to behavioral themes that had **no story anywhere** in the bank (emotional regulation, mentorship, self-awareness, an *actual* missed deadline — not a save). They are the hard-angle questions that a bar raiser / values interviewer will probe for a specific time.
+>
+> Each has **2–3 candidate options** grounded in real MCSE context so they're consistent with the rest of this file. **Action required:** pick the ONE that genuinely happened, delete the others, and replace invented specifics with real detail. Once finalized, these become permanent Q16–Q19 and are reusable across every company (Disney, InMobi, Confluent all probe these).
+>
+> **Do not use a fabricated event or stat** — these are the exact questions engineered to expose that under follow-up.
+>
+> ⚠️ **Overlap warning:** several options draw on DST / CA V5 / Trace V2. Do NOT anchor two different answers to the same underlying event — spread finalized stories across distinct incidents.
+
+---
+
+### Q16: Tell me about a time you lost your temper / lost your composure at work.
+*Theme: Emotional regulation. They want self-awareness + a recovery mechanism — NOT a robot who never gets frustrated.*
+
+**Option A — Frustration in the wrong-layer investigation (Mexico DST):**
+> During the Mexico DST bug, I'd spent about three hours convinced the problem was in the transit-time calculation. It wasn't — the real issue was the IANA timezone observing DST. In standup I was short with a teammate who suggested I re-check my assumption, because I was frustrated at burning three hours. I caught myself mid-sentence, and afterward I messaged him that he'd actually been right and I'd been defensive because I was annoyed at myself, not at him. That's when I started time-boxing investigations and writing down my hypothesis before deep-diving — so frustration doesn't get pointed at the person questioning me.
+
+**Option B — Heated PR review:**
+> I once got curt in a PR review — a reviewer wanted to split my multihop double-bug fix into two PRs, and I fired back three quick comments arguing why the partial fix was worse, in a tone sharper than it needed to be. I could feel it escalating in text. I stopped, pulled him into a 10-minute call instead, and we resolved it in five minutes with the actual examples in front of us. The lesson: when I notice I'm writing fast and terse, that's my signal to switch from async text to a live conversation before it turns into a standoff.
+
+**Option C — Firefighting under on-call pressure:**
+> During a production latency incident I was on point for, I snapped at a teammate who kept asking for status updates while I was mid-diagnosis — something like "I'll tell you when I know." Not my best moment. After we stabilized it, I went back and apologized, and I realized the real fix was process: I now designate someone as the comms person during an incident so the person debugging isn't context-switching to give updates. That removed the friction that made me short in the first place.
+
+---
+
+### Q17: Tell me about a time you mentored or unblocked a junior/peer with concrete team impact.
+*Theme: Mentorship — PRIMARY SSE signal. Must be a specific person + specific outcome, not "I help people."*
+
+**Option A — Onboarding a junior to the multi-market codebase:**
+> A newer engineer on our team was struggling with our multi-market code — the `isCADiscoveryRequest()` gates and CCM flag resolution weren't obvious, and he'd shipped a change that accidentally affected US traffic in review. Instead of just fixing his PR, I sat with him for an hour and walked through *why* we gate market behavior and how buId resolution works. Then I wrote a short "multi-market checklist" — every new market-specific change needs an explicit gate and a CCM flag. He started citing it in his own reviews, and two other engineers picked it up. It turned a repeated review-comment into a shared norm.
+
+**Option B — Teaching the debugging methodology:**
+> A peer was stuck for two days on a bug where the same order gave different results intermittently. He was adding random fixes hoping something worked. I pulled him aside and instead of solving it, I walked him through how I approach non-determinism — look for HashMap iteration, thread scheduling, environment differences first. We found it together in about 45 minutes: a `keySet().iterator().next()` on a multi-entry map. The bigger win was he brought that same lens to a different bug a month later and solved it solo. Teaching the method mattered more than the fix.
+
+**Option C — The determinism checklist as a teaching tool:**
+> After we shipped a couple of concurrency-adjacent bugs, I put together a short "determinism and concurrency" review checklist — five patterns that look innocent but aren't, like `Stream.toList()` returning an immutable list. I walked the team through it in a 20-minute session aimed mostly at our junior engineers. One of them used it to catch a mutation-on-immutable-list bug in a PR before it merged. That's the outcome I care about — the floor moved up without me being in every review.
+
+---
+
+### Q18: What's a perception people have of you that you think is wrong? / How would colleagues describe you?
+*Theme: Self-awareness. The rehearsed "too detail-oriented" fails — needs a genuine blind spot others actually see + what you did about it.*
+
+**Option A — Directness read as harsh:**
+> In code reviews I'm very direct — I'll say "this will break in the multihop path" without much cushioning. Some people read that as harsh or as me thinking their work is bad, when I mean it narrowly about the code, not them. I learned this when a teammate told me my comments felt like judgments. So I changed how I frame — I now lead with the risk, not the verdict: "the risk I see here is X" instead of "this is wrong." Same information, but it lands as help instead of criticism.
+
+**Option B — Seen as someone who goes dark on hard problems:**
+> People sometimes think I prefer to disappear and solve hard things alone — because when I get a gnarly problem, I front-load the hardest unknown and go deep on it myself. The perception is "he doesn't want help." The reality is I'm de-risking the scariest part first, but from the outside it can look like I've gone quiet. I've corrected it by adding explicit early checkpoints — "give me a day on the risky part, then I'll show you where I am" — so people have visibility without me changing how I actually work.
+
+**Option C — The "go-to debugger" box:**
+> Because I've debugged a lot of the nasty production issues, there's a perception that I'm the firefighter who prefers solo heroics over collaboration. That box is a little wrong — I actually think the highest-leverage thing is making the *team* better at debugging, which is why I've written up methods and checklists. But I had to be deliberate about it, because if you're always the one who fixes it, people stop learning to. So I've started pairing on incidents instead of solo-solving, specifically to spread the skill.
+
+---
+
+### Q19: Tell me about a time you couldn't meet a deadline. *(a real miss, not a mid-sprint save)*
+*Theme: Accountability. S6 is a mid-sprint save; this asks for an actual miss. Own it, root-cause it, show what changed.*
+
+**Option A — Test-rework scope explosion (CA V5):**
+> During CA V5, I committed to a date for the slot-fetch changes. What I underestimated was the test rework — the existing tests used PowerMock on the static key-generation method, and adding the `businessUnit` parameter meant every mock expectation across the suite broke. That was more work than the feature itself, and I delivered about a week late. The real miss wasn't the estimate — it was that I saw the test surface expand on day two and didn't flag it until later. What changed: I now do a quick test-impact check before committing to any timeline that touches shared static methods, and I flag scope expansion the day I see it.
+
+**Option B — Dual-write validation ran long (Trace V2):**
+> For Trace V2, I estimated the dual-write validation window would be about two weeks. It took closer to four — validating V2 events against V1 surfaced schema mismatches I hadn't budgeted for, and I wouldn't cut the validation short because that data feeds real analytics. So I missed my original date. I owned it in standup rather than quietly extending, and gave my lead the revised timeline with the reason. The lesson: for anything involving a migration I now build a small synthetic-data validation step *before* I commit to a ramp timeline.
+
+**Option C — Under-escalated a dependency:**
+> I had a feature blocked on another team's schema finalization. I knew on day two it was at risk, but I assumed it'd land "soon" and didn't escalate — I kept finding adjacent work to do. It didn't land, and I missed the sprint commitment. That one was on me, not the other team: I had the signal early and sat on it. Now my rule is if I'm blocked on an external dependency, my manager hears about it on day two with the sprint impact spelled out — not at sprint end when it's too late to help.
