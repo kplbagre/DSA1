@@ -318,3 +318,198 @@ Topics, consumer counts, worker-thread counts, V1/V2 choice, sink choice, retry 
 - **Multi-tenancy / isolation →** #3 (UFN): short, sharp.
 - **Risky change / migration →** #4 (multi-sink).
 - **"How do you design for failure?" →** #5 (the contract) ties the other four together.
+
+---
+
+## 🔧 How Kafka Is Wired Here (implementation-level, from the real codebase)
+
+> Grounded in `mcse_data_ingestion` (module `mcsedata-listener`). This is what you say when they ask *"okay, but how is it actually built?"* — the wiring, not textbook Kafka. No long snippets; class names as anchors so you can go as deep as they push.
+>
+> ⚠️ **Study-only** — these are internal class/config names. Describe the *pattern* in the room ("a strategy factory picks the consumer flavor per pipeline"), not the identifiers.
+
+### The consumer flavors — V1 and V2 coexist behind one abstraction
+
+```
+                 KafkaStrategyImpl  (reads consumer-strategy config from CCM)
+                          │  picks a flavor per pipeline
+        ┌─────────────────┼──────────────────┬────────────────────┐
+   KafkaSource        KafkaSourceV2      KafkaAvroSource      KafkaAvroSourceV2
+   (V1, plain)        (V2, RKConsumer)   (V1, Avro+registry)  (V2, Avro+registry)
+        │                  │                   │                    │
+        └── each feeds a KafkaListener / KafkaAvroListener → domain EventHandler (~40 of them)
+```
+
+- **V1 vs V2** — `KafkaSource`/`KafkaAvroSource` are the original consumers; `KafkaSourceV2`/`KafkaAvroSourceV2` are the RKConsumer-backed rewrite (batch poll + managed offset commit). Both live at once — the **strategy factory** (`AbstractConsumerStrategyFactory` → `Iso`/`ItemStore`/`Dcc` `ConsumerStrategyFactory`) selects per pipeline, which is *how* the migration in Story #1 shipped one pipeline at a time without a flag-day.
+- **Avro variants exist only where a schema registry is in play** (the item-setup streams). Plain-JSON pipelines use the non-Avro source. That split is deliberate — you don't pay Avro's decode/registry cost where the producer isn't on it.
+- **`KafkaSourceWithHeaders`** — header-based routing for pipelines that carry routing metadata in Kafka record headers, not just the payload.
+- **`BulkKafkaListener` / `BulkConsumer`** — a separate path for bulk upload jobs (carrier-TNT, rate-card, shipping-zone), isolated from the streaming pipelines so a big batch can't starve them.
+
+### Everything is CCM-configured (the operational lever)
+
+The consumers read almost all their setup from CCM (runtime config) JSON keys, not code:
+
+| What CCM controls | Effect |
+| --- | --- |
+| Topic name (+ **primary vs mirror** topic) | Switch source topic, or consume a **cross-DC mirror** topic, without a deploy |
+| Per-topic `ssl.enabled` + SSL properties | Turn **mTLS** on per topic; certs pulled via the SSL-properties helper |
+| Consumer config + defaults (per topic) | Consumer count, thread count, poll/batch tuning — resize a hot pipeline live |
+| Ignore-message flag (per topic) | Drop a topic's traffic instantly (kill switch) during an incident |
+| Consumer **strategy** (V1/V2, sink choice) | Roll a pipeline forward/back between flavors live |
+
+**The one-liner:** *"The consumer is a thin shell; the behavior lives in CCM. Topic, mirror, SSL, thread counts, V1-vs-V2, kill switches — all runtime config, so a 2am fix is 'flip a key, watch the dashboard,' never a deploy."*
+
+### mTLS + mirror topics (the two details interviewers like)
+
+- **mTLS per topic** — each topic can require SSL client-cert auth (`security.protocol=SSL`, keystore/truststore from secrets). Only an authorized service with the client cert can consume — a compromised pod without the cert can't inject or read events.
+- **Mirror topic** — a cross-DC copy of the primary topic; a mirror consumer can be activated via CCM so a pipeline keeps ingesting if the primary region's topic is unavailable. This is the ingestion-side analog of the read side's active-active.
+
+---
+
+## 🧠 Kafka Concepts You MUST Be Able to Explain
+
+> The MQ-heavy Signup/ISV role *will* probe these. Each is: **concept (2 lines) → how we use it → likely pushback.** Deep partition math / throughput lives in the kafka-internals reference — link it, don't recite it. Trade-off reasoning is in [MCSE-DECISION-LOG.md](MCSE-DECISION-LOG.md) (#5–#9).
+
+### 1. Topic / partition / offset — the log model
+A **topic** is an append-only log; it's split into **partitions** (the unit of parallelism + ordering); each record has an **offset** (its position). Unlike a queue, records aren't deleted on read — they age out by retention, which is *why replay works*.
+> **We use it:** replay a time window during an incident by resetting the consumer's offset.
+> **Pushback — "why does that matter vs a queue?"** → A queue deletes on ack, so no replay and no independent re-consumption; our incident playbook depends on both.
+
+### 2. Consumer group + rebalance
+A **consumer group** shares a topic's partitions among its members; each partition is owned by exactly one member. Add/remove a member → **rebalance** reassigns partitions.
+> **We use it:** one group per pipeline → independent offsets, independent lag, independent scaling. Pods ≤ partitions or the extra pods sit idle.
+> **Pushback — "what happens on rebalance mid-processing?"** → In-flight records may be reprocessed after reassignment — safe *because* sinks are idempotent (concept #4).
+
+### 3. Partition key → ordering
+Kafka guarantees order **only within a partition**. The **producer key** decides the partition (`hash(key) % partitions`).
+> **We use it:** key by **offer ID** → all events for one offer land on one partition, processed in order. We don't need global order (offer A vs B don't interact), only per-offer.
+> **Pushback — "hot key?"** → A wildly-updated offer skews one partition; monitor per-partition lag; fix with a composite key (offer+sub-shard) *only if data shows it*.
+
+```
+🎨 Visual — key → partition → per-key ordering
+
+  offer 111 events ─┐
+                    ├─hash─► Partition 0  ► ordered stream for 111, 333 ...
+  offer 333 events ─┘
+  offer 222 events ──hash─► Partition 1  ► ordered stream for 222 ...
+
+  KEY INVARIANT: same key ⇒ same partition ⇒ ordered. Different keys may interleave — and that's fine.
+```
+
+### 4. Delivery semantics — at-least-once + idempotent = effectively-once
+Kafka consumers are **at-least-once** by default (you *will* reprocess on crash/rebalance). Exactly-once across Kafka→external-DB is expensive and fragile.
+> **We use it:** commit offset **after** the Cassandra write; writes are **idempotent upserts keyed by id**, so a duplicate reprocess yields the identical row → *effectively-once* without the exactly-once machinery.
+> **Pushback — "how do you know consumers are idempotent?"** → Review gate: every sink is an upsert on a stable key, never a blind increment. Replay exercises it constantly, so a non-idempotent write surfaces fast.
+
+### 5. Offset commit timing
+Commit-**before**-process + crash = record **lost forever**. Commit-**after**-process + crash = record **reprocessed** (safe with #4).
+> **We use it:** RKConsumer manages commit; our contract is "durably write, *then* let the offset advance." Never ack an unprocessed record.
+> **Pushback — "auto-commit?"** → Auto-commit on a timer can commit records you haven't finished → silent loss; we don't rely on it for the write path.
+
+### 6. Poison pill / DLT / retry topic
+A **poison pill** is a record that always fails (malformed, schema-breaking). If you **re-throw**, the consumer stops and the **partition freezes** — one bad record blocks all good records behind it.
+> **We use it:** never re-throw — **catch, log with context, emit a metric, commit past it**; route to an **error topic → retry topic → dead-letter** for later inspection/replay (Story #2). A **dead-letter topic (DLT)** is where permanently-unprocessable records park.
+> **Pushback — "aren't you losing data by skipping?"** → It's parked in the error/DLT store, not dropped — recoverable via replay. Freezing the partition would be the real outage.
+
+### 7. Back-pressure — Kafka as the durable buffer
+When processing can't keep up, you must **slow intake, not drop events**.
+> **We use it:** poller dispatches onto a **bounded processor pool**; when full, the poller stops fetching → consumer **lag grows** (visible) → Kafka durably holds the backlog → catch up when pressure eases. (Contrast with the read side, which fails *fast* — [MCSE-FEATURES-AND-FAILURE.md #10](MCSE-FEATURES-AND-FAILURE.md#10--back-pressure-on-both-sides).)
+> **Pushback — "why not just add pods?"** → Only helps up to partition count; beyond that, extra pods idle. Tune threads first, then pods, then partitions.
+
+### 8. Avro + Schema Registry
+**Avro** is compact binary with a schema; the **Schema Registry** stores schemas centrally and **rejects incompatible ones at publish time**, enforcing backward/forward compatibility.
+> **We use it:** the item-setup streams — new fields are optional so an upstream change can't break 40 consumers at runtime; a breaking schema is rejected at the *producer*, not discovered by our crash.
+> **Pushback — "JSON is easier to debug"** → True, and I felt it (can't `cat` an Avro record) — but JSON pushes a rename/typo failure to runtime across every consumer; the registry moves it left. Logs carry the decoded record anyway.
+
+### 9. Consumer lag — the health signal
+**Lag** = latest offset − committed offset = how far behind a consumer is. It's *the* ingestion health metric.
+> **We use it:** rising lag = the read-side caches are going stale → alert thresholds per pipeline (`[VERIFY your thresholds]`); we **scale on lag**, not CPU.
+> **Pushback — "lag is high but CPU is low — why?"** → Usually a slow *sink* (Cassandra write latency) back-pressuring the pool, or pods > partitions so parallelism is capped — not a compute problem.
+
+### 10. Security — mTLS
+**mTLS** = mutual TLS: both sides present certs, so only authorized services can produce/consume.
+> **We use it:** per-topic `ssl.enabled`; keystore/truststore from the secret store. A pod without the client cert can't inject events.
+> **Pushback — "why not just network policy?"** → Defense in depth: network policy controls *reachability*, mTLS controls *identity* — a breached pod inside the mesh still can't authenticate without the cert.
+
+### 11. Producer durability — acks / replication / ISR (know it, even though you're consumer-side)
+`acks=all` means the leader waits for all **in-sync replicas (ISR)** before acking → survives a broker loss. Replication factor + `min.insync.replicas` set the durability floor.
+> **We use it:** we're mostly the *consumer*, but our producers (error/retry topics) use `acks=all` so a retry event can't be lost on a broker failure.
+> **Pushback — "acks=all costs latency"** → Yes; acceptable for our low-volume error/retry topics where losing a record is the worse outcome. A high-throughput hot path might trade down to `acks=1`.
+
+### 12. Kafka vs a queue — one-liner + pointer
+> "A queue (RabbitMQ/SQS) deletes on ack — great for at-least-once task dispatch, but no replay and no independent re-consumption. Kafka is a **retained log**, which is exactly what an ingestion + replay + multi-consumer model needs." Full matrix + "where Kafka is *not* preferable": [KAFKA-VS-MQ-COMPARISON.md](KAFKA-VS-MQ-COMPARISON.md).
+
+---
+
+### 🗺️ How to drill this section
+1. Cover the "how we use it" + "pushback" lines; from the concept name alone, say all three.
+2. For each, land the **project tie** — anyone can define a consumer group; you say *"one per pipeline, independent lag, we scale on it."* That's the signal.
+3. If pushed deeper than concept level (partition math, throughput ceilings, log compaction), pivot to the kafka-internals reference — don't bluff numbers.
+
+---
+
+## 6. 🇲🇽 MX ISO → Offer-Ingestion Topic Consolidation
+
+> **This is the "simplify infrastructure via config, not code" story** — a real topology change that eliminated an entire Kafka topic, removed an HTTP hop, and reduced operational surface for MX, all without touching a line of application code.
+
+### The problem — two topics doing the same job, one worse than the other
+
+MX offer data was flowing through **two separate Kafka streams**:
+
+- **Legacy ISO topic** — carried lightweight *notifications* (just an offer ID). On receipt, the consumer made an **HTTP callback to IQS** (Item Setup Query Service) to fetch the full offer payload, parsed the response, then wrote to Cassandra. That's: Kafka event → HTTP call → parse response → write. Three failure points.
+- **Offer-ingestion topic (`mx-mcse-offer-ingestion`)** — carried the **full offer payload directly on the Kafka message**. No callback needed: Kafka event → parse → write. One failure point.
+
+Both streams ultimately wrote the same data to the same Cassandra tables. MX was paying for:
+- **Double operational surface** — two topics, two consumer groups, two sets of lag alerts, two potential sources of staleness.
+- **An unnecessary HTTP hop** — the IQS callback on the legacy path added latency, introduced a network failure mode, and meant a transient IQS outage could stall offer ingestion even though the data was available directly on Kafka.
+- **Extra infrastructure cost** — pods, partitions, and monitoring for a topic that was redundant once the offer-ingestion topic existed.
+
+### How it was achieved — entirely via config, zero code changes
+
+The key insight: the application's consumer is already **topic-agnostic**. The `iso` context in `SourcingIngestionContext` doesn't hardcode a topic name — it reads it from CCM at startup via `kafka.consumer.topic.json`. So "which topic does the iso pipeline consume?" is a config value, not a code constant.
+
+**Four config changes made the merge:**
+
+1. **Repoint the topic** — in `ccm.yaml` for buId=7 (MX):
+   ```json
+   kafka.consumer.topic.json: { "iso": "mx-mcse-offer-ingestion" }
+   ```
+   The `iso` context now reads from the offer topic. The old ISO topic is simply no longer consumed.
+
+2. **New consumer group** — the config sets group id to `mx-mcse-lite-ingestion` (not the old ISO group). This means a **clean start** on the new topic — no risk of inheriting stale offsets from the old topic's consumer group.
+
+3. **Kill the legacy processing path** — `ENABLE_LEGACY_OFFER_TOPIC` (default `false`) controls whether `ItemEventHandler` processes the old-style ISO notifications. With it off, the handler **short-circuits immediately**:
+   ```java
+   boolean isNGISOEnabled = ccmConfig.getBoolean(tenantId, CcmEnum.ENABLE_LEGACY_OFFER_TOPIC);
+   if (!isNGISOEnabled) { return; }   // skip legacy ISO path — this tenant is on the offer topic now
+   ```
+   Only `OfferEventHandler` runs — the path that handles the self-contained offer payloads.
+
+4. **Switch to abstract offer IDs** — the offer-ingestion topic uses a different ID scheme (PNO abstract offer ID) than the legacy ISO topic. `use.abstract.offer = true` for MX activates `AbstractOfferIdResolverImpl`:
+   ```java
+   if (usePnoAbstractOfferId) { derivedOfferId = abstractOfferId; }
+   ```
+   This ensures the correct offer ID is used for the Cassandra upsert key.
+
+### How it was tested / validated safely
+
+- **Staging ran first** — separate `ccm.yaml` blocks exist for `buId=7 / envProfile=stg` and zone-specific overrides, each pointing at `mx-mcse-offer-ingestion` with the right bootstrap servers and SSL config. Staging validated the merged topology before prod.
+- **New consumer group = clean start** — by using `mx-mcse-lite-ingestion` (not the old group), the consumer began from a known offset on the new topic. No stale-offset risk from the old topic.
+- **Every lever is reversible** — if the merge broke:
+  - Flip `ENABLE_LEGACY_OFFER_TOPIC` back to `true` → old ISO path reactivates.
+  - Change `kafka.consumer.topic.json` back to the old ISO topic name → consumer switches back.
+  - Flip `use.abstract.offer` back to `false` → old ID resolution resumes.
+  - All ~30-second CCM changes, no deploy.
+- **Unit tests** — `IsoConsumerStrategyFactoryTest` validates the factory wires the correct consumer chain based on flags.
+- **Observability** — `EventLoggingHelper.sendResponse(...)` emits structured events at each processing stage, and consumer lag on `mx-mcse-offer-ingestion` / group `mx-mcse-lite-ingestion` is the validation metric.
+
+### The benefit
+
+1. **One fewer topic + consumer group for MX** — simpler ops, fewer things to page on, fewer lag dashboards.
+2. **Eliminated the IQS HTTP callback** — one fewer network hop, one fewer failure mode, lower p95. The offer-ingestion path is: receive payload → parse → write. Done.
+3. **Zero code changes** — the entire merge is config. The application's topic-agnostic consumer design (Story #1's config machinery) made this a config deployment, not a code project.
+4. **Reversible in 30 seconds** — three CCM flags to flip back if anything goes wrong.
+5. **Foundation for INTL's per-event-type split** — the same config machinery later let INTL do the *opposite* — split one stream into three focused consumers (create/update/replay), each sized and monitored independently via `iso-ingestion-tg2-kitt.yml`. Same code, different config, different topology. The architecture supports both consolidation and fan-out.
+
+### The interview one-liner
+
+*"For MX, I consolidated two separate Kafka topics — legacy ISO notifications plus offer events — into a single offer-ingestion stream. The legacy path made an extra HTTP call per event to fetch the payload; the new path carries the payload directly. I killed the old path with a feature flag, repointed the consumer via config, and used a fresh consumer group for a clean start. Zero code changes, reversible in 30 seconds. The same config machinery later let another market split their stream in the opposite direction — three focused consumers per event type."*

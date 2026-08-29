@@ -30,6 +30,8 @@ ZipSlaCaseData zipSlaCaseData = sourcingContext.getCustomerZipSlaCaseData();
 
 `getCustomerZipSlaCaseData()` is explicitly set when the sourcing context is initialized from the request. It's always the actual customer's zip case — not an arbitrary map entry.
 
+**Prevention / follow-through:** Fixing the instance wasn't enough — I searched the codebase for every `.keySet().iterator().next()` on a map that could hold more than one entry and removed the reliance on map-iteration order in each. That closed the whole *class* of non-determinism, not just this one call site.
+
 ### Why this is impressive
 Non-determinism bugs are the hardest to find because they only manifest under specific conditions and aren't reproducible on demand. You can't add a test that catches this without understanding the bug first. The root cause is a Java language-level trap: treating `HashMap` iteration as if it were ordered. The right data structure for ordered iteration is `LinkedHashMap`. The fix doesn't change data structures — it simply removes the reliance on map iteration entirely.
 
@@ -174,6 +176,8 @@ eddInDcTz = esd.equals(actualShipDateInDcTz) && HopType.DIRECT.equals(hopType)
 ### Why this is impressive
 Both bugs stem from the same root issue: code written assuming DIRECT hop, then reused for multihop without updating the hop-type guards. The `+1 day` error on multihop TNT-in-minutes is subtle — it only fires when same-day ship (ESD == actualShipDate), which is a specific subset of multihop orders. The fix required understanding what `hubTntBuffer`, `laneTntBuffer`, and `multihopTntMinutes` each represent semantically and why the +1 is valid for single-hop but already baked into the buffer for multihop.
 
+**Prevention / follow-through:** Both bugs slipped through because every existing test used a single-hop (DIRECT) scenario. I added regression tests covering both DIRECT and INVENTORY_NODE hop paths so that blind spot can't recur, and flagged an EDD-accuracy-per-hop-type panel so a future mismatch surfaces as a monitoring signal rather than a business escalation.
+
 **Concepts:** Multi-hop delivery architecture (DIRECT vs INVENTORY_NODE hop types), transit time buffer arithmetic, same-day ship vs next-day ship logic.
 
 ---
@@ -276,6 +280,8 @@ if (sourcingContext.getCallType().isPromiseCall()
 ```
 
 New CCM key: `disable.boxWithCost.from.logging` — enabled for CA. Map is cleared in-place before `logSolution()` runs, so serialization skips all box data.
+
+**Prevention / follow-through:** To make regressions visible instead of waiting for the next p95 spike, I added a CCM-controlled gauge on the map size — so if the object grows large again we get an early signal rather than discovering it through latency.
 
 ### Why this is impressive
 The fix is 3 lines. Finding it took systematic profiling: Grafana narrowed it to promise calls, per-stage timing logs narrowed it to `logSolution()`, reading the serialization input narrowed it to the box map. The lesson: observability overhead compounds when evaluation counts scale up. You serialize a small object once — fine. You serialize a large object per candidate per call — the trace path becomes your bottleneck. The CCM flag pattern is important: zero-deploy rollback, per-market control, safe to experiment in prod.
