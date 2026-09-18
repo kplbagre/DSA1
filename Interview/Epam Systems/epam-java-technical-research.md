@@ -76,14 +76,14 @@ Bucket → [LinkedList] until chain length > 8
 
 | | `ConcurrentHashMap` | `Collections.synchronizedMap()` |
 | --- | --- | --- |
-| Locking strategy | Segment-level (16 default segments) | Whole-map lock |
-| Read locking | No lock needed for reads | Locks the entire map |
-| Null keys/values | ❌ Not allowed | ✅ Allowed |
+| Locking strategy | **Java 8+:** CAS on empty bins + `synchronized(bin_head)` on collisions (NOT "16 segments" — that was Java 7) | Whole-map lock |
+| Read locking | No lock needed for reads (volatile reads) | Locks the entire map |
+| Null keys/values | ❌ Not allowed (NPE thrown) | ✅ Allowed |
 | Iteration under modification | Safe (weakly consistent iterator) | `ConcurrentModificationException` |
 | When to use | High concurrent reads + writes | Data consistency critical, simpler setup |
 
-**KEY INVARIANT:**
-`ConcurrentHashMap` never locks the whole map — it locks only the segment being modified. This is called **lock stripping**.
+**KEY INVARIANT (Java 8+):**
+`ConcurrentHashMap` uses CAS (Compare-And-Swap) for writes to empty bins (no lock at all) and `synchronized` on the bin head node for collisions. Reads are lock-free (volatile). The old "16 Segment / lock stripping" model was **Java 7 only** — saying it in a 2026 interview is a red flag.
 
 ---
 
