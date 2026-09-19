@@ -770,6 +770,179 @@ public class LoggingAspect {
 
 ---
 
+## 🎯 Interview Q&A — Day 2 Topics
+
+### ⭐ Section A — Asked in EPAM (Reported 2024–2025)
+
+---
+
+**Q1. Can you put `@Transactional` on a private method? What happens?**
+
+> Nothing happens — and that's the trap. Spring's transaction mechanism works by generating a CGLIB proxy (a runtime subclass of your class). When a caller invokes a method on the proxy, the proxy intercepts the call, opens a transaction, delegates to your actual method, then commits or rolls back.
+>
+> CGLIB generates a subclass at runtime. Subclasses cannot override private methods — they're not inherited. So the proxy cannot intercept the private method, meaning `@Transactional` on a private method is silently ignored. No exception is thrown. The method runs, but with no transaction wrapping it.
+>
+> Fix: make the method `public` (or at minimum `protected`). If the method must stay private, move the transactional logic into a separate Spring bean.
+
+---
+
+**Q2. What is the self-invocation problem with `@Transactional`? How do you fix it?**
+
+> When a Spring bean calls one of its own methods internally using `this.method()`, the call bypasses the CGLIB proxy entirely. The proxy only intercepts calls coming from *outside* the bean. A call from within the same object instance goes directly to the method — the proxy never sees it, so no transaction is opened.
+>
+> Example: `OrderService.processOrder()` (no `@Transactional`) calls `this.saveOrder()` (has `@Transactional`). The `@Transactional` on `saveOrder()` is silently ignored. If an exception occurs, nothing rolls back.
+>
+> Three fixes:
+> 1. Move the inner `@Transactional` method to a **separate Spring bean** and inject that bean — calls go through its proxy.
+> 2. Inject the bean into itself via `@Autowired` (Spring allows self-injection since 4.3) — `self.saveOrder()` goes through the proxy.
+> 3. Use `AopContext.currentProxy()` to get the proxy reference programmatically (requires `@EnableAspectJAutoProxy(exposeProxy=true)`) — least preferred, couples your code to Spring internals.
+
+---
+
+**Q3. What is the difference between `REQUIRED` and `REQUIRES_NEW` propagation?**
+
+> `REQUIRED` (the default) means: join an existing transaction if one is already running; if not, start a new one. Both the outer and inner methods share the same transaction — they have the same commit and rollback fate. If the inner method marks the transaction for rollback, the outer method's work rolls back too.
+>
+> `REQUIRES_NEW` means: always start a brand-new independent transaction, and suspend the current one (if any). The inner method's transaction commits or rolls back independently of the outer one. This is what you want when you need an action to persist even if the surrounding transaction fails — for example, saving an audit log entry even if the main business operation fails.
+>
+> A common mistake: using `REQUIRED` when you need `REQUIRES_NEW` — the audit log and the main operation both roll back together, giving you no audit trail of the failure.
+
+---
+
+**Q4. `@Transactional` by default does not roll back on checked exceptions. Explain why and how to fix it.**
+
+> Spring's `@Transactional` follows the EJB convention: it rolls back automatically only on `RuntimeException` and `Error` (unchecked exceptions). Checked exceptions — like `IOException`, `SQLException` — do NOT trigger a rollback by default. The transaction commits even if a checked exception propagates out of the method.
+>
+> The reasoning: checked exceptions represent expected business conditions (file not found, service temporarily unavailable), not programming errors. The developer is expected to handle them or decide explicitly whether to roll back.
+>
+> Fix: specify the exception class explicitly:
+> ```java
+> @Transactional(rollbackFor = IOException.class)
+> public void saveFile() throws IOException { ... }
+> ```
+> For all exceptions: `rollbackFor = Exception.class`. To prevent rollback on a specific runtime exception: `noRollbackFor = IllegalArgumentException.class`.
+
+---
+
+**Q5. What is the Spring bean lifecycle, in order?**
+
+> 1. Spring instantiates the bean by calling its constructor.
+> 2. Dependencies are injected (`@Autowired` fields, setter injection, or constructor injection — constructor injection is the cleanest because the object is fully initialized after construction).
+> 3. `@PostConstruct` method runs — this is the right place to do initialization logic that needs injected dependencies (validation, cache warm-up, starting background workers).
+> 4. The bean is registered in the `ApplicationContext` and is now live, serving requests.
+> 5. When the context shuts down, `@PreDestroy` runs — close connections, release resources, stop threads.
+> 6. The bean is destroyed.
+>
+> Important caveat: `@PreDestroy` is **never called for prototype-scoped beans**. Spring does not track prototype beans after handing them out — their lifecycle after creation is your responsibility.
+
+---
+
+**Q6. Explain the NESTED propagation. When does it fail?**
+
+> `NESTED` creates a savepoint (a checkpoint inside the current transaction at which the transaction can be partially rolled back) within the existing transaction. If the inner method fails, only the work done after the savepoint is rolled back — the outer transaction can still commit.
+>
+> This is fundamentally different from `REQUIRES_NEW`: `REQUIRES_NEW` creates a completely separate transaction; `NESTED` creates a savepoint inside the same transaction.
+>
+> **Where it fails:** `NESTED` requires savepoint support, which is a JDBC-level feature. It works with `DataSourceTransactionManager`. It does NOT work with `JpaTransactionManager` (the default when using Spring Data JPA) — JPA does not expose savepoints through its API. Attempting it with JPA throws `NestedTransactionNotSupportedException`. If you need NESTED behavior with JPA, you must either restructure the logic, use `REQUIRES_NEW`, or drop to native JDBC for the inner operation.
+
+---
+
+### 🌐 Section B — Commonly Asked (Spring Core + AOP + Transactions)
+
+---
+
+**Q7. What is the difference between `@Component`, `@Service`, `@Repository`, and `@Controller`?**
+
+> All four are stereotypes (specializations of `@Component`) that mark a class as a Spring-managed bean. Functionally, they are equivalent — Spring's component scan picks up all of them.
+>
+> The differences are semantic and infrastructural:
+> - `@Component` — generic Spring-managed component.
+> - `@Service` — signals this class contains business logic. No extra behavior added by Spring.
+> - `@Repository` — signals this class is a data-access layer. Spring adds one piece of behavior: it translates database-specific exceptions (like `SQLException`) into Spring's `DataAccessException` hierarchy, so your service layer doesn't couple to a specific database.
+> - `@Controller` — signals this class handles HTTP requests in Spring MVC. Spring's `DispatcherServlet` routes requests to it.
+> - `@RestController` — `@Controller` + `@ResponseBody`. Response is serialized directly to JSON/XML instead of resolving a view template.
+>
+> The semantic distinction matters for readability and for some Spring Boot auto-configurations that scan specific stereotypes.
+
+---
+
+**Q8. What is the difference between BeanFactory and ApplicationContext?**
+
+> `BeanFactory` is the root interface — it provides basic dependency injection (create beans on demand, inject dependencies). It's lightweight and loads beans lazily (only when first requested).
+>
+> `ApplicationContext` extends `BeanFactory` and adds enterprise-grade features: eager initialization of singleton beans at startup, internationalization (message sources), event propagation (`ApplicationEvent`), integration with AOP, `@PostConstruct`/`@PreDestroy` lifecycle methods, environment abstraction, and `@Profile` support.
+>
+> In practice, you almost always use `ApplicationContext` (specifically `AnnotationConfigApplicationContext` or the embedded one in Spring Boot). `BeanFactory` is only relevant in extremely resource-constrained environments where startup memory matters.
+
+---
+
+**Q9. What is a circular dependency in Spring and how do you fix it?**
+
+> A circular dependency occurs when Bean A requires Bean B to be created, and Bean B requires Bean A — neither can be created first.
+>
+> Spring detects circular dependencies in **constructor injection** at startup and throws `BeanCurrentlyInCreationException`. This is actually good — it forces you to fix the design.
+>
+> For **field injection** (`@Autowired` on fields), Spring can resolve simple circular dependencies by proxy tricks, but Spring Boot 6+ has circular dependency detection enabled by default and will fail at startup.
+>
+> Fix options:
+> 1. **Redesign** — the most correct fix. Extract the shared logic into a third bean that A and B both depend on. Circular deps often signal a missing abstraction.
+> 2. **`@Lazy` on one injection** — Spring injects a proxy instead of the real bean; the real bean is created when first used. Hides the problem rather than solving it.
+> 3. **Setter injection instead of constructor** — lets Spring partially create both beans and wire them after. Works but gives you a partially-constructed object during lifecycle.
+
+---
+
+**Q10. How does Spring AOP work? What is the difference between `@Before`, `@After`, and `@Around`?**
+
+> Spring AOP works via proxies. When you annotate a bean method with something like `@Transactional` or `@Cacheable`, Spring wraps the bean in a proxy. Calls to the bean go through the proxy, which can run code before, after, or around the real method.
+>
+> The three advice types:
+>
+> - `@Before` — runs before the method executes. Cannot prevent execution or change the return value.
+> - `@After` (also `@AfterReturning`, `@AfterThrowing`) — runs after the method returns (or throws). `@AfterReturning` gets the return value; `@AfterThrowing` gets the exception.
+> - `@Around` — the most powerful. You get a `ProceedingJoinPoint`; you call `joinPoint.proceed()` to actually execute the method. You can run code before and after, change the return value, swallow exceptions, or skip execution entirely.
+>
+> Spring's `@Transactional` is internally an `@Around` advice — it opens a transaction before `proceed()`, and commits or rolls back after.
+
+---
+
+**Q11. How do you inject a prototype bean into a singleton bean so you get a fresh instance every time?**
+
+> The naive approach (just `@Autowired` the prototype into a singleton) doesn't work — Spring injects the prototype once at singleton creation, and every call to the singleton uses the same prototype instance. It effectively becomes a singleton.
+>
+> Two clean fixes:
+>
+> **Fix 1 — `@Lookup` method injection:** Spring overrides the method at runtime to return a fresh prototype on every call.
+> ```java
+> @Service
+> public class TaskService {
+>     @Lookup
+>     public TaskProcessor getProcessor() { return null; }
+>
+>     public void process() {
+>         TaskProcessor p = getProcessor();   // fresh instance every call
+>         p.run();
+>     }
+> }
+> ```
+>
+> **Fix 2 — `ObjectFactory<T>`:** inject a factory, call `.getObject()` each time.
+> ```java
+> @Service
+> public class TaskService {
+>     @Autowired
+>     private ObjectFactory<TaskProcessor> factory;
+>
+>     public void process() {
+>         TaskProcessor p = factory.getObject();   // fresh instance
+>         p.run();
+>     }
+> }
+> ```
+>
+> Both ensure a fresh prototype on every use. `@Lookup` is cleaner. `ObjectFactory` is more explicit.
+
+---
+
 ## 🔄 Changelog
 
 | Date | Change |

@@ -930,6 +930,151 @@ CompletableFuture<String> safe = CompletableFuture
 
 ---
 
+## 🎯 Interview Q&A — Day 1 Topics
+
+### ⭐ Section A — Asked in EPAM (Reported 2024–2025)
+
+---
+
+**Q1. How does HashMap work internally? Walk me through what happens when you call `put("key", value)`.**
+
+> HashMap computes `hashCode()` on the key, then applies a bit-spreading function to distribute the hash more evenly — this reduces clustering in buckets. It then takes `hash & (capacity - 1)` to find the bucket index. If the bucket is empty, the entry goes in directly. If there's already an entry (collision), Java walks the chain comparing keys using `equals()`. If an equal key is found, the value is updated; otherwise a new node is appended.
+>
+> In Java 8, once a single bucket chain exceeds 8 nodes AND the total table capacity is at least 64, the linked list is converted to a red-black tree — worst-case lookup drops from O(n) to O(log n). When entries are removed and the tree shrinks below 6 nodes, it converts back to a linked list.
+>
+> Separately, when the total number of entries exceeds `capacity × loadFactor` (default 0.75), the map doubles in size and rehashes all entries.
+
+---
+
+**Q2. What is the difference between ConcurrentHashMap and `Collections.synchronizedMap()`?**
+
+> `Collections.synchronizedMap()` wraps a regular map with a single lock on the whole map. Every `get()`, `put()`, `remove()` acquires the same lock — only one thread can do anything at a time, which kills performance under concurrent load.
+>
+> Java 8 ConcurrentHashMap is fundamentally different. For empty buckets, it uses a CAS (compare-and-swap — a hardware atomic instruction that updates a value only if it matches the expected value) operation with no lock at all. For non-empty buckets, it locks only the head node of that specific bucket — so hundreds of threads can write to different buckets simultaneously. Reads use volatile semantics, so they never block.
+>
+> The practical difference: synchronizedMap is usable only for low-concurrency situations. ConcurrentHashMap is what you use in production for shared caches, counters, and any concurrent access pattern. One more difference: ConcurrentHashMap bans null keys and null values — HashMap allows one null key.
+
+---
+
+**Q3. What is the difference between `map()` and `flatMap()` in Java Streams?**
+
+> `map()` is a one-to-one transform — for each element in the stream, it produces exactly one output element. The result is `Stream<R>`.
+>
+> `flatMap()` is a one-to-many transform — for each element, it produces a stream of results, and all those streams are flattened into one output stream. Think of it as `map()` followed by a flatten step.
+>
+> The classic example: given a list of sentences, `map(sentence -> sentence.split(" "))` gives you `Stream<String[]>` — a stream of arrays. `flatMap(sentence -> Arrays.stream(sentence.split(" ")))` gives you `Stream<String>` — all words in a single flat stream.
+>
+> In CompletableFuture terms: `thenApply` is like `map` (synchronous transform), `thenCompose` is like `flatMap` (chains another async stage without nesting).
+
+---
+
+**Q4. What does `volatile` guarantee? Can it replace `synchronized`?**
+
+> `volatile` guarantees visibility — any write to a volatile variable goes straight to main memory, and any read goes straight from main memory, bypassing the CPU cache. It also prevents instruction reordering around that variable.
+>
+> What it does NOT guarantee is atomicity. The classic example: `i++` on a volatile `int` is still a race condition. `i++` is actually three operations — read `i`, increment, write back — and two threads can interleave these steps.
+>
+> `synchronized` gives both visibility and atomicity — only one thread executes the synchronized block at a time, and memory is flushed on exit.
+>
+> So no, `volatile` cannot replace `synchronized` for compound operations. Use `volatile` only when you have a single write and multiple reads, and the write is atomic by itself (e.g., writing a reference, writing a boolean flag). Use `AtomicInteger`/`AtomicLong` for atomic counter operations without the full cost of `synchronized`.
+
+---
+
+**Q5. (Coding) Find the first non-repeating character in a string using Java Streams.**
+
+> The key insight is using a `Set` whose `add()` returns `false` when the element was already present — that's what `!seen.add(c)` exploits.
+
+```java
+public Optional<Character> firstRepeating(String s) {
+    Set<Character> seen = new HashSet<>();
+    return s.chars()
+        .mapToObj(c -> (char) c)
+        .filter(c -> !seen.add(c))
+        .findFirst();
+}
+```
+
+> Walk-through: `s.chars()` gives an `IntStream` of char values. `mapToObj` boxes each to `Character`. `filter(c -> !seen.add(c))` passes only characters already in the set (i.e., seen before). `findFirst()` returns the first such character as an `Optional<Character>`.
+
+---
+
+**Q6. (Coding) Write a stream to group words by their sorted characters (anagram grouping).**
+
+```java
+public Map<String, List<String>> groupAnagrams(String[] words) {
+    return Arrays.stream(words)
+        .collect(
+            Collectors.groupingBy(word -> {
+                char[] chars = word.toCharArray();
+                Arrays.sort(chars);
+                return new String(chars);
+            })
+        );
+}
+```
+
+> The key classifier function sorts the characters of each word alphabetically — anagrams like "eat", "tea", "ate" all produce the same sorted key "aet". `groupingBy` collects words with the same key into a list.
+
+---
+
+### 🌐 Section B — Commonly Asked (Java Collections + Streams + Concurrency)
+
+---
+
+**Q7. What is the difference between HashMap and Hashtable?**
+
+> Hashtable is the legacy (pre-Java-1.2) synchronized map. Every method acquires a lock on the whole table — it's thread-safe but very slow under concurrent load, and it predates the Collections framework.
+>
+> HashMap is not synchronized, significantly faster for single-threaded use, and is part of the Collections framework (implements Map). It allows one null key and multiple null values; Hashtable allows neither.
+>
+> In practice, use HashMap for single-threaded code and ConcurrentHashMap for multi-threaded code. Hashtable is effectively deprecated — you should never use it in new code.
+
+---
+
+**Q8. Why is the default load factor 0.75 in HashMap?**
+
+> 0.75 is a deliberate trade-off between time and space. A lower load factor (say 0.5) means fewer collisions — buckets stay sparse — but you waste a lot of memory and resize frequently. A higher load factor (say 0.9) saves memory but causes more collisions, making `get()` and `put()` slower as chains grow.
+>
+> 0.75 was chosen empirically as the sweet spot where the average number of entries per bucket is low enough that linked list traversal is almost never needed (chains of length 1 or 2), while still using the allocated capacity reasonably. In a map with capacity 16, growth triggers at 12 entries (16 × 0.75 = 12).
+
+---
+
+**Q9. What is a fail-fast vs fail-safe iterator?**
+
+> A fail-fast iterator (used by ArrayList, HashMap, HashSet iterators) throws `ConcurrentModificationException` if the collection is structurally modified while iterating — it checks an internal `modCount`. The purpose is to catch programming errors (iterating and mutating at the same time) rather than operating on inconsistent state.
+>
+> A fail-safe iterator (used by CopyOnWriteArrayList, ConcurrentHashMap's iterators) does not throw. It iterates over a snapshot or a weakly-consistent view of the collection. The trade-off is that changes made after the iterator was created may or may not be visible during iteration.
+>
+> In production: if you need to remove elements while iterating, use `iterator.remove()` (safe for fail-fast iterators) or switch to a CopyOnWriteArrayList if concurrent modification is expected.
+
+---
+
+**Q10. What is the difference between Callable and Runnable?**
+
+> `Runnable` has one method — `void run()`. It can't return a value and can't throw checked exceptions. It's used for fire-and-forget tasks.
+>
+> `Callable<V>` has one method — `V call() throws Exception`. It returns a value and can throw checked exceptions. It's used with `ExecutorService.submit()` which returns a `Future<V>` you can block on to get the result.
+>
+> Practical rule: if your async task produces a result or can fail with a checked exception, use `Callable`. For side-effect-only async work, use `Runnable` (or `Runnable` wrapped as a `CompletableFuture` via `runAsync`).
+
+---
+
+**Q11. Explain the JMM happens-before relationship in simple terms.**
+
+> The Java Memory Model (JMM — the specification that defines how threads interact through memory, what writes one thread makes are guaranteed visible to other threads, and in what order) uses happens-before as its core guarantee.
+>
+> If action A happens-before action B, then all memory writes done by A are guaranteed to be visible to B when B reads. Without a happens-before relationship, the JVM and CPU are free to reorder operations and cache values in CPU registers — so one thread's writes may not be visible to another.
+>
+> Key happens-before rules:
+> - A `volatile` write happens-before every subsequent read of that same variable.
+> - `Thread.start()` happens-before any action in the started thread.
+> - `Thread.join()` happens-before the return from `join()` in the calling thread.
+> - Releasing a lock happens-before acquiring the same lock by another thread.
+>
+> This is why `volatile` fixes visibility — the write establishes happens-before with the read. But it doesn't fix atomicity, because two `volatile` reads-and-writes can still interleave.
+
+---
+
 ## 🔄 Changelog
 
 | Date | Change |

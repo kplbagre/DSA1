@@ -1006,6 +1006,193 @@ FROM employees;
 
 ---
 
+## 🎯 Interview Q&A — Day 3 Topics
+
+### ⭐ Section A — Asked in EPAM (Reported 2024–2025)
+
+---
+
+**Q1. Implement a thread-safe Singleton in Java. Which approach do you prefer and why?**
+
+> There are several approaches. My preferred answer is the **Bill Pugh inner class pattern**:
+>
+> ```java
+> public class AppConfig {
+>     private AppConfig() {}
+>
+>     private static class Holder {
+>         static final AppConfig INSTANCE = new AppConfig();
+>     }
+>
+>     public static AppConfig getInstance() {
+>         return Holder.INSTANCE;
+>     }
+> }
+> ```
+>
+> Why this is the best: the JVM guarantees that class initialization is thread-safe. The `Holder` class is not loaded until `getInstance()` is first called — so creation is lazy. There's no `synchronized` keyword, no `volatile`, no locking overhead on every call. It's readable, works on all JVM versions, and can't be broken by subtle memory model issues the way double-checked locking can.
+>
+> If asked for the absolutely bulletproof version: an **enum singleton** is immune to reflection attacks, serialization, and cloning — Josh Bloch recommends it in Effective Java. But it's eager (created at class load), which is occasionally a problem.
+>
+> The version to avoid: double-checked locking without `volatile` on the instance field. It looks correct but is broken — a thread can see a partially constructed object due to instruction reordering. The field must be `volatile`.
+
+---
+
+**Q2. Name the 3 states of a Circuit Breaker and the transitions between them.**
+
+> The three states are **CLOSED**, **OPEN**, and **HALF-OPEN**. The naming is counterintuitive and interviewers explicitly test it.
+>
+> **CLOSED** is the healthy state — the circuit is complete, current flows, all requests go through to the downstream service. The circuit breaker tracks the failure rate in a sliding window (e.g., last 100 calls).
+>
+> When the failure rate crosses a threshold (e.g., 50%), the circuit **trips to OPEN**. In the OPEN state, all requests fail immediately with a `CircuitBreakerOpenException` — the downstream service is not called at all. This gives the failing service time to recover and prevents a flood of retries from making it worse.
+>
+> After a configured wait period (e.g., 30 seconds), the circuit moves to **HALF-OPEN**. A limited number of probe requests are allowed through. If the probes succeed, the circuit closes back to CLOSED. If they fail, it trips back to OPEN.
+>
+> In Java, the standard library for this is **Resilience4j** (not Hystrix — Hystrix went maintenance-only in 2018). Resilience4j also bundles Retry, RateLimiter, Bulkhead, and TimeLimiter in the same library.
+
+---
+
+**Q3. What is the difference between SAGA Choreography and SAGA Orchestration?**
+
+> Both patterns manage distributed transactions across multiple microservices without using 2-phase commit. Instead, each service completes its local transaction and either emits an event or is called by an orchestrator. If a step fails, compensating transactions (not rollbacks — the original transactions already committed) undo the previous steps.
+>
+> **Choreography**: services communicate via events — no central brain. OrderService emits `order.placed`; PaymentService listens and processes payment; on success emits `payment.done`; InventoryService listens and reserves stock, etc. On failure, the service emits a failure event and upstream services listen to trigger their own compensating transactions.
+>
+> **Orchestration**: a central orchestrator (a dedicated service or saga state machine) calls each service in sequence. It knows the full flow. On failure, it explicitly calls compensating actions in reverse order.
+>
+> Trade-offs: Choreography is decoupled and has no single point of failure, but the flow is hard to trace — you have to read all services to understand the full saga. Orchestration centralizes the flow in one place (easy to audit and debug), but the orchestrator is a single point of failure and a coordination bottleneck.
+
+---
+
+**Q4. Explain the Liskov Substitution Principle. Give a concrete violation.**
+
+> The Liskov Substitution Principle says: any code that works correctly with an object of type `Parent` must continue to work correctly when you replace that object with an instance of any subclass, without the caller needing to know.
+>
+> The classic violation is **Square extending Rectangle**. Rectangle has independent `setWidth()` and `setHeight()` — setting one does not affect the other. A Square subclasses Rectangle but overrides both setters to keep width and height equal (because all sides of a square must be equal).
+>
+> Now this code silently breaks:
+> ```java
+> void resize(Rectangle r) {
+>     r.setWidth(5);
+>     r.setHeight(10);
+>     assert r.area() == 50;   // Passes for Rectangle, FAILS for Square (gives 100)
+> }
+> ```
+> The caller followed Rectangle's contract perfectly. The Square subclass violated it by changing behavior `setWidth()` was not supposed to have.
+>
+> The fix: Square and Rectangle should not have an inheritance relationship. They should both implement a common `Shape` interface, or use composition. Inheritance must be based on behavioral contracts, not "is-a" relationships in English.
+
+---
+
+**Q5. What is CQRS? How is it different from Event Sourcing?**
+
+> CQRS — Command Query Responsibility Segregation — means separating the write path (Commands that change state) from the read path (Queries that return data). The write model is optimized for transactional writes — often a normalized relational database. The read model is optimized for reads — often a denormalized schema, Elasticsearch index, or Redis cache. The two sides can scale independently and use different technologies.
+>
+> The main trade-off is eventual consistency — the read model is updated asynchronously after a write, so there's a brief lag where reads may not reflect the latest write.
+>
+> **CQRS is NOT Event Sourcing.** They are independent patterns that pair well together but are not the same thing:
+>
+> CQRS just says: separate the read model from the write model. The write model can still store current state in a normal table.
+>
+> Event Sourcing says: instead of storing the current state of an entity, store a log of all events that produced that state. The current state is reconstructed by replaying the event log. You can use Event Sourcing without CQRS (store events, but serve reads from the same event log). You can use CQRS without Event Sourcing (separate read/write models, both using normal state-based tables).
+
+---
+
+**Q6. What design patterns does the Spring Framework use? Name at least 5.**
+
+> - **Factory** — `ApplicationContext` is a factory that creates and manages beans. You don't call `new` — the context creates objects for you.
+> - **Singleton** — the default bean scope. One instance per `ApplicationContext`, shared by all callers.
+> - **Proxy** — CGLIB or JDK dynamic proxy wraps beans to add behavior. Every `@Transactional`, `@Async`, `@Cacheable` method works through a proxy that intercepts the call.
+> - **Template Method** — `JdbcTemplate`, `RestTemplate`, `KafkaTemplate` define an algorithm skeleton (get connection, execute, close connection) and let you fill in the variable parts (your SQL, your RowMapper). You supply the steps that vary; the template controls the rest.
+> - **Observer** — `ApplicationEvent` and `@EventListener`. When something happens (user registered, order placed), a bean publishes an event; any number of listeners react without coupling the publisher to the subscribers.
+> - **Front Controller** — `DispatcherServlet` is the single entry point for all HTTP requests. It receives every request and routes it to the right `@Controller` method.
+> - **Strategy** — `HandlerMapping` picks which controller handles a request using pluggable strategies. You can swap strategies without changing the `DispatcherServlet`.
+
+---
+
+### 🌐 Section B — Commonly Asked (Patterns + SOLID + Microservices)
+
+---
+
+**Q7. What is the N+1 problem in JPA and how do you fix it?**
+
+> The N+1 problem: loading N parent entities causes N additional queries to load their children. Total: 1 + N queries instead of one query with a JOIN.
+>
+> Root cause: `@OneToMany` is `LAZY` by default (fine — children loaded on demand). But if you access the collection in a loop, each access fires a new query. The less obvious cause: `@ManyToOne` is `EAGER` by default — loading 1000 `Item` entities automatically fires 1000 `ORDER` queries.
+>
+> Three fixes:
+>
+> **Fix 1 — JOIN FETCH:** loads parent and children in one query. Best for non-paginated queries.
+> ```java
+> @Query("SELECT o FROM Order o JOIN FETCH o.items")
+> List<Order> findAllWithItems();
+> ```
+> ⚠️ Do NOT combine JOIN FETCH with pagination (`Pageable`) — Hibernate pulls all rows into memory and paginates in-heap. This is a serious bug (log warning HHH000104).
+>
+> **Fix 2 — `@EntityGraph`:** same effect as JOIN FETCH, but declared on the method.
+> ```java
+> @EntityGraph(attributePaths = {"items"})
+> List<Order> findAll();
+> ```
+>
+> **Fix 3 — `@BatchSize`:** instead of N queries, fires N/batchSize batched queries.
+> ```java
+> @BatchSize(size = 25)
+> @OneToMany(mappedBy = "order")
+> private List<Item> items;
+> ```
+> Safe with pagination.
+
+---
+
+**Q8. What is the difference between `RANK()` and `DENSE_RANK()` in SQL?**
+
+> Both are window functions that assign a rank to each row within a partition based on an ordering. The difference appears when there are ties.
+>
+> `RANK()`: tied rows get the same rank, and the next rank **skips**. If two rows are rank 2, the next rank is 4 (not 3). Like Olympic gold/silver/silver/bronze → but the bronze athlete is numbered 4.
+>
+> `DENSE_RANK()`: tied rows get the same rank, and the next rank does **not** skip. Two rows at rank 2 → next rank is 3.
+>
+> `ROW_NUMBER()`: always assigns a unique number (1, 2, 3, 4...) — ties are broken arbitrarily.
+>
+> For "find the 2nd highest salary" — always use `DENSE_RANK`. If you use `RANK` and two people share the top salary, they're both rank 1, rank 2 is skipped, and your `WHERE rnk = 2` query returns empty.
+>
+> ```sql
+> SELECT name, salary
+> FROM (
+>     SELECT name, salary,
+>         DENSE_RANK() OVER (ORDER BY salary DESC) AS rnk
+>     FROM employees
+> ) ranked
+> WHERE rnk = 2;
+> ```
+
+---
+
+**Q9. What is the API Gateway pattern? What does it handle?**
+
+> An API Gateway is a single entry-point service that sits in front of all your microservices. Clients (mobile apps, web front-ends, third-party APIs) call the gateway; the gateway routes to the right internal service.
+>
+> What it handles: authentication and authorization (verify JWTs, check permissions — services trust the gateway's verdict), rate limiting (100 requests/second per user), SSL termination (HTTPS ends at the gateway; internal traffic can be plain HTTP), request routing (`/orders/*` → OrderService, `/users/*` → UserService), load balancing across multiple instances of a service, and request/response transformation (e.g., protocol translation, header injection).
+>
+> The gateway also hides the internal service topology from external callers — clients don't know how many services exist or where they are.
+>
+> Common implementations in Java: Spring Cloud Gateway (reactive, built on Spring WebFlux). Kong, NGINX, and AWS API Gateway are platform-level options.
+
+---
+
+**Q10. What is the Dependency Inversion Principle? How is it different from Dependency Injection?**
+
+> The Dependency Inversion Principle (DIP) is a design principle: high-level modules (business logic) should not depend on low-level modules (database, file system). Both should depend on abstractions (interfaces). And abstractions should not depend on details — details should depend on abstractions.
+>
+> Concretely: your `OrderService` should depend on `OrderRepository` (an interface), not on `MySQLOrderRepository` (a concrete class). If you switch databases, you write a new implementation — `OrderService` doesn't change.
+>
+> Dependency Injection (DI) is a *technique* — a framework (Spring) provides (injects) the implementation objects into your class instead of your class creating them with `new`. When Spring sees `@Autowired OrderRepository repo`, it finds the right implementation and injects it.
+>
+> DIP motivates DI but they are not the same. DIP is a design principle about what to depend on. DI is a runtime technique for how to get those dependencies. You can follow DIP without using a DI framework (just pass interfaces through constructors manually). You can use a DI framework without following DIP (inject concrete classes everywhere — legal but bad design).
+
+---
+
 ## 🔄 Changelog
 
 | Date | Change |
