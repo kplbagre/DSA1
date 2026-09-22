@@ -184,13 +184,13 @@ Extends the universal checklist in the root `../AGENTS.md`:
 
 | # | Topic | File | Status | Prerequisites |
 |---|---|---|---|---|
-| 1 | **HashMap internals** | `DeepDive/hashmap-internals.md` | ✅ Done (Sep 2026) | Terminology table only — no prereq notes needed |
-| 2 | **equals() / hashCode() contract** | `DeepDive/equals-hashcode-contract.md` | ✅ Done (Sep 2026) | Note #1 (HashMap explains WHY the contract matters) |
-| 3 | **Generics + type erasure** | `DeepDive/generics-type-erasure.md` | ✅ Done (Sep 2026) | None — standalone |
-| 4 | **Functional interfaces** | `DeepDive/functional-interfaces.md` | ✅ Done (Sep 2026) | None — standalone |
-| 5 | **Java 8→21 evolution** | `DeepDive/java-version-evolution.md` | ✅ Done (Sep 2026) | Notes #3 + #4 (generics + functional interfaces appear in this timeline) |
-| 6 | **String internals** | `DeepDive/string-internals.md` | ✅ Done (Sep 2026) | None — standalone |
-| 7 | **Exception hierarchy** | `DeepDive/exception-hierarchy.md` | ✅ Done (Sep 2026) | None — standalone |
+| 1 | **HashMap internals** | `DeepDive/CoreJava/hashmap-internals.md` | ✅ Done (Sep 2026) | Terminology table only — no prereq notes needed |
+| 2 | **equals() / hashCode() contract** | `DeepDive/CoreJava/equals-hashcode-contract.md` | ✅ Done (Sep 2026) | Note #1 (HashMap explains WHY the contract matters) |
+| 3 | **Generics + type erasure** | `DeepDive/CoreJava/generics-type-erasure.md` | ✅ Done (Sep 2026) | None — standalone |
+| 4 | **Functional interfaces** | `DeepDive/CoreJava/functional-interfaces.md` | ✅ Done (Sep 2026) | None — standalone |
+| 5 | **Java 8→21 evolution** | `DeepDive/CoreJava/java-version-evolution.md` | ✅ Done (Sep 2026) | Notes #3 + #4 (generics + functional interfaces appear in this timeline) |
+| 6 | **String internals** | `DeepDive/CoreJava/string-internals.md` | ✅ Done (Sep 2026) | None — standalone |
+| 7 | **Exception hierarchy** | `DeepDive/CoreJava/exception-hierarchy.md` | ✅ Done (Sep 2026) | None — standalone |
 
 ---
 
@@ -200,10 +200,10 @@ Extends the universal checklist in the root `../AGENTS.md`:
 
 | # | Topic | File | Status | Prerequisites |
 |---|---|---|---|---|
-| 8 | **Stream pipeline internals** | `DeepDive/stream-pipeline-internals.md` | ✅ Done (Sep 2026) | Notes #3 (generics) + #4 (functional interfaces) |
-| 9 | **Collectors deep-dive** | `DeepDive/collectors-deepdive.md` | ✅ Done (Sep 2026) | Note #8 (streams pipeline) |
-| 10 | **Optional** | `DeepDive/optional-proper-usage.md` | ✅ Done (Sep 2026) | Note #4 (functional interfaces — Optional uses Supplier/Function/Consumer) |
-| 11 | **CompletableFuture** | `DeepDive/completable-future.md` | ✅ Done (Sep 2026) | Note #4 (functional interfaces) + Phase 3 Note #13 (JMM — to explain thread visibility) |
+| 8 | **Stream pipeline internals** | `DeepDive/StreamsFunctional/stream-pipeline-internals.md` | ✅ Done (Sep 2026) | Notes #3 (generics) + #4 (functional interfaces) |
+| 9 | **Collectors deep-dive** | `DeepDive/StreamsFunctional/collectors-deepdive.md` | ✅ Done (Sep 2026) | Note #8 (streams pipeline) |
+| 10 | **Optional** | `DeepDive/StreamsFunctional/optional-proper-usage.md` | ✅ Done (Sep 2026) | Note #4 (functional interfaces — Optional uses Supplier/Function/Consumer) |
+| 11 | **CompletableFuture** | `DeepDive/StreamsFunctional/completable-future.md` | ✅ Done (Sep 2026) | Note #4 (functional interfaces) + Phase 3 Note #13 (JMM — to explain thread visibility) |
 
 ---
 
@@ -213,9 +213,9 @@ Extends the universal checklist in the root `../AGENTS.md`:
 
 | # | Topic | File | Status | Prerequisites | Format |
 |---|---|---|---|---|---|
-| 12 | **Spring 03 — MVC + Boot auto-config** | `Spring/DeepDive/03-spring-mvc-boot.md` | 📌 Not started | Spring chapters 01+02 (already done) | Spring 8-section arc |
-| 13 | **Spring 04 — JPA + Transactions + Lazy loading** | `Spring/DeepDive/04-jpa-transactions.md` | 📌 Not started | Spring chapter 03 | Spring 8-section arc |
-| 14 | **Spring Security + JWT** | `Spring/DeepDive/05-spring-security-jwt.md` | 📌 Not started | Spring chapters 01–04 | DeepDive standards |
+| 12 | **Spring 03 — MVC + Boot auto-config** | `Spring/DeepDive/03-spring-mvc-boot.md` | ✅ Done (Sep 2026) | Spring chapters 01+02 (already done) | Spring 8-section arc |
+| 13 | **Spring 04 — JPA + Transactions + Lazy loading** | `Spring/DeepDive/04-jpa-transactions.md` | ✅ Done (Sep 2026) | Spring chapter 03 | Spring 8-section arc |
+| 14 | **Spring Security + JWT** | `Spring/DeepDive/05-spring-security-jwt.md` | ✅ Done (Sep 2026) | Spring chapters 01–04 | DeepDive standards |
 
 ---
 
@@ -225,18 +225,18 @@ Extends the universal checklist in the root `../AGENTS.md`:
 
 | # | Topic | File | Status | Prerequisites |
 |---|---|---|---|---|
-| 15 | **Java Memory Model (JMM)** | `DeepDive/java-memory-model.md` | 📌 Not started | Note #6 (String internals uses string pool — a JVM memory concept) |
-| 16 | **synchronized + volatile** | `DeepDive/synchronized-volatile.md` | 📌 Not started | Note #15 (JMM — happens-before is the foundation) |
-| 17 | **Locks deep-dive** | `DeepDive/locks-reentrant-readwrite.md` | 📌 Not started | Note #16 (synchronized — ReentrantLock is the improvement over it) |
-| 18 | **Concurrent collections internals** | `DeepDive/concurrent-collections.md` | 📌 Not started | Notes #1 (HashMap) + #15 (JMM) + #16 (synchronized) |
-| 19 | **ThreadPoolExecutor** | `DeepDive/thread-pool-executor.md` | 📌 Not started | Note #16 (synchronized) |
-| 20 | **Synchronization aids** | `DeepDive/synchronization-aids.md` | 📌 Not started | Notes #15 + #16 (CountDownLatch/CyclicBarrier are built on JMM primitives) |
-| 21 | **Fork/Join + parallel streams** | `DeepDive/fork-join-parallel-streams.md` | 📌 Not started | Notes #8 (streams) + #15 (JMM) + #19 (thread pools) |
-| 22 | **Virtual threads (Java 21)** | `DeepDive/virtual-threads-java21.md` | 📌 Not started | Note #19 (thread pool executor — virtual threads replace it for I/O) |
-| 23 | **Class loading + ClassLoader** | `DeepDive/class-loading.md` | 📌 Not started | None — standalone entry point |
-| 24 | **JVM memory areas** | `DeepDive/jvm-memory-areas.md` | 📌 Not started | Note #23 (ClassLoader determines what goes into Metaspace) |
-| 25 | **GC deep-dive** | `DeepDive/gc-deep-dive.md` | 📌 Not started | Note #24 (JVM memory areas — GC operates on the heap regions defined there) |
-| 26 | **JIT compilation** | `DeepDive/jit-compilation.md` | 📌 Not started | Note #23 (class loading — JIT kicks in after class loading + interpretation) |
+| 15 | **Java Memory Model (JMM)** | `DeepDive/Concurrency/java-memory-model.md` | ✅ Done (Sep 2026) | Note #6 (String internals uses string pool — a JVM memory concept) |
+| 16 | **synchronized + volatile** | `DeepDive/Concurrency/synchronized-volatile.md` | ✅ Done (Sep 2026) | Note #15 (JMM — happens-before is the foundation) |
+| 17 | **Locks deep-dive** | `DeepDive/Concurrency/locks-reentrant-readwrite.md` | ✅ Done (Sep 2026) | Note #16 (synchronized — ReentrantLock is the improvement over it) |
+| 18 | **Concurrent collections internals** | `DeepDive/Concurrency/concurrent-collections.md` | ✅ Done (Sep 2026) | Notes #1 (HashMap) + #15 (JMM) + #16 (synchronized) |
+| 19 | **ThreadPoolExecutor** | `DeepDive/Concurrency/thread-pool-executor.md` | ✅ Done (Sep 2026) | Note #16 (synchronized) |
+| 20 | **Synchronization aids** | `DeepDive/Concurrency/synchronization-aids.md` | ✅ Done (Sep 2026) | Notes #15 + #16 (CountDownLatch/CyclicBarrier are built on JMM primitives) |
+| 21 | **Fork/Join + parallel streams** | `DeepDive/Concurrency/fork-join-parallel-streams.md` | ✅ Done (Sep 2026) | Notes #8 (streams) + #15 (JMM) + #19 (thread pools) |
+| 22 | **Virtual threads (Java 21)** | `DeepDive/Concurrency/virtual-threads-java21.md` | ✅ Done (Sep 2026) | Note #19 (thread pool executor — virtual threads replace it for I/O) |
+| 23 | **Class loading + ClassLoader** | `DeepDive/JVMInternals/class-loading.md` | ✅ Done (Sep 2026) | None — standalone entry point |
+| 24 | **JVM memory areas** | `DeepDive/JVMInternals/jvm-memory-areas.md` | ✅ Done (Sep 2026) | Note #23 (ClassLoader determines what goes into Metaspace) |
+| 25 | **GC deep-dive** | `DeepDive/JVMInternals/gc-deep-dive.md` | ✅ Done (Sep 2026) | Note #24 (JVM memory areas — GC operates on the heap regions defined there) |
+| 26 | **JIT compilation** | `DeepDive/JVMInternals/jit-compilation.md` | ✅ Done (Sep 2026) | Note #23 (class loading — JIT kicks in after class loading + interpretation) |
 
 ---
 
@@ -246,16 +246,45 @@ Extends the universal checklist in the root `../AGENTS.md`:
 
 | # | Topic | File | Status | Type |
 |---|---|---|---|---|
-| 27 | **Builder pattern** | `Patterns/builder-pattern.md` | 📌 Not started | Pattern |
-| 28 | **Factory + Abstract Factory** | `Patterns/factory-patterns.md` | 📌 Not started | Pattern |
-| 29 | **Proxy vs Decorator vs Adapter** | `Patterns/structural-patterns-proxy-decorator-adapter.md` | 📌 Not started | Pattern |
-| 30 | **Strategy + Chain of Responsibility** | `Patterns/behavioral-strategy-chain.md` | 📌 Not started | Pattern |
-| 31 | **Observer + event-driven** | `Patterns/behavioral-observer-events.md` | 📌 Not started | Pattern |
-| 32 | **Collections API reference** | `Reference/collections-api-reference.md` | 📌 Not started | Reference |
-| 33 | **Stream operations reference** | `Reference/stream-operations-reference.md` | 📌 Not started | Reference |
-| 34 | **Concurrency utilities reference** | `Reference/concurrency-utilities-reference.md` | 📌 Not started | Reference |
-| 35 | **Spring annotations reference** | `Reference/spring-annotations-reference.md` | 📌 Not started | Reference |
-| 36 | **JVM flags reference** | `Reference/jvm-flags-reference.md` | 📌 Not started | Reference |
+| 27 | **Builder pattern** | `Patterns/builder-pattern.md` | ✅ Done (Sep 2026) | Pattern |
+| 28 | **Factory + Abstract Factory** | `Patterns/factory-patterns.md` | ✅ Done (Sep 2026) | Pattern |
+| 29 | **Proxy vs Decorator vs Adapter** | `Patterns/structural-patterns-proxy-decorator-adapter.md` | ✅ Done (Sep 2026) | Pattern |
+| 30 | **Strategy + Chain of Responsibility** | `Patterns/behavioral-strategy-chain.md` | ✅ Done (Sep 2026) | Pattern |
+| 31 | **Observer + event-driven** | `Patterns/behavioral-observer-events.md` | ✅ Done (Sep 2026) | Pattern |
+| 32 | **Collections API reference** | `Reference/collections-api-reference.md` | ✅ Done (Sep 2026) | Reference |
+| 33 | **Stream operations reference** | `Reference/stream-operations-reference.md` | ✅ Done (Sep 2026) | Reference |
+| 34 | **Concurrency utilities reference** | `Reference/concurrency-utilities-reference.md` | ✅ Done (Sep 2026) | Reference |
+| 35 | **Spring annotations reference** | `Reference/spring-annotations-reference.md` | ✅ Done (Sep 2026) | Reference |
+| 36 | **JVM flags reference** | `Reference/jvm-flags-reference.md` | ✅ Done (Sep 2026) | Reference |
+
+---
+
+### Phase 6 — Gap Closure (Staff-Level Gaps) · 6 notes
+
+> **Why now:** Post-Phase-5 gap analysis (Sep 2026) identified 4 genuinely missing topics that every staff-level interview probes, plus 2 practical deep-dives with high production value. Phase 1–5 covered Java language, streams, Spring, concurrency, JVM, patterns, and references. Phase 6 closes the remaining holes: testing (zero coverage), SQL internals (JPA covers Spring layer, not DB layer), Kafka at the Java level (SD covers architecture, not Spring Kafka), JVM troubleshooting as a unified workflow (tools are scattered across 3 notes but the playbook connecting them is missing), Resilience4j (EPAM Day 3 covered surface level), and serialization/API contracts.
+
+#### Tier 1 — Must have (genuinely missing, high interview frequency)
+
+| # | Topic | File | Status | Prerequisites |
+|---|---|---|---|---|
+| 37 | **Testing Strategy** (JUnit 5, Mockito, Spring Test slices, Testcontainers, test pyramid, TDD) | `DeepDive/CoreJava/testing-strategy.md` | ✅ Done (Sep 2026) | Notes #7 (exceptions — test exception paths) + Spring chapters (Spring Test slices) |
+| 38 | **SQL & Database Internals** (EXPLAIN ANALYZE, index types, query optimizer, HikariCP, slow query diagnosis) | `DeepDive/CoreJava/sql-database-internals.md` | ✅ Done (Sep 2026) | Spring chapter 04 (JPA layer sits on top of SQL) |
+| 39 | **Kafka for Java** (Spring Kafka, @KafkaListener, consumer groups, offsets, DLQ, exactly-once, Schema Registry) | `DeepDive/StreamsFunctional/kafka-java-patterns.md` | ✅ Done (Sep 2026) | Notes #11 (CompletableFuture — async patterns) + #19 (ThreadPoolExecutor — consumer threading) |
+| 40 | **JVM Troubleshooting Playbook** (unified workflow: thread dump → heap dump → GC log → flame graph → diagnosis) | `DeepDive/JVMInternals/jvm-troubleshooting.md` | ✅ Done (Sep 2026) | Notes #24 (JVM memory) + #25 (GC) + #26 (JIT) — this note CONNECTS them into a diagnostic workflow |
+
+#### Tier 2 — High practical value (production + interviews)
+
+| # | Topic | File | Status | Prerequisites |
+|---|---|---|---|---|
+| 41 | **Resilience4j Patterns** (CircuitBreaker, Retry, RateLimiter, Bulkhead, TimeLimiter — Java API + Spring Boot) | `DeepDive/CoreJava/resilience4j-patterns.md` | ✅ Done (Sep 2026) | Spring chapter 03 (Boot auto-config) |
+| 42 | **Serialization & API Contracts** (Jackson annotations, custom serializers, API versioning, DTO patterns, backward compat) | `DeepDive/CoreJava/serialization-api-contracts.md` | ✅ Done (Sep 2026) | Notes #3 (generics — Jackson TypeReference) + Spring chapter 03 (MVC message converters) |
+
+#### Tier 2 — Enhance existing notes (no new files)
+
+| Target note | Enhancement | Status |
+|---|---|---|
+| `DeepDive/Concurrency/locks-reentrant-readwrite.md` | Add "Deadlock Detection" section: jstack output reading, dining philosophers, `jcmd Thread.print` deadlock detection | ✅ Done (Sep 2026) |
+| `INDEX.md` | Add "Reading Path: Immutability" linking to the 6 notes that already cover immutability aspects | ✅ Done (Sep 2026) |
 
 ---
 
